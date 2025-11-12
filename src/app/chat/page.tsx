@@ -463,7 +463,12 @@ export default function TestAgentEnhancedPage() {
       taskStepsRef.current = [];
       toolsRef.current = [];
       
+      // Ensure a stable session id for this page session
+      const ensuredSessionId = sessionId || (typeof crypto !== 'undefined' && (crypto as any).randomUUID ? (crypto as any).randomUUID() : Math.random().toString(36).slice(2));
+      if (!sessionId) setSessionId(ensuredSessionId);
+
       await ssePost(endpoint, {
+        session_id: ensuredSessionId,
         question: input,
         conversation: messages.map(m => ({
           role: m.role,
@@ -474,7 +479,7 @@ export default function TestAgentEnhancedPage() {
           lastListDocIds: lastListDocIds,
           focusDocIds: [],
           lastCitedDocIds: [],
-          sessionId: sessionId || undefined
+          sessionId: ensuredSessionId
         },
         context: {
           scope: chatContext.type === 'folder' ? 'folder' : chatContext.type === 'document' ? 'document' : 'org',
@@ -647,7 +652,7 @@ export default function TestAgentEnhancedPage() {
             <div className={`w-8 h-8 rounded-lg ${themeColors.iconBg} flex items-center justify-center`}>
               <Bot className={`h-4 w-4 ${themeColors.primary}`} />
             </div>
-            <div className="text-center">
+      <div className="text-center">
               <h1 className="text-lg font-semibold text-foreground">Briefly Agent</h1>
               <p className="text-xs text-muted-foreground">AI-powered document assistant</p>
             </div>
@@ -723,8 +728,8 @@ export default function TestAgentEnhancedPage() {
                                               </span>
                                             </div>
                                             {/* Subtext intentionally omitted per UX request */}
-                                          </div>
-                                        </div>
+      </div>
+    </div>
                                       );
                                     }
 
