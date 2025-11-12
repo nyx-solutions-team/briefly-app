@@ -12,10 +12,9 @@ import { Message, MessageContent } from '@/components/ai-elements/message';
 import { Response } from '@/components/ai-elements/response';
 // import removed old PromptInput UI
 import { Loader } from '@/components/ai-elements/loader';
-import { InlineCitation, InlineCitationCard, InlineCitationCardTrigger, InlineCitationCardBody, InlineCitationCarousel, InlineCitationCarouselContent, InlineCitationCarouselItem, InlineCitationSource } from '@/components/ai-elements/inline-citation';
 import { ssePost } from '@/lib/api';
 import { useSettings } from '@/hooks/use-settings';
-import { Bot } from 'lucide-react';
+import { Bot, FileText, ChevronDown, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { type ChatContext } from '@/components/chat-context-selector';
 import { createFolderChatEndpoint } from '@/lib/folder-utils';
@@ -57,119 +56,21 @@ function getCitationDisplayDescription(citation: any): string {
   return parts.slice(0, 2).join(' • ') || 'Click to view document details';
 }
 
-// Function to process content and reorder citations inline  
-function processContentWithCitations(content: string, citations: any[] = []) {
+// Function to render assistant content without inline citation markers
+function processContentWithCitations(content: string, _citations: any[] = []) {
   if (!content || typeof content !== 'string') return content;
-  
-  // Pattern to match citation markdown like [^1], [^2], etc.
-  const citationMDPattern = /\[\^(\d+)\]/g;
-  // Pattern to match raw document IDs like [03bb980a-5e3c-4aac-b631-1cd9b158b763]
-  const uuidPattern = /\[([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\]/g;
-  
-  const mdMatches = Array.from(content.matchAll(citationMDPattern));
-  const uuidMatches = Array.from(content.matchAll(uuidPattern));
-  
-  // Combine both patterns and sort by index
-  const allMatches = [...uuidMatches, ...mdMatches].sort((a, b) => a.index - b.index);
-  
-  if (allMatches.length === 0) {
-    // No citations, just return content normal
-    return <Response className="inline">{content}</Response>;
-  }
-  
-  // Process the text, capturing each cite section and non-cite text
-  const elements: React.ReactNode[] = [];
-  let lastIdx = 0;
-  
-  allMatches.forEach((match, index) => {
-    const citationNum = match[1]; // Could be "1" for markdown or UUID string for doc ID
-    const matchIdx = match.index!;
-    const matchLength = match[0].length;
-    
-    // Add text before the citation
-    if (matchIdx > lastIdx) {
-      const textBefore = content.slice(lastIdx, matchIdx);
-      if (textBefore) {
-        elements.push(
-          <Response key={`text-${index}`} className="inline">
-            {textBefore}
-          </Response>
-        );
-      }
-    }
-    
-    // Find the citation (handle both markdown [^N] format and UUID format)
-    let citation;
-    if (citationMDPattern.test(match[0])) {
-      // This is markdown [^1], [^2], etc.
-      const num = parseInt(citationNum);
-      citation = citations && citations[num - 1];
-    } else {
-      // This is a UUID document ID
-      citation = citations && citations.find(cit => cit.docId === citationNum);
-    }
-    
-    if (citation) {
-      elements.push(
-        <InlineCitation key={`cite-${citationNum}`}>
-          <InlineCitationCard>
-            <InlineCitationCardTrigger 
-              sources={citation.docId ? [`/documents/${citation.docId}`] : []}
-              className="inline-flex ml-1"
-            >
-              <Badge variant="secondary" className="text-xs">
-                [^{
-                  citationMDPattern.test(match[0]) 
-                    ? citationNum 
-                    : (citations.findIndex(cit => cit.docId === citationNum) + 1) || '?'
-                }]
-              </Badge>
-            </InlineCitationCardTrigger>
-            <InlineCitationCardBody className="w-80">
-              <InlineCitationCarousel>
-                <InlineCitationCarouselContent>
-                  <InlineCitationCarouselItem>
-                    <InlineCitationSource
-                      title={getCitationDisplayTitle(citation)}
-                      description={getCitationDisplayDescription(citation)}
-                      url={`/documents/${citation.docId}`}
-                    />
-                  </InlineCitationCarouselItem>
-                </InlineCitationCarouselContent>
-              </InlineCitationCarousel>
-            </InlineCitationCardBody>
-          </InlineCitationCard>
-        </InlineCitation>
-      );
-    } else {
-      // Fallback for missing citation
-      elements.push(
-        <span key={`missing-${index}`} className="text-blue-600 font-semibold inline ml-1 text-xs">
-          [^{
-            citationMDPattern.test(match[0]) 
-              ? citationNum 
-              : (citations.findIndex(cit => cit.docId === citationNum) + 1) || '?'
-          }]
-        </span>
-      );
-    }
-    
-    lastIdx = matchIdx + matchLength;
-  });
-  
-  // Add any remaining text after the last citation
-  if (lastIdx < content.length) {
-    const remainingText = content.slice(lastIdx);
-    if (remainingText) {
-      elements.push(
-        <Response key="text-end" className="inline">
-          {remainingText}
-        </Response>
-      );
-    }
-  }
-  
-  return <span className="inline">{elements}</span>;
+
+  const cleaned = content
+    // Remove inline markers like [^1], [^?]
+    .replace(/\s*\[\^\d+\]/g, '')
+    .replace(/\s*\[\^\?\]/g, '')
+    // Remove embedded UUID references like [123e4567-e89b-12d3-a456-426614174000]
+    .replace(/\s*\[([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\]/gi, '')
+    // Remove lingering footnote definition lines
+    .replace(/^\[\^\d+\]:.*$/gm, '')
+    .trim();
+
+  return <Response className="inline">{cleaned}</Response>;
 }
 
 function getThemeColors(accentColor: string) {
@@ -426,6 +327,34 @@ export default function TestAgentEnhancedPage() {
       folderPath: effectiveContext.folderPath,
       path: effectiveContext.path
     });
+
+    const scopeType =
+      effectiveContext.type === 'folder'
+        ? 'folder'
+        : effectiveContext.type === 'document'
+        ? 'document'
+        : 'org';
+
+    const contextPayload: any = {
+      scope: scopeType,
+      includeSubfolders: true,
+      includeLinked: false,
+      includeVersions: false
+    };
+
+    if (scopeType === 'document') {
+      if (effectiveContext.id) {
+        contextPayload.docId = effectiveContext.id;
+      }
+    } else if (scopeType === 'folder') {
+      if (effectiveContext.id) {
+        contextPayload.folderId = effectiveContext.id;
+      }
+      const folderPath = effectiveContext.folderPath || effectiveContext.path;
+      if (folderPath?.length) {
+        contextPayload.folderPath = folderPath;
+      }
+    }
     
     try {
       // Determine endpoint based on context using the new folder resolution system
@@ -481,12 +410,7 @@ export default function TestAgentEnhancedPage() {
           lastCitedDocIds: [],
           sessionId: ensuredSessionId
         },
-        context: {
-          scope: chatContext.type === 'folder' ? 'folder' : chatContext.type === 'document' ? 'document' : 'org',
-          includeSubfolders: true,
-          includeLinked: false,
-          includeVersions: false
-        },
+        context: contextPayload,
         filters: {},
         strictCitations: false,
         webSearchEnabled: webSearchEnabled
@@ -663,23 +587,54 @@ export default function TestAgentEnhancedPage() {
         {hasUserMessage ? (
           <div className="flex-1 flex flex-col min-h-0">
             <ScrollArea className="flex-1 px-4 [scrollbar-gutter:stable]" ref={scrollAreaRef}>
-              <div className="max-w-5xl mx-auto py-6 space-y-6 pb-40">
-                {messages.map((message) => {
+              <div className="max-w-5xl mx-auto py-8 space-y-8 pb-40">
+                {messages.map((message, idx) => {
                 console.log('Rendering message:', message);
                 return (
-                  <Message
+                  <div
                     key={message.id}
-                    from={message.role}
-                    className="w-full"
+                    className={cn(
+                      "animate-in fade-in slide-in-from-bottom-4 duration-700",
+                      "group w-full flex gap-3 sm:gap-4"
+                    )}
+                    style={{ animationDelay: `${idx * 50}ms` }}
                   >
-                    <MessageContent variant="flat">
-                      {message.role === 'user' ? (
-                        <div className="prose prose-sm max-w-none text-foreground dark:prose-invert">
-                          {message.content}
+                    {message.role === 'user' ? (
+                      <>
+                        {/* User Message - Right aligned */}
+                        <div className="flex-1 flex justify-end">
+                          <div className={cn(
+                            "max-w-[85%] sm:max-w-[75%]",
+                            "rounded-2xl rounded-tr-md px-4 py-3.5",
+                            "bg-gradient-to-br from-primary/90 to-primary",
+                            "text-primary-foreground shadow-lg shadow-primary/25",
+                            "border border-primary/20",
+                            "transition-all duration-300 hover:shadow-xl hover:shadow-primary/30",
+                            "backdrop-blur-sm"
+                          )}>
+                            <div className="prose prose-sm max-w-none text-primary-foreground [&>*]:text-primary-foreground">
+                              {message.content}
+                            </div>
+                          </div>
                         </div>
-                      ) : (
-                        <div className="space-y-4">
-                          {/* Agent activity timeline (steps + tools + reasoning) */}
+                      </>
+                    ) : (
+                      <>
+                        {/* AI Message - Left aligned with avatar */}
+                        <div className="flex-shrink-0">
+                          <div className={cn(
+                            "w-9 h-9 rounded-xl flex items-center justify-center",
+                            "bg-gradient-to-br shadow-md border border-border/50",
+                            themeColors.gradient.includes('blue') && "from-blue-500/10 via-indigo-500/10 to-purple-500/10",
+                            themeColors.gradient.includes('green') && "from-green-500/10 via-emerald-500/10 to-teal-500/10",
+                            themeColors.gradient.includes('purple') && "from-purple-500/10 via-fuchsia-500/10 to-pink-500/10",
+                            !themeColors.gradient.includes('blue') && !themeColors.gradient.includes('green') && !themeColors.gradient.includes('purple') && "from-muted/50 to-muted/30"
+                          )}>
+                            <Bot className={cn("h-4 w-4", themeColors.primary)} />
+                          </div>
+                        </div>
+                        <div className="flex-1 min-w-0 space-y-4">
+                          {/* Agent activity timeline - Enhanced with glassmorphism */}
                           {(() => {
                             const activitySteps = message.isStreaming ? currentTaskSteps : (message as any).processingSteps || [];
                             const timelineItems = activitySteps.map((step: any, index: number) => ({ type: 'step' as const, data: step, index }));
@@ -692,44 +647,69 @@ export default function TestAgentEnhancedPage() {
                             };
 
                             const indicatorClass = (status?: string) => cn(
-                              'inline-flex h-2.5 w-2.5 rounded-full',
+                              'inline-flex h-2.5 w-2.5 rounded-full transition-all duration-300',
                               status === 'completed'
-                                ? 'bg-emerald-500'
+                                ? 'bg-emerald-500 shadow-lg shadow-emerald-500/50'
                                 : status === 'error'
-                                ? 'bg-red-500'
-                                : 'bg-amber-500'
+                                ? 'bg-red-500 shadow-lg shadow-red-500/50'
+                                : 'bg-amber-500 shadow-lg shadow-amber-500/50 animate-pulse'
                             );
 
                             return (
-                              <div className="rounded-lg border border-border/40 bg-muted/20 p-4 space-y-4">
+                              <div className={cn(
+                                "rounded-2xl border border-border/50 p-5 space-y-4",
+                                "bg-gradient-to-br from-muted/30 via-muted/20 to-transparent",
+                                "backdrop-blur-sm shadow-sm",
+                                "transition-all duration-300 hover:shadow-md hover:border-border/70"
+                              )}>
                                 <div className="flex items-center justify-between">
-                                  <div className="text-sm font-medium text-muted-foreground">
-                                    Agent Activity
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-pulse" />
+                                    <span className="text-sm font-semibold text-foreground">Agent Activity</span>
                                   </div>
-                                  <Badge variant="outline" className="text-[11px]">
-                                    {message.isStreaming ? 'Live' : 'Complete'}
+                                  <Badge 
+                                    variant="outline" 
+                                    className={cn(
+                                      "text-[11px] font-medium border-0",
+                                      message.isStreaming 
+                                        ? "bg-amber-500/10 text-amber-600 dark:text-amber-400" 
+                                        : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                    )}
+                                  >
+                                    {message.isStreaming ? '● Live' : '✓ Complete'}
                                   </Badge>
                                 </div>
 
-                                <div className="space-y-3">
+                                <div className="space-y-2.5">
                                   {timelineItems.map((item: any) => {
                                     if (item.type === 'step') {
                                       const step = item.data;
                                       return (
-                                        <div key={`step-${step.step}-${item.index}`} className="flex gap-3">
-                                          <div className="mt-1">
+                                        <div 
+                                          key={`step-${step.step}-${item.index}`} 
+                                          className={cn(
+                                            "flex gap-3 p-2.5 rounded-xl",
+                                            "transition-all duration-300",
+                                            "hover:bg-muted/30"
+                                          )}
+                                        >
+                                          <div className="mt-1.5 flex-shrink-0">
                                             <span className={indicatorClass(step.status)} />
                                           </div>
-                                          <div className="flex-1">
+                                          <div className="flex-1 min-w-0">
                                             <div className="flex flex-wrap items-center gap-2">
                                               <span className="text-sm font-medium text-foreground">{step.title}</span>
-                                              <span className="text-xs text-muted-foreground uppercase tracking-wide">
+                                              <span className={cn(
+                                                "text-[11px] uppercase tracking-wider font-medium px-2 py-0.5 rounded-full",
+                                                step.status === 'completed' && "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+                                                step.status === 'error' && "bg-red-500/10 text-red-600 dark:text-red-400",
+                                                !step.status || (step.status !== 'completed' && step.status !== 'error') && "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                                              )}>
                                                 {statusBadge(step.status)}
                                               </span>
                                             </div>
-                                            {/* Subtext intentionally omitted per UX request */}
-      </div>
-    </div>
+                                          </div>
+                                        </div>
                                       );
                                     }
 
@@ -740,60 +720,97 @@ export default function TestAgentEnhancedPage() {
                             );
                           })()}
 
-                          {/* Main Response Content */}
+                          {/* Main Response Content - Enhanced typography */}
                           {message.content && (
-                            <div className="space-y-3">
-                              <div className="prose prose-sm max-w-none text-foreground dark:prose-invert">
+                            <div className={cn(
+                              "space-y-3 rounded-2xl p-5",
+                              "bg-gradient-to-br from-card/50 to-transparent",
+                              "border border-border/30",
+                              "transition-all duration-300 hover:border-border/50"
+                            )}>
+                              <div className="prose prose-sm max-w-none text-foreground dark:prose-invert [&>p]:leading-relaxed [&>p]:text-[15px]">
                                 {processContentWithCitations(message.content, message.citations)}
                               </div>
-
                             </div>
                           )}
 
-                          {/* Loading State - Only show for complex queries with task steps */}
+                          {/* Loading State - Elegant pulsing animation */}
                           {message.isStreaming && !message.content && currentTaskSteps.some(step => step.step === 'search_documents') && (
-                            <Loader className={themeColors.primary} />
+                            <div className="flex items-center gap-3 p-4 rounded-2xl bg-muted/20 border border-border/30">
+                              <div className="flex gap-1.5">
+                                <div className="w-2 h-2 rounded-full bg-primary/60 animate-pulse" style={{ animationDelay: '0ms' }} />
+                                <div className="w-2 h-2 rounded-full bg-primary/60 animate-pulse" style={{ animationDelay: '150ms' }} />
+                                <div className="w-2 h-2 rounded-full bg-primary/60 animate-pulse" style={{ animationDelay: '300ms' }} />
+                              </div>
+                              <span className="text-sm text-muted-foreground">Thinking...</span>
+                            </div>
                           )}
 
-                          {/* Tool Usage - Show only while streaming */}
-                          {/* Tools hidden in streamlined UI */}
-
-                          {/* Sources and Citations */}
+                          {/* Sources and Citations - Elegant collapsible */}
                           {message.citations && message.citations.length > 0 && (
-                            <details className="group rounded-lg border border-border/40 bg-background/60 p-4">
-                              <summary className="flex items-center justify-between cursor-pointer list-none">
-                                <div>
-                                  <p className="text-sm font-semibold text-muted-foreground">Sources</p>
-                                  <p className="text-xs text-muted-foreground">
-                                    Used {message.citations.length} source{message.citations.length > 1 ? 's' : ''}
-                                  </p>
+                            <details className={cn(
+                              "group rounded-2xl border border-border/40 p-4",
+                              "bg-gradient-to-br from-muted/20 to-transparent",
+                              "transition-all duration-300 hover:border-border/60 hover:shadow-sm"
+                            )}>
+                              <summary className="flex items-center justify-between cursor-pointer list-none select-none">
+                                <div className="flex items-center gap-3">
+                                  <div className={cn(
+                                    "w-8 h-8 rounded-lg flex items-center justify-center",
+                                    "bg-gradient-to-br from-primary/10 to-primary/5",
+                                    "border border-primary/20"
+                                  )}>
+                                    <FileText className={cn("h-4 w-4", themeColors.primary)} />
+                                  </div>
+                                  <div>
+                                    <p className="text-sm font-semibold text-foreground">Sources</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {message.citations.length} document{message.citations.length > 1 ? 's' : ''} referenced
+                                    </p>
+                                  </div>
                                 </div>
-                                <Badge variant="outline" className="text-[11px]">
+                                <Badge 
+                                  variant="outline" 
+                                  className="text-[11px] border-0 bg-muted/50 group-open:bg-primary/10 group-open:text-primary transition-all"
+                                >
+                                  <ChevronDown className="h-3 w-3 mr-1 transition-transform duration-300 group-open:rotate-180" />
                                   View
                                 </Badge>
                               </summary>
-                              <div className="mt-4 grid gap-3">
+                              <div className="mt-4 grid gap-2.5">
                                 {message.citations.map((citation, index) => {
                                   const title = getCitationDisplayTitle(citation);
                                   const description = getCitationDisplayDescription(citation);
                                   return (
                                     <div
                                       key={`${citation.docId}-${index}`}
-                                      className="rounded-md border border-border/40 bg-card/60 px-3 py-2 flex items-center justify-between gap-3"
+                                      className={cn(
+                                        "rounded-xl border border-border/40 p-3.5 flex items-center justify-between gap-3",
+                                        "bg-gradient-to-br from-card/80 to-card/40",
+                                        "transition-all duration-300 hover:shadow-md hover:border-border/60 hover:-translate-y-0.5"
+                                      )}
                                     >
                                       <div className="flex-1 min-w-0">
-                                        <p className="text-sm font-medium text-foreground truncate">{title}</p>
+                                        <p className="text-sm font-medium text-foreground mb-1">{title}</p>
                                         {description && (
-                                          <p className="text-xs text-muted-foreground truncate">{description}</p>
+                                          <p className="text-xs text-muted-foreground line-clamp-2">{description}</p>
                                         )}
-                                        <p className="text-[11px] text-muted-foreground mt-1">
-                                          ID: {citation.docId?.slice(0, 12)}{citation.docId && citation.docId.length > 12 ? '…' : ''}
+                                        <p className="text-[10px] text-muted-foreground/70 mt-2 font-mono">
+                                          {citation.docId?.slice(0, 16)}{citation.docId && citation.docId.length > 16 ? '...' : ''}
                                         </p>
                                       </div>
                                       {citation.docId && (
-                                        <Button variant="secondary" size="sm" asChild>
+                                        <Button 
+                                          variant="ghost" 
+                                          size="sm" 
+                                          className={cn(
+                                            "rounded-lg shadow-sm shrink-0",
+                                            themeColors.buttonHover
+                                          )} 
+                                          asChild
+                                        >
                                           <a href={`/documents/${citation.docId}`} target="_blank" rel="noopener noreferrer">
-                                            Open
+                                            Open →
                                           </a>
                                         </Button>
                                       )}
@@ -804,57 +821,27 @@ export default function TestAgentEnhancedPage() {
                             </details>
                           )}
                         </div>
-                      )}
-                    </MessageContent>
-                  </Message>
+                      </>
+                    )}
+                  </div>
                 );
                 })}
 
               </div>
             </ScrollArea>
 
-            {/* Input Area - Sticky after conversation starts */}
-            <div className="sticky bottom-0 border-t border-border/40 bg-background/50 backdrop-blur-sm transition-all duration-300">
-              <div className="w-full max-w-5xl mx-auto p-4">
-                <BrieflyChatBox
-                  folders={folderOptions}
-                  documents={documentOptions}
-                  defaultMode={chatContext.type === 'folder' ? 'folder' : chatContext.type === 'document' ? 'document' : 'all'}
-                  defaultWebSearch={webSearchEnabled}
-                  defaultFolderId={selectedFolderId}
-                  defaultDocumentId={selectedDocumentId}
-                  placeholder={
-                    chatContext.type === 'document'
-                      ? `Ask about "${chatContext.name || 'this document'}"...`
-                      : chatContext.type === 'folder'
-                      ? `Ask about documents in "${chatContext.name || 'this folder'}"...`
-                      : 'Ask me about your documents or anything else...'
-                  }
-                  sending={isLoading}
-                  onSend={({ text, mode, folderId, documentId, webSearch }) => {
-                    let nextContext: ChatContext = { type: 'org' };
-                    if (mode === 'folder' && folderId) {
-                      const path = folderId.split('/').filter(Boolean);
-                      const meta = getFolderMetadata(path);
-                      nextContext = { type: 'folder', id: meta?.id, name: meta?.title || folderId, folderPath: path };
-                    } else if (mode === 'document' && documentId) {
-                      const doc = allDocs.find(d => d.id === documentId);
-                      nextContext = { type: 'document', id: documentId, name: doc?.title || doc?.name };
-                    }
-                    setChatContext(nextContext);
-                    setWebSearchEnabled(webSearch);
-                    handleSubmit(text, nextContext);
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-        ) : (
-          // Centered input before the first user message, like ChatGPT
-          <div className="flex-1 flex flex-col min-h-0">
-            <div className="flex-1 flex items-center">
+            {/* Input Area - Floating with elegant shadow */}
+            <div className={cn(
+              "sticky bottom-0 pt-4 pb-6",
+              "bg-gradient-to-t from-background via-background to-transparent",
+              "transition-all duration-300"
+            )}>
               <div className="w-full max-w-5xl mx-auto px-4">
-                <div className="transition-all duration-300">
+                <div className={cn(
+                  "animate-in fade-in slide-in-from-bottom-4 duration-500",
+                  "shadow-2xl shadow-black/10 dark:shadow-black/40",
+                  "rounded-3xl"
+                )}>
                   <BrieflyChatBox
                     folders={folderOptions}
                     documents={documentOptions}
@@ -868,6 +855,97 @@ export default function TestAgentEnhancedPage() {
                         : chatContext.type === 'folder'
                         ? `Ask about documents in "${chatContext.name || 'this folder'}"...`
                         : 'Ask me about your documents or anything else...'
+                    }
+                    sending={isLoading}
+                    onSend={({ text, mode, folderId, documentId, webSearch }) => {
+                      let nextContext: ChatContext = { type: 'org' };
+                      if (mode === 'folder' && folderId) {
+                        const path = folderId.split('/').filter(Boolean);
+                        const meta = getFolderMetadata(path);
+                        nextContext = { type: 'folder', id: meta?.id, name: meta?.title || folderId, folderPath: path };
+                      } else if (mode === 'document' && documentId) {
+                        const doc = allDocs.find(d => d.id === documentId);
+                        nextContext = { type: 'document', id: documentId, name: doc?.title || doc?.name };
+                      }
+                      setChatContext(nextContext);
+                      setWebSearchEnabled(webSearch);
+                      handleSubmit(text, nextContext);
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          // Beautiful empty state with centered input
+          <div className="flex-1 flex flex-col min-h-0">
+            <div className="flex-1 flex items-center justify-center">
+              <div className="w-full max-w-5xl mx-auto px-4">
+                {/* Welcome Message */}
+                <div className="mb-12 text-center animate-in fade-in slide-in-from-top-4 duration-700">
+                  <div className="mb-6 inline-flex items-center justify-center">
+                    <div className={cn(
+                      "w-20 h-20 rounded-3xl flex items-center justify-center",
+                      "bg-gradient-to-br shadow-2xl shadow-primary/30 border-2 border-primary/30",
+                      "animate-in zoom-in duration-1000",
+                      themeColors.gradient.includes('blue') && "from-blue-500/20 via-indigo-500/20 to-purple-500/20",
+                      themeColors.gradient.includes('green') && "from-green-500/20 via-emerald-500/20 to-teal-500/20",
+                      themeColors.gradient.includes('purple') && "from-purple-500/20 via-fuchsia-500/20 to-pink-500/20",
+                      !themeColors.gradient.includes('blue') && !themeColors.gradient.includes('green') && !themeColors.gradient.includes('purple') && "from-primary/20 via-primary/10 to-primary/20"
+                    )}>
+                      <Sparkles className={cn("h-10 w-10", themeColors.primary)} />
+                    </div>
+                  </div>
+                  <h2 className="text-3xl font-bold text-foreground mb-3 tracking-tight">
+                    What can I help you with?
+                  </h2>
+                  <p className="text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+                    Ask me anything about your documents. I can search, summarize, and provide insights.
+                  </p>
+                  
+                  {/* Quick action suggestions */}
+                  <div className="mt-8 flex flex-wrap justify-center gap-3 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-150">
+                    {[
+                      'Summarize recent documents',
+                      'Find information about...',
+                      'Compare documents',
+                    ].map((suggestion, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => setInputValue(suggestion)}
+                        className={cn(
+                          "px-4 py-2.5 rounded-xl text-sm font-medium",
+                          "border border-border/50 bg-muted/30",
+                          "transition-all duration-300",
+                          "hover:border-primary/50 hover:bg-primary/5 hover:shadow-md hover:-translate-y-0.5",
+                          "active:translate-y-0"
+                        )}
+                      >
+                        {suggestion}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Input Box */}
+                <div className={cn(
+                  "animate-in fade-in slide-in-from-bottom-8 duration-700 delay-300",
+                  "shadow-2xl shadow-black/10 dark:shadow-black/40",
+                  "rounded-3xl"
+                )}>
+                  <BrieflyChatBox
+                    folders={folderOptions}
+                    documents={documentOptions}
+                    defaultMode={chatContext.type === 'folder' ? 'folder' : chatContext.type === 'document' ? 'document' : 'all'}
+                    defaultWebSearch={webSearchEnabled}
+                    defaultFolderId={selectedFolderId}
+                    defaultDocumentId={selectedDocumentId}
+                    placeholder={
+                      chatContext.type === 'document'
+                        ? `Ask about "${chatContext.name || 'this document'}"...`
+                        : chatContext.type === 'folder'
+                        ? `Ask about documents in "${chatContext.name || 'this folder'}"...`
+                        : 'Type your question here...'
                     }
                     sending={isLoading}
                     onSend={({ text, mode, folderId, documentId, webSearch }) => {

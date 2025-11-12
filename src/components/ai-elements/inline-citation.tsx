@@ -68,17 +68,53 @@ export const InlineCitationCardTrigger = ({
       variant="secondary"
       {...props}
     >
-      {sources.length ? (
-        <>
-          {new URL(sources[0]).hostname}{" "}
-          {sources.length > 1 && `+${sources.length - 1}`}
-        </>
-      ) : (
-        "unknown"
-      )}
+      <CitationSourceBadge sources={sources} />
     </Badge>
   </HoverCardTrigger>
 );
+
+const truncateMiddle = (value: string, max = 12) => {
+  if (value.length <= max) return value;
+  const half = Math.floor((max - 1) / 2);
+  return `${value.slice(0, half)}…${value.slice(-half)}`;
+};
+
+const getSourceBadgeLabel = (source: string): string => {
+  const trimmed = source.trim();
+  if (!trimmed) return "unknown";
+
+  const isHttp = /^https?:\/\//i.test(trimmed);
+  if (isHttp) {
+    try {
+      const url = new URL(trimmed);
+      return url.hostname.replace(/^www\./, "") || url.pathname || "link";
+    } catch {
+      return trimmed;
+    }
+  }
+
+  if (trimmed.startsWith("/documents/")) {
+    const docId = trimmed.split("/").pop() || trimmed;
+    return `Doc ${truncateMiddle(docId, 10)}`;
+  }
+
+  return trimmed;
+};
+
+const CitationSourceBadge = ({ sources }: { sources: string[] }) => {
+  if (!sources.length) {
+    return <>unknown</>;
+  }
+
+  const label = getSourceBadgeLabel(sources[0]);
+  const extra = sources.length > 1 ? `+${sources.length - 1}` : "";
+
+  return (
+    <>
+      {label} {extra}
+    </>
+  );
+};
 
 export type InlineCitationCardBodyProps = ComponentProps<"div">;
 
@@ -285,3 +321,4 @@ export const InlineCitationQuote = ({
     {children}
   </blockquote>
 );
+

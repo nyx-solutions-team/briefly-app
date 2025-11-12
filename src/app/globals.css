@@ -362,4 +362,174 @@
   .dark .focus-premium:focus-visible {
     @apply outline-none ring-2 ring-ring/40 ring-offset-2 ring-offset-background;
   }
+
+  /* ===================================
+     CHAT INTERFACE ENHANCEMENTS
+     =================================== */
+  
+  /* Smooth scroll behavior for chat */
+  .smooth-scroll {
+    scroll-behavior: smooth;
+  }
+  
+  /* Glass-morphism effect */
+  .glass-effect {
+    backdrop-filter: blur(12px) saturate(180%);
+    background-color: rgba(var(--background), 0.75);
+  }
+  
+  /* Elegant hover lift effect */
+  .hover-lift {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  
+  .hover-lift:hover {
+    transform: translateY(-2px);
+  }
+  
+  /* Shimmer animation for loading states */
+  @keyframes shimmer {
+    0% {
+      background-position: -1000px 0;
+    }
+    100% {
+      background-position: 1000px 0;
+    }
+  }
+  
+  .shimmer {
+    animation: shimmer 2s infinite linear;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.1) 50%,
+      transparent 100%
+    );
+    background-size: 1000px 100%;
+  }
+  
+  /* Typing indicator animation */
+  @keyframes bounce {
+    0%, 60%, 100% {
+      transform: translateY(0);
+    }
+    30% {
+      transform: translateY(-8px);
+    }
+  }
+  
+  .typing-indicator span {
+    animation: bounce 1.4s infinite;
+  }
+  
+  .typing-indicator span:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+  
+  .typing-indicator span:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+  
+  /* Fade slide in animation */
+  @keyframes fade-slide-in {
+    from {
+      opacity: 0;
+      transform: translateY(16px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  
+  .animate-fade-slide-in {
+    animation: fade-slide-in 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  
+  /* Pulse glow effect */
+  @keyframes pulse-glow {
+    0%, 100% {
+      opacity: 1;
+      box-shadow: 0 0 0 0 rgba(var(--primary), 0.7);
+    }
+    50% {
+      opacity: 0.9;
+      box-shadow: 0 0 0 8px rgba(var(--primary), 0);
+    }
+  }
+  
+  .pulse-glow {
+    animation: pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  
+  /* Improved prose styling for chat messages */
+  .prose-chat {
+    @apply prose-sm prose-slate dark:prose-invert max-w-none;
+  }
+  
+  .prose-chat p {
+    @apply leading-relaxed text-[15px] my-2;
+  }
+  
+  .prose-chat ul,
+  .prose-chat ol {
+    @apply my-2;
+  }
+  
+  .prose-chat li {
+    @apply my-1;
+  }
+  
+  .prose-chat code {
+    @apply px-1.5 py-0.5 rounded-md bg-muted/50 text-[13px] font-mono;
+  }
+  
+  .prose-chat pre {
+    @apply rounded-xl p-4 my-3 bg-muted/30 border border-border/50;
+  }
+  
+  /* Smooth entry animations with stagger */
+  @keyframes enter-from-bottom {
+    from {
+      opacity: 0;
+      transform: translateY(20px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  
+  .stagger-animation {
+    animation: enter-from-bottom 0.5s ease-out;
+  }
+  
+  /* Gradient border animation */
+  @keyframes gradient-rotate {
+    0% {
+      transform: rotate(0deg);
+    }
+    100% {
+      transform: rotate(360deg);
+    }
+  }
+  
+  .gradient-border-animated::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: inherit;
+    padding: 2px;
+    background: conic-gradient(
+      from 0deg,
+      transparent 0deg 90deg,
+      var(--primary) 90deg 180deg,
+      transparent 180deg 270deg,
+      var(--primary) 270deg 360deg
+    );
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    animation: gradient-rotate 4s linear infinite;
+  }
 }
