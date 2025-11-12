@@ -279,7 +279,7 @@ function UploadContent() {
   };
 
   const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<AnalyzeSuccessResponse> => {
-    const maxWaitMs = 2 * 60 * 1000;
+    const maxWaitMs = 5 * 60 * 1000;
     const pollIntervalMs = 1500;
     const started = Date.now();
 
