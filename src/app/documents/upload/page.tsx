@@ -59,7 +59,7 @@ type FormData = {
 
 function UploadContent() {
   const [files, setFiles] = useState<File[]>([]);
-  const [queue, setQueue] = useState<{ file: File; progress: number; status: 'idle' | 'uploading' | 'processing' | 'ready' | 'saving' | 'success' | 'error'; note?: string; hash?: string; extracted?: Extracted; form?: FormData; locked?: boolean; previewUrl?: string; rotation?: number; linkMode?: 'new' | 'version'; baseId?: string; candidates?: { id: string; label: string }[]; senderOptions?: string[]; receiverOptions?: string[]; storageKey?: string; geminiFile?: { fileId: string; fileUri: string; mimeType?: string } }[]>([]);
+  const [queue, setQueue] = useState<{ file: File; progress: number; status: 'idle' | 'uploading' | 'processing' | 'ready' | 'saving' | 'success' | 'error'; note?: string; hash?: string; extracted?: Extracted; form?: FormData; locked?: boolean; previewUrl?: string; rotation?: number; linkMode?: 'new' | 'version'; baseId?: string; candidates?: { id: string; label: string }[]; senderOptions?: string[]; receiverOptions?: string[]; storageKey?: string; geminiFile?: { fileId: string; fileUri: string; mimeType?: string }; docId?: string; ingestionJob?: any }[]>([]);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [carouselMode, setCarouselMode] = useState<boolean>(true);
   const [dragOver, setDragOver] = useState<boolean>(false);
@@ -68,7 +68,6 @@ function UploadContent() {
   const [isProcessingAll, setIsProcessingAll] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
-  const { addDocument, documents, linkAsNewVersion, refresh } = useDocuments();
   const { departments, selectedDepartmentId, setSelectedDepartmentId } = useDepartments();
   const router = useRouter();
   const { categories } = useCategories();
@@ -121,9 +120,31 @@ function UploadContent() {
       navigateToFolder(result.path);
     }
   };
+  const removeQueueItem = async (index: number) => {
+    const item = queue[index];
+    if (!item) return;
+    const orgId = getApiContext().orgId || '';
+    if (orgId && item.docId && item.status !== 'success') {
+      try {
+        await apiFetch(`/orgs/${orgId}/documents/${item.docId}/draft`, { method: 'DELETE' });
+      } catch (error) {
+        console.warn('Failed to discard draft document', error);
+      }
+    }
+    setQueue(prev => {
+      const next = prev.filter((_, idx) => idx !== index);
+      const newLen = next.length;
+      if (newLen === 0) setActiveIndex(null);
+      else setActiveIndex((prevIdx) => {
+        if (prevIdx === null) return 0;
+        return Math.min(index, newLen - 1);
+      });
+      return next;
+    });
+  };
   const [docType, setDocType] = useState<Document['type']>('PDF');
   const [extracted, setExtracted] = useState<Extracted | null>(null);
-  const { folders, createFolder } = useDocuments();
+  const { documents, folders, createFolder, refresh } = useDocuments();
   const [preferredBaseId, setPreferredBaseId] = useState<string | null>(null);
   const { hasRoleAtLeast, hasPermission, bootstrapData } = useAuth();
   const [folderPath, setFolderPath] = useState<string[]>([]);
@@ -343,7 +364,7 @@ function UploadContent() {
 
       // 2) Finalize DB row if already created, else we will create on Save
       const orgId = getApiContext().orgId || '';
-      // We'll only store file location on Save to avoid orphan rows in case user cancels
+      if (!orgId) throw new Error('No organization set');
 
       // 3) Ask backend AI to analyze from signed Storage URL
       let analyzeResp: AnalyzeSuccessResponse;
@@ -390,6 +411,45 @@ function UploadContent() {
       }
       const ocrResult = { extractedText: analyzeResp.ocrText } as any;
       const metadataResult = analyzeResp.metadata as any;
+
+      // Create or reuse a draft document so background ingestion can start immediately
+      let docId = item.docId;
+      let ingestionJob = item.ingestionJob;
+      const draftPayload: any = {
+        title: metadataResult.title || item.file.name,
+        filename: metadataResult.filename || item.file.name,
+        type: inferred,
+        subject: metadataResult.subject || '',
+        description: metadataResult.description || metadataResult.summary || '',
+        category: metadataResult.category || 'General',
+        tags: (metadataResult.tags || []).filter(Boolean),
+        keywords: (metadataResult.keywords || []).filter(Boolean),
+        sender: metadataResult.sender || '',
+        receiver: metadataResult.receiver || '',
+        documentDate: metadataResult.documentDate || '',
+        folderPath: folderPath.slice(),
+        departmentId: selectedDepartmentId || undefined,
+        isDraft: true,
+      };
+      if (!docId) {
+        const createdDraft = await apiFetch<StoredDocument>(`/orgs/${orgId}/documents`, { method: 'POST', body: draftPayload });
+        if (!createdDraft?.id) throw new Error('Failed to create draft document');
+        docId = createdDraft.id;
+      }
+      const finalizeResp = await apiFetch(`/orgs/${orgId}/uploads/finalize`, {
+        method: 'POST',
+        body: {
+          documentId: docId,
+          storageKey,
+          fileSizeBytes: item.file.size,
+          mimeType: item.file.type || 'application/octet-stream',
+          contentHash: item.hash,
+          geminiFileId: analyzeResp.geminiFile?.fileId,
+          geminiFileUri: analyzeResp.geminiFile?.fileUri,
+          geminiFileMimeType: analyzeResp.geminiFile?.mimeType,
+        }
+      });
+      ingestionJob = finalizeResp?.ingestionJob || ingestionJob;
 
       // Use the original summary without padding extra content
       const summary = (metadataResult.summary || '').trim();
@@ -438,7 +498,9 @@ function UploadContent() {
         linkMode: preferredBaseId ? 'version' : (candidates.length > 0 ? 'version' : 'new'), 
         baseId: preferredBaseId || candidates[0]?.id, 
         storageKey: storageKey,
-        geminiFile: analyzeResp.geminiFile 
+        geminiFile: analyzeResp.geminiFile,
+        docId,
+        ingestionJob,
       } : q));
       toast({ title: 'Processed', description: `${item.file.name} analyzed by AI.` });
     } catch (e) {
@@ -622,33 +684,29 @@ function UploadContent() {
         .map((t: string) => t.trim())
         .filter(Boolean);
 
-      const newDoc: StoredDocument = {
-        id: `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        name: (item.form.title || item.extracted.metadata.title || item.file.name),
-        type: docType,
-        uploadedAt: new Date(),
-        version: 1,
-        keywords: (keywordsArray.length ? keywordsArray : (item.extracted.metadata.keywords || [])).filter(Boolean),
-        summary,
-        content: item.extracted.ocrText,
-        title: item.form.title || item.extracted.metadata.title || item.file.name,
-        filename: item.form.filename || item.file.name,
-        sender: item.form.sender || item.extracted.metadata.sender,
-        receiver: item.form.receiver || item.extracted.metadata.receiver,
-        documentDate: item.form.documentDate || item.extracted.metadata.documentDate,
-        documentType: item.form.documentType || item.extracted.metadata.documentType,
-        folder: 'root',
-        folderPath: [...currentFolderPath],
-        subject: item.form.subject || item.extracted.metadata.subject || (item.extracted.metadata.title || ''),
-        description: item.form.description || item.extracted.metadata.description || summary,
-        category: item.form.category || item.extracted.metadata.category,
-        tags: (tagsArray.length ? tagsArray : (item.extracted.metadata.tags || [])).filter(Boolean),
-        contentHash: item.hash,
-      };
-      (newDoc as any).departmentId = selectedDepartmentId || undefined;
+      const docTitle = item.form.title || item.extracted.metadata.title || item.file.name;
+
+      if (!docTitle) {
+        toast({
+          title: 'Missing required fields',
+          description: 'Title is required. Please fill it before saving.',
+          variant: 'destructive'
+        });
+        setQueue(prev => prev.map((q, i) => i === index ? { ...q, status: 'ready', locked: false } : q));
+        return null;
+      }
+
+      if (!item.docId) {
+        toast({
+          title: 'Draft missing',
+          description: 'Please re-process this file before saving.',
+          variant: 'destructive'
+        });
+        setQueue(prev => prev.map((q, i) => i === index ? { ...q, status: 'ready', locked: false } : q));
+        return null;
+      }
 
       console.log('Creating document with folderPath:', currentFolderPath, 'Type:', typeof currentFolderPath, 'Is Array:', Array.isArray(currentFolderPath));
-
       console.log('🔍 Creating folder structure for path:', currentFolderPath);
       try {
         for (let i = 0; i < currentFolderPath.length; i++) {
@@ -677,16 +735,6 @@ function UploadContent() {
         });
       }
 
-      if (!newDoc.title) {
-        toast({
-          title: 'Missing required fields',
-          description: 'Title is required. Please fill it before saving.',
-          variant: 'destructive'
-        });
-        setQueue(prev => prev.map((q, i) => i === index ? { ...q, status: 'ready', locked: false } : q));
-        return null;
-      }
-
       if (item.linkMode === 'version' && !item.baseId) {
         toast({
           title: 'Version linking error',
@@ -697,90 +745,73 @@ function UploadContent() {
         return null;
       }
 
+      const finalKeywords = (keywordsArray.length ? keywordsArray : (item.extracted.metadata.keywords || [])).filter(Boolean);
+      const finalTags = (tagsArray.length ? tagsArray : (item.extracted.metadata.tags || [])).filter(Boolean);
+      const docSubject = item.form.subject || item.extracted.metadata.subject || (item.extracted.metadata.title || '');
+      const docDescription = item.form.description || item.extracted.metadata.description || summary;
+      const documentDateValue = item.form.documentDate || item.extracted.metadata.documentDate || '';
+
+      const versionDraft = {
+        title: docTitle,
+        filename: item.form.filename || item.file.name,
+        type: docType,
+        folderPath: [...currentFolderPath],
+        subject: docSubject,
+        description: docDescription,
+        category: item.form.category || item.extracted.metadata.category,
+        tags: finalTags,
+        keywords: finalKeywords,
+        sender: item.form.sender || item.extracted.metadata.sender,
+        receiver: item.form.receiver || item.extracted.metadata.receiver,
+        documentDate: documentDateValue,
+        departmentId: selectedDepartmentId || undefined,
+        isDraft: false,
+      };
+
+      const patchPayload: any = {
+        title: versionDraft.title,
+        filename: versionDraft.filename,
+        type: versionDraft.type,
+        folder_path: currentFolderPath,
+        subject: versionDraft.subject,
+        description: versionDraft.description,
+        category: versionDraft.category,
+        tags: versionDraft.tags,
+        keywords: versionDraft.keywords,
+        sender: versionDraft.sender,
+        receiver: versionDraft.receiver,
+        document_date: documentDateValue,
+        department_id: selectedDepartmentId || null,
+        is_draft: false,
+      };
+
       let savedDoc: StoredDocument | null = null;
+      const orgId = getApiContext().orgId || '';
+      if (!orgId) throw new Error('No organization set');
 
       if (item.linkMode === 'version' && item.baseId) {
-        console.log('🔍 Linking as new version to document:', item.baseId);
-        const created = await linkAsNewVersion(item.baseId, newDoc as any);
-        console.log('✅ Version linked successfully:', created);
-        console.log('📋 Linked document ID:', created?.id);
-        console.log('📋 Linked document keys:', Object.keys(created || {}));
-
-        if (!created || !created.id) {
-          throw new Error(`Version linking failed: no ID returned. Created object: ${JSON.stringify(created)}`);
-        }
-
-        try {
-          const orgId = getApiContext().orgId || '';
-          console.log('🔍 Finalizing upload for versioned document:', created.id);
-          await apiFetch(`/orgs/${orgId}/uploads/finalize`, {
-            method: 'POST',
-            body: {
-              documentId: created.id,
-              storageKey: item.storageKey,
-              fileSizeBytes: item.file.size,
-              mimeType: item.file.type || 'application/octet-stream',
-              contentHash: item.hash,
-              geminiFileId: item.geminiFile?.fileId,
-              geminiFileUri: item.geminiFile?.fileUri,
-              geminiFileMimeType: item.geminiFile?.mimeType,
-            },
-          });
-          try {
-            await apiFetch(`/orgs/${orgId}/documents/${created.id}/extraction`, {
-              method: 'POST',
-              body: { ocrText: item.extracted?.ocrText || '', metadata: item.extracted?.metadata || {} },
-            });
-          } catch {}
-        } catch (e) {
-          console.error('Finalize failed for version:', e);
-          throw e;
-        }
+        console.log('🔍 Linking existing draft to version group:', item.baseId);
+        const created = await apiFetch<StoredDocument>(`/orgs/${orgId}/documents/${item.baseId}/version`, {
+          method: 'POST',
+          body: { draft: versionDraft, draftId: item.docId },
+        });
         savedDoc = created;
       } else {
-        console.log('🔍 Creating new document with data:', {
-          title: newDoc.title,
-          folderPath: newDoc.folderPath,
-          type: newDoc.type
+        console.log('🔍 Finalizing draft document:', item.docId);
+        const updated = await apiFetch<StoredDocument>(`/orgs/${orgId}/documents/${item.docId}`, {
+          method: 'PATCH',
+          body: patchPayload,
         });
-        const created = await addDocument(newDoc);
-        console.log('✅ Document created successfully:', created);
-        console.log('📋 Created document ID:', created?.id);
-        console.log('📋 Created document keys:', Object.keys(created || {}));
+        savedDoc = updated;
+      }
 
-        if (!created || !created.id) {
-          throw new Error(`Document creation failed: no ID returned. Created object: ${JSON.stringify(created)}`);
-        }
-
-        try {
-          const orgId = getApiContext().orgId || '';
-          console.log('🔍 Finalizing upload for document:', created.id);
-          await apiFetch(`/orgs/${orgId}/uploads/finalize`, {
-            method: 'POST',
-            body: {
-              documentId: created.id,
-              storageKey: item.storageKey,
-              fileSizeBytes: item.file.size,
-              mimeType: item.file.type || 'application/octet-stream',
-              contentHash: item.hash,
-              geminiFileId: item.geminiFile?.fileId,
-              geminiFileUri: item.geminiFile?.fileUri,
-              geminiFileMimeType: item.geminiFile?.mimeType,
-            },
-          });
-          try {
-            await apiFetch(`/orgs/${orgId}/documents/${created.id}/extraction`, {
-              method: 'POST',
-              body: { ocrText: item.extracted?.ocrText || '', metadata: item.extracted?.metadata || {} },
-            });
-          } catch (extractionError) {
-            console.warn('Failed to save extraction data (non-critical):', extractionError);
-          }
-        } catch (uploadError) {
-          console.error('Critical upload error:', uploadError);
-          throw uploadError;
-        }
-        savedDoc = created;
+      try {
+        await apiFetch(`/orgs/${orgId}/documents/${item.docId}/extraction`, {
+          method: 'POST',
+          body: { ocrText: item.extracted?.ocrText || '', metadata: item.extracted?.metadata || {} },
+        });
+      } catch (extractionError) {
+        console.warn('Failed to save extraction data (non-critical):', extractionError);
       }
 
       let nextQueueSnapshot: typeof queue = [];
@@ -1032,19 +1063,7 @@ function UploadContent() {
                           <div className="flex items-center gap-2">
                             {item.status === 'idle' && !isProcessingAll && <Button size="sm" onClick={() => processItem(i)} disabled={!!item.locked}>Process</Button>}
                             {item.status === 'ready' && <Button size="sm" onClick={() => handleSave(i)} disabled={item.locked}>Save</Button>}
-                            {(item.status === 'success' || item.status === 'error') && <Button size="sm" variant="outline" onClick={() => {
-                              setQueue(prev => {
-                                const next = prev.filter((_, idx) => idx !== i);
-                                const newLen = next.length;
-                                if (newLen === 0) setActiveIndex(null);
-                                else setActiveIndex((prevIdx) => {
-                                  if (prevIdx === null) return 0;
-                                  const ni = Math.min(i, newLen - 1);
-                                  return ni;
-                                });
-                                return next;
-                              });
-                            }}>Remove</Button>}
+                            {(item.status === 'success' || item.status === 'error') && <Button size="sm" variant="outline" onClick={() => void removeQueueItem(i)}>Remove</Button>}
                           </div>
                         </div>
 

@@ -37,6 +37,7 @@ export type Document = {
   versionNumber?: number; // 1..N, supersedes legacy version
   isCurrentVersion?: boolean; // marking the active one within group
   supersedesId?: string; // optional direct predecessor id
+  isDraft?: boolean;
 };
 
 export type StoredDocument = Document & {
