@@ -8,10 +8,10 @@ import {
   CarouselItem,
 } from "@/components/ui/carousel";
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { ArrowLeftIcon, ArrowRightIcon } from "lucide-react";
 import {
@@ -30,7 +30,7 @@ export const InlineCitation = ({
   ...props
 }: InlineCitationProps) => (
   <span
-    className={cn("group inline items-center gap-1", className)}
+    className={cn("group inline-flex items-center gap-1 align-baseline", className)}
     {...props}
   />
 );
@@ -47,30 +47,34 @@ export const InlineCitationText = ({
   />
 );
 
-export type InlineCitationCardProps = ComponentProps<typeof HoverCard>;
+export type InlineCitationCardProps = ComponentProps<typeof Popover>;
 
 export const InlineCitationCard = (props: InlineCitationCardProps) => (
-  <HoverCard closeDelay={0} openDelay={0} {...props} />
+  <Popover {...props} />
 );
 
 export type InlineCitationCardTriggerProps = ComponentProps<typeof Badge> & {
   sources: string[];
+  title?: string;
+  extraCount?: number;
 };
 
 export const InlineCitationCardTrigger = ({
   sources,
+  title,
+  extraCount,
   className,
   ...props
 }: InlineCitationCardTriggerProps) => (
-  <HoverCardTrigger asChild>
+  <PopoverTrigger asChild>
     <Badge
-      className={cn("ml-1 rounded-full", className)}
+      className={cn("ml-1 rounded-full inline-flex", className)}
       variant="secondary"
       {...props}
     >
-      <CitationSourceBadge sources={sources} />
+      <CitationSourceBadge sources={sources} title={title} extraCount={extraCount} />
     </Badge>
-  </HoverCardTrigger>
+  </PopoverTrigger>
 );
 
 const truncateMiddle = (value: string, max = 12) => {
@@ -101,17 +105,29 @@ const getSourceBadgeLabel = (source: string): string => {
   return trimmed;
 };
 
-const CitationSourceBadge = ({ sources }: { sources: string[] }) => {
+const CitationSourceBadge = ({ 
+  sources, 
+  title, 
+  extraCount 
+}: { 
+  sources: string[]; 
+  title?: string;
+  extraCount?: number;
+}) => {
   if (!sources.length) {
     return <>unknown</>;
   }
 
-  const label = getSourceBadgeLabel(sources[0]);
-  const extra = sources.length > 1 ? `+${sources.length - 1}` : "";
+  // Use provided title if available, otherwise fall back to parsing URL
+  const label = title || getSourceBadgeLabel(sources[0]);
+  // Truncate long titles
+  const displayLabel = label.length > 30 ? `${label.slice(0, 27)}...` : label;
+  const extra = (extraCount !== undefined ? extraCount : (sources.length > 1 ? sources.length - 1 : 0));
+  const extraText = extra > 0 ? ` +${extra}` : "";
 
   return (
     <>
-      {label} {extra}
+      {displayLabel}{extraText}
     </>
   );
 };
@@ -122,7 +138,7 @@ export const InlineCitationCardBody = ({
   className,
   ...props
 }: InlineCitationCardBodyProps) => (
-  <HoverCardContent className={cn("relative w-80 p-0", className)} {...props} />
+  <PopoverContent className={cn("relative w-80 p-0", className)} {...props} />
 );
 
 const CarouselApiContext = createContext<CarouselApi | undefined>(undefined);

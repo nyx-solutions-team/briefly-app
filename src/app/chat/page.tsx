@@ -12,6 +12,27 @@ import { Message, MessageContent } from '@/components/ai-elements/message';
 import { Response } from '@/components/ai-elements/response';
 // import removed old PromptInput UI
 import { Loader } from '@/components/ai-elements/loader';
+import {
+  Task,
+  TaskContent,
+  TaskItem,
+  TaskTrigger,
+} from '@/components/ai-elements/task';
+import { Shimmer } from '@/components/ai-elements/shimmer';
+import {
+  InlineCitation,
+  InlineCitationCard,
+  InlineCitationCardTrigger,
+  InlineCitationCardBody,
+  InlineCitationCarousel,
+  InlineCitationCarouselContent,
+  InlineCitationCarouselItem,
+  InlineCitationCarouselHeader,
+  InlineCitationCarouselIndex,
+  InlineCitationCarouselPrev,
+  InlineCitationCarouselNext,
+  InlineCitationSource,
+} from '@/components/ai-elements/inline-citation';
 import { ssePost } from '@/lib/api';
 import { useSettings } from '@/hooks/use-settings';
 import { Bot, FileText, ChevronDown, Sparkles } from 'lucide-react';
@@ -56,21 +77,174 @@ function getCitationDisplayDescription(citation: any): string {
   return parts.slice(0, 2).join(' • ') || 'Click to view document details';
 }
 
-// Function to render assistant content without inline citation markers
-function processContentWithCitations(content: string, _citations: any[] = []) {
+// Function to render assistant content with inline citation components
+function processContentWithCitations(content: string, citations: any[] = []) {
   if (!content || typeof content !== 'string') return content;
 
-  const cleaned = content
-    // Remove inline markers like [^1], [^?]
-    .replace(/\s*\[\^\d+\]/g, '')
-    .replace(/\s*\[\^\?\]/g, '')
-    // Remove embedded UUID references like [123e4567-e89b-12d3-a456-426614174000]
-    .replace(/\s*\[([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\]/gi, '')
-    // Remove lingering footnote definition lines
-    .replace(/^\[\^\d+\]:.*$/gm, '')
-    .trim();
+  const collapseSingleTrailingNewline = (text: string) => {
+    if (/\n\s*$/.test(text) && !/\n\s*\n\s*$/.test(text)) {
+      return text.replace(/\n\s*$/, ' ');
+    }
+    return text;
+  };
 
-  return <Response className="inline">{cleaned}</Response>;
+  // Create a map of citation numbers to citation objects (1-based indexing)
+  const citationMap = new Map<number, any>();
+  citations.forEach((citation, index) => {
+    citationMap.set(index + 1, citation);
+  });
+
+  // Collect all citation positions and components
+  const citationData: Array<{ index: number; component: JSX.Element; length: number }> = [];
+  const citationPattern = /\[\^(\d+(?:\s*,\s*\^?\d+)*)\]/g;
+  let match;
+
+  while ((match = citationPattern.exec(content)) !== null) {
+    // Parse citation numbers from the match
+    const citationNumbers = match[1]
+      .split(',')
+      .map(num => parseInt(num.replace(/\^/g, '').trim(), 10))
+      .filter(num => !isNaN(num));
+
+    // Get citations for these numbers
+    const matchedCitations = citationNumbers
+      .map(num => citationMap.get(num))
+      .filter(Boolean);
+
+    if (matchedCitations.length > 0) {
+      // Create URLs and titles for the citations
+      const sourceData = matchedCitations.map((cit: any) => ({
+        url: cit.docId ? `/documents/${cit.docId}` : '',
+        title: getCitationDisplayTitle(cit),
+        citation: cit
+      })).filter(item => item.url);
+
+      if (sourceData.length > 0) {
+        const sourceUrls = sourceData.map(item => item.url);
+        const firstTitle = sourceData[0].title;
+        const extraCount = sourceData.length > 1 ? sourceData.length - 1 : 0;
+        
+        citationData.push({
+          index: match.index,
+          length: match[0].length,
+          component: (
+            <InlineCitation key={`citation-${match.index}`} className="inline">
+              <InlineCitationCard>
+                <InlineCitationCardTrigger 
+                  sources={sourceUrls}
+                  title={firstTitle}
+                  extraCount={extraCount}
+                />
+                <InlineCitationCardBody>
+                  <InlineCitationCarousel>
+                    <InlineCitationCarouselHeader>
+                      <InlineCitationCarouselPrev />
+                      <InlineCitationCarouselNext />
+                      <InlineCitationCarouselIndex />
+                    </InlineCitationCarouselHeader>
+                    <InlineCitationCarouselContent>
+                      {matchedCitations.map((cit: any, idx: number) => (
+                        <InlineCitationCarouselItem key={`${cit.docId}-${idx}`}>
+                          <InlineCitationSource
+                            title={getCitationDisplayTitle(cit)}
+                            url={cit.docId ? `/documents/${cit.docId}` : undefined}
+                            description={getCitationDisplayDescription(cit)}
+                          />
+                        </InlineCitationCarouselItem>
+                      ))}
+                    </InlineCitationCarouselContent>
+                  </InlineCitationCarousel>
+                </InlineCitationCardBody>
+              </InlineCitationCard>
+            </InlineCitation>
+          )
+        });
+      }
+    }
+  }
+
+  // If no citations found, clean and return
+  if (citationData.length === 0) {
+    const cleaned = content
+      .replace(/\s*\[\^\d+\]/g, '')
+      .replace(/\s*\[\^\d+(?:\s*,\s*\d+)*\]/g, '')
+      .replace(/\s*\[\^\?\]/g, '')
+      .replace(/\s*\[([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\]/gi, '')
+      .replace(/^\[\^\d+\]:.*$/gm, '')
+      .trim();
+    return <Response className="inline">{cleaned}</Response>;
+  }
+
+  // Sort citations by index (forward order)
+  citationData.sort((a, b) => a.index - b.index);
+
+  // Build parts array by splitting at citation positions
+  const parts: (string | JSX.Element)[] = [];
+  let lastIndex = 0;
+
+  for (const citation of citationData) {
+    // Add text before citation
+    if (citation.index > lastIndex) {
+      let textBefore = content.slice(lastIndex, citation.index);
+      textBefore = collapseSingleTrailingNewline(textBefore);
+      if (textBefore) {
+        parts.push(textBefore);
+      }
+    }
+    
+    // Add citation component
+    parts.push(citation.component);
+    
+    lastIndex = citation.index + citation.length;
+  }
+
+  // Add remaining text after last citation
+  if (lastIndex < content.length) {
+    const textAfter = content.slice(lastIndex);
+    if (textAfter) {
+      parts.push(textAfter);
+    }
+  }
+
+  // Render: combine consecutive strings, render markdown blocks together
+  // Keep everything inline to prevent line breaks
+  const renderedParts: JSX.Element[] = [];
+  let currentText = '';
+
+  for (const part of parts) {
+    if (typeof part === 'string') {
+      currentText += part;
+    } else {
+      // Render accumulated text as markdown
+      if (currentText) {
+        renderedParts.push(
+          <Response
+            key={`text-${renderedParts.length}`}
+            className="inline w-auto h-auto align-baseline [&_p]:inline [&_p]:m-0"
+          >
+            {currentText}
+          </Response>
+        );
+        currentText = '';
+      }
+      // Add citation component (already inline)
+      renderedParts.push(part);
+    }
+  }
+
+  // Render any remaining text
+  if (currentText) {
+    renderedParts.push(
+      <Response
+        key={`text-${renderedParts.length}`}
+        className="inline w-auto h-auto align-baseline [&_p]:inline [&_p]:m-0"
+      >
+        {currentText}
+      </Response>
+    );
+  }
+
+  return <span className="inline">{renderedParts}</span>;
 }
 
 function getThemeColors(accentColor: string) {
@@ -634,88 +808,88 @@ export default function TestAgentEnhancedPage() {
                           </div>
                         </div>
                         <div className="flex-1 min-w-0 space-y-4">
-                          {/* Agent activity timeline - Enhanced with glassmorphism */}
+                          {/* Agent activity using Task component */}
                           {(() => {
                             const activitySteps = message.isStreaming ? currentTaskSteps : (message as any).processingSteps || [];
-                            const timelineItems = activitySteps.map((step: any, index: number) => ({ type: 'step' as const, data: step, index }));
-                            if (timelineItems.length === 0) return null;
-
-                            const statusBadge = (status?: string) => {
-                              if (status === 'completed') return 'Done';
-                              if (status === 'error') return 'Failed';
-                              return 'In progress';
-                            };
-
-                            const indicatorClass = (status?: string) => cn(
-                              'inline-flex h-2.5 w-2.5 rounded-full transition-all duration-300',
-                              status === 'completed'
-                                ? 'bg-emerald-500 shadow-lg shadow-emerald-500/50'
-                                : status === 'error'
-                                ? 'bg-red-500 shadow-lg shadow-red-500/50'
-                                : 'bg-amber-500 shadow-lg shadow-amber-500/50 animate-pulse'
-                            );
+                            const tools = message.isStreaming ? currentTools : (message as any).tools || [];
+                            const hasSteps = activitySteps.length > 0;
+                            const hasTools = tools.length > 0;
+                            
+                            if (!hasSteps && !hasTools) return null;
 
                             return (
-                              <div className={cn(
-                                "rounded-2xl border border-border/50 p-5 space-y-4",
-                                "bg-gradient-to-br from-muted/30 via-muted/20 to-transparent",
-                                "backdrop-blur-sm shadow-sm",
-                                "transition-all duration-300 hover:shadow-md hover:border-border/70"
-                              )}>
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-2">
-                                    <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-pulse" />
-                                    <span className="text-sm font-semibold text-foreground">Agent Activity</span>
-                                  </div>
-                                  <Badge 
-                                    variant="outline" 
-                                    className={cn(
-                                      "text-[11px] font-medium border-0",
-                                      message.isStreaming 
-                                        ? "bg-amber-500/10 text-amber-600 dark:text-amber-400" 
-                                        : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                                    )}
-                                  >
-                                    {message.isStreaming ? '● Live' : '✓ Complete'}
-                                  </Badge>
-                                </div>
+                              <div className="space-y-3">
+                                {/* Processing Steps Task */}
+                                {hasSteps && (() => {
+                                  // Group steps by task or show as single task
+                                  const hasMultipleTasks = activitySteps.some((step: any) => step.task || step.category);
+                                  
+                                  if (hasMultipleTasks) {
+                                    // Group by task/category
+                                    const grouped = activitySteps.reduce((acc: any, step: any) => {
+                                      const key = step.task || step.category || 'general';
+                                      if (!acc[key]) {
+                                        acc[key] = [];
+                                      }
+                                      acc[key].push(step);
+                                      return acc;
+                                    }, {});
 
-                                <div className="space-y-2.5">
-                                  {timelineItems.map((item: any) => {
-                                    if (item.type === 'step') {
-                                      const step = item.data;
-                                      return (
-                                        <div 
-                                          key={`step-${step.step}-${item.index}`} 
-                                          className={cn(
-                                            "flex gap-3 p-2.5 rounded-xl",
-                                            "transition-all duration-300",
-                                            "hover:bg-muted/30"
-                                          )}
-                                        >
-                                          <div className="mt-1.5 flex-shrink-0">
-                                            <span className={indicatorClass(step.status)} />
-                                          </div>
-                                          <div className="flex-1 min-w-0">
-                                            <div className="flex flex-wrap items-center gap-2">
-                                              <span className="text-sm font-medium text-foreground">{step.title}</span>
-                                              <span className={cn(
-                                                "text-[11px] uppercase tracking-wider font-medium px-2 py-0.5 rounded-full",
-                                                step.status === 'completed' && "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-                                                step.status === 'error' && "bg-red-500/10 text-red-600 dark:text-red-400",
-                                                !step.status || (step.status !== 'completed' && step.status !== 'error') && "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                                              )}>
-                                                {statusBadge(step.status)}
-                                              </span>
-                                            </div>
-                                          </div>
-                                        </div>
-                                      );
-                                    }
+                                    return (
+                                      <>
+                                        {Object.entries(grouped).map(([taskKey, steps]: [string, any]) => (
+                                          <Task key={taskKey} defaultOpen={taskKey === Object.keys(grouped)[0]}>
+                                            <TaskTrigger title={steps[0]?.task || steps[0]?.category || 'Processing'} />
+                                            <TaskContent>
+                                              {steps.map((step: any, index: number) => (
+                                                <TaskItem key={`${step.step}-${index}`}>
+                                                  {step.description || step.title}
+                                                  {step.status === 'completed' && ' ✓'}
+                                                  {step.status === 'error' && ' ✗'}
+                                                </TaskItem>
+                                              ))}
+                                            </TaskContent>
+                                          </Task>
+                                        ))}
+                                      </>
+                                    );
+                                  }
 
-                                    return null;
-                                  })}
-                                </div>
+                                  // Single task with all steps
+                                  return (
+                                    <Task defaultOpen={true}>
+                                      <TaskTrigger title="Processing Steps" />
+                                      <TaskContent>
+                                        {activitySteps.map((step: any, index: number) => (
+                                          <TaskItem key={`${step.step}-${index}`}>
+                                            {step.description || step.title}
+                                            {step.status === 'completed' && ' ✓'}
+                                            {step.status === 'error' && ' ✗'}
+                                            {step.status === 'in_progress' && ' ⏳'}
+                                          </TaskItem>
+                                        ))}
+                                      </TaskContent>
+                                    </Task>
+                                  );
+                                })()}
+
+                                {/* Tools Task */}
+                                {hasTools && (
+                                  <Task defaultOpen={hasSteps ? false : true}>
+                                    <TaskTrigger title="Tools Used" />
+                                    <TaskContent>
+                                      {tools.map((tool: any, index: number) => (
+                                        <TaskItem key={`tool-${tool.name}-${index}`}>
+                                          {tool.name || tool.tool}
+                                          {tool.description && ` - ${tool.description}`}
+                                          {tool.status === 'completed' && ' ✓'}
+                                          {tool.status === 'error' && ' ✗'}
+                                          {tool.status === 'running' && ' ⏳'}
+                                        </TaskItem>
+                                      ))}
+                                    </TaskContent>
+                                  </Task>
+                                )}
                               </div>
                             );
                           })()}
@@ -734,7 +908,7 @@ export default function TestAgentEnhancedPage() {
                             </div>
                           )}
 
-                          {/* Loading State - Elegant pulsing animation */}
+                          {/* Loading State - Shimmer animation */}
                           {message.isStreaming && !message.content && currentTaskSteps.some(step => step.step === 'search_documents') && (
                             <div className="flex items-center gap-3 p-4 rounded-2xl bg-muted/20 border border-border/30">
                               <div className="flex gap-1.5">
@@ -742,7 +916,9 @@ export default function TestAgentEnhancedPage() {
                                 <div className="w-2 h-2 rounded-full bg-primary/60 animate-pulse" style={{ animationDelay: '150ms' }} />
                                 <div className="w-2 h-2 rounded-full bg-primary/60 animate-pulse" style={{ animationDelay: '300ms' }} />
                               </div>
-                              <span className="text-sm text-muted-foreground">Thinking...</span>
+                              <Shimmer as="span" className="text-sm" duration={2}>
+                                Thinking...
+                              </Shimmer>
                             </div>
                           )}
 
