@@ -33,6 +33,8 @@ export type BrieflyChatBoxProps = {
   defaultFolderId?: string | null;
   defaultDocumentId?: string | null;
   placeholder?: string;
+  webSearch?: boolean;
+  onWebSearchChange?: (value: boolean) => void;
   // Fired when user presses Send or hits Enter (without Shift)
   onSend?: (payload: {
     text: string;
@@ -242,6 +244,8 @@ export function BrieflyChatBox({
   defaultFolderId = null,
   defaultDocumentId = null,
   placeholder = "Ask anything…",
+  webSearch,
+  onWebSearchChange,
   onSend,
   sending = false,
   className,
@@ -249,7 +253,8 @@ export function BrieflyChatBox({
   const [mode, setMode] = useState<ChatScope>(defaultMode);
   const [folderId, setFolderId] = useState<string | null>(defaultFolderId);
   const [documentId, setDocumentId] = useState<string | null>(defaultDocumentId);
-  const [webSearch, setWebSearch] = useState(defaultWebSearch);
+  const isWebSearchControlled = typeof webSearch === 'boolean';
+  const [internalWebSearch, setInternalWebSearch] = useState(defaultWebSearch);
   const [text, setText] = useState("");
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -265,6 +270,21 @@ export function BrieflyChatBox({
     setDocumentId(defaultDocumentId);
   }, [defaultDocumentId]);
 
+  useEffect(() => {
+    if (!isWebSearchControlled) {
+      setInternalWebSearch(defaultWebSearch);
+    }
+  }, [defaultWebSearch, isWebSearchControlled]);
+
+  const effectiveWebSearch = isWebSearchControlled ? (webSearch as boolean) : internalWebSearch;
+
+  const handleWebSearchToggle = (next: boolean) => {
+    if (!isWebSearchControlled) {
+      setInternalWebSearch(next);
+    }
+    onWebSearchChange?.(next);
+  };
+
   const canSend = useMemo(() => {
     if (!text.trim()) return false;
     if (mode === "folder" && !folderId) return false;
@@ -279,7 +299,7 @@ export function BrieflyChatBox({
       mode,
       folderId: mode === "folder" ? folderId : null,
       documentId: mode === "document" ? documentId : null,
-      webSearch,
+      webSearch: effectiveWebSearch,
     });
     setText("");
     // Keep selection but you can reset if desired:
@@ -329,7 +349,11 @@ export function BrieflyChatBox({
         <div className="ml-auto flex items-center gap-2 rounded-xl border px-3 py-2">
           <Globe className="h-4 w-4" />
           <Label htmlFor="websearch" className="mr-1 text-xs">Web search</Label>
-          <Switch id="websearch" checked={webSearch} onCheckedChange={setWebSearch} />
+          <Switch
+            id="websearch"
+            checked={effectiveWebSearch}
+            onCheckedChange={handleWebSearchToggle}
+          />
         </div>
       </div>
 

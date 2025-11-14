@@ -1,10 +1,10 @@
  "use client";
 
-import React, { useEffect, useMemo, useRef, useState, Suspense } from 'react';
+import React, { useEffect, useMemo, useRef, useState, Suspense, useCallback } from 'react';
 import AppLayout from '@/components/layout/app-layout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ArrowLeft, Check, UploadCloud, X, FileText, User, UserCheck, Calendar, Tag, FolderOpen, MessageSquare, Hash, Bookmark, Link as LinkIcon } from 'lucide-react';
+import { ArrowLeft, Check, UploadCloud, X, FileText, User, UserCheck, Calendar, Tag, FolderOpen, MessageSquare, Hash, Bookmark, Link as LinkIcon, Loader2 } from 'lucide-react';
 import { AccessDenied } from '@/components/access-denied';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -28,6 +28,8 @@ import { computeContentHash } from '@/lib/utils';
 import { useCategories } from '@/hooks/use-categories';
 import { useUserDepartmentCategories } from '@/hooks/use-department-categories';
 import UploadFilePreview from '@/components/upload-file-preview';
+import FilePreview from '@/components/file-preview';
+import JSZip from 'jszip';
 
 const toDataUri = (file: File): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -57,21 +59,360 @@ type FormData = {
   tags: string;
 };
 
+type QueueDocumentPrefill = {
+  docId?: string;
+  title?: string;
+  filename?: string;
+  sender?: string;
+  receiver?: string;
+  documentDate?: string;
+  subject?: string;
+  description?: string;
+  category?: string;
+  keywords?: string[] | string;
+  tags?: string[] | string;
+  folderPath?: string[];
+  storageKey?: string;
+  mimeType?: string;
+  extractedMetadata?: ExtractDocumentMetadataOutput;
+  failureReason?: string;
+};
+
+const BULK_UPLOAD_LIMIT = Number(process.env.NEXT_PUBLIC_BULK_UPLOAD_MAX_FILES || 10);
+const BULK_UPLOAD_MAX_FILE_MB = Number(process.env.NEXT_PUBLIC_BULK_UPLOAD_MAX_FILE_MB || 25);
+
+type ExtendedFile = File & { webkitRelativePath?: string };
+type FileSystemEntry = { isDirectory: boolean };
+
+const isZipFile = (file: File | ExtendedFile) => {
+  const name = file.name?.toLowerCase() || '';
+  const type = (file.type || '').toLowerCase();
+  return name.endsWith('.zip') || type === 'application/zip' || type === 'application/x-zip-compressed';
+};
+
+const SUPPORTED_EXTENSIONS = new Set(['.pdf', '.txt', '.md', '.markdown', '.jpg', '.jpeg', '.png']);
+const SYSTEM_FILE_PATTERNS = [/^__MACOSX\//i, /\.DS_Store$/i];
+const MIME_MAP: Record<string, string> = {
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.markdown': 'text/markdown',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+};
+
+const normalizeSegment = (segment: string) => {
+  const trimmed = segment.trim();
+  if (!trimmed) return 'Folder';
+  return trimmed.replace(/[<>:"/\\|?*]/g, '-').replace(/-+/g, '-');
+};
+
+const getExtension = (filename: string) => {
+  const idx = filename.lastIndexOf('.');
+  return idx >= 0 ? filename.slice(idx).toLowerCase() : '';
+};
+
+const isSupportedFile = (filename: string) => {
+  const ext = getExtension(filename);
+  return SUPPORTED_EXTENSIONS.has(ext);
+};
+
+const guessMimeFromName = (filename: string) => {
+  const ext = getExtension(filename);
+  return MIME_MAP[ext] || 'application/octet-stream';
+};
+
+const shouldSkipPath = (path: string) => {
+  return SYSTEM_FILE_PATTERNS.some((pattern) => pattern.test(path));
+};
+
+const splitRelativePath = (relativePath: string) => {
+  const sanitizedPath = relativePath.replace(/\\/g, '/');
+  const parts = sanitizedPath.split('/').filter(Boolean);
+  const fileName = parts.pop() || '';
+  const folderSegments = parts.map(normalizeSegment);
+  return { folderSegments, fileName };
+};
+
+const extractDirectorySegments = (relativePath: string) => {
+  const sanitized = relativePath.replace(/\\/g, '/');
+  return sanitized.split('/').filter(Boolean).map(normalizeSegment);
+};
+
 function UploadContent() {
-  const [files, setFiles] = useState<File[]>([]);
-  const [queue, setQueue] = useState<{ file: File; progress: number; status: 'idle' | 'uploading' | 'processing' | 'ready' | 'saving' | 'success' | 'error'; note?: string; hash?: string; extracted?: Extracted; form?: FormData; locked?: boolean; previewUrl?: string; rotation?: number; linkMode?: 'new' | 'version'; baseId?: string; candidates?: { id: string; label: string }[]; senderOptions?: string[]; receiverOptions?: string[]; storageKey?: string; geminiFile?: { fileId: string; fileUri: string; mimeType?: string }; docId?: string; ingestionJob?: any }[]>([]);
+  const [queue, setQueue] = useState<{ file: File; progress: number; status: 'idle' | 'uploading' | 'processing' | 'ready' | 'saving' | 'success' | 'error'; note?: string; hash?: string; extracted?: Extracted; form?: FormData; locked?: boolean; previewUrl?: string; rotation?: number; linkMode?: 'new' | 'version'; baseId?: string; candidates?: { id: string; label: string }[]; senderOptions?: string[]; receiverOptions?: string[]; storageKey?: string; geminiFile?: { fileId: string; fileUri: string; mimeType?: string }; docId?: string; ingestionJob?: any; folderPathOverride?: string[]; prefilledFromQueue?: boolean }[]>([]);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [carouselMode, setCarouselMode] = useState<boolean>(true);
   const [dragOver, setDragOver] = useState<boolean>(false);
   const [pickerOpenIndex, setPickerOpenIndex] = useState<number | null>(null);
   const [pickerQuery, setPickerQuery] = useState('');
   const [isProcessingAll, setIsProcessingAll] = useState(false);
+  const [isSavingAll, setIsSavingAll] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const zipInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const [showAllSkipped, setShowAllSkipped] = useState(false);
+  const [skipDetails, setSkipDetails] = useState<{ path: string; reason: string }[] | null>(null);
+  const [lastBulkSummary, setLastBulkSummary] = useState<{ count: number; path: string[] } | null>(null);
+  const [recentSavePath, setRecentSavePath] = useState<string[] | null>(null);
   const { toast } = useToast();
   const { departments, selectedDepartmentId, setSelectedDepartmentId } = useDepartments();
   const router = useRouter();
   const { categories } = useCategories();
   const { getCategoriesForDepartment } = useUserDepartmentCategories();
+  const { documents, folders, createFolder, refresh } = useDocuments();
+  const { hasRoleAtLeast, hasPermission, bootstrapData } = useAuth();
+  const [folderPath, setFolderPath] = useState<string[]>([]);
+  const searchParams = useSearchParams();
+const ensureBulkPrereqs = useCallback(() => {
+  if (hasRoleAtLeast('systemAdmin') && folderPath.length === 0 && !selectedDepartmentId) {
+    toast({
+      title: 'Department required',
+      description: 'Please select a department or target folder before running a bulk upload.',
+        variant: 'destructive',
+      });
+      return false;
+    }
+    if (!getApiContext().orgId) {
+      toast({
+        title: 'Organization missing',
+        description: 'Select an organization before uploading.',
+        variant: 'destructive',
+      });
+      return false;
+  }
+  return true;
+}, [folderPath, hasRoleAtLeast, selectedDepartmentId, toast]);
+const handleClearBulkSummary = useCallback(() => {
+  setLastBulkSummary(null);
+  setSkipDetails(null);
+  setShowAllSkipped(false);
+}, []);
+const ensureFolderStructure = useCallback(async (paths: string[][]) => {
+  if (!paths || paths.length === 0) return;
+  const dedup = new Map<string, string[]>();
+  for (const segments of paths) {
+    const clean = segments.filter(Boolean);
+    if (!clean.length) continue;
+    dedup.set(clean.join('\u0000'), clean);
+  }
+  const ordered = Array.from(dedup.values()).sort((a, b) => a.length - b.length);
+  for (const segs of ordered) {
+    if (!segs.length) continue;
+    const parent = segs.slice(0, -1);
+    const name = segs[segs.length - 1];
+    try {
+      await createFolder(parent, name);
+    } catch {
+      // Folder likely exists; ignore errors
+    }
+  }
+}, [createFolder]);
+  const enqueueFiles = useCallback(async (items: { file: File; folderPathOverride?: string[] }[]) => {
+    if (items.length === 0) return { added: 0, skipped: [] as { path: string; reason: string }[] };
+    const MAX_FILES = 10;
+    const maxSizeBytes = 50 * 1024 * 1024;
+    const skipped: { path: string; reason: string }[] = [];
+    const currentQueueLength = queue.length;
+    const availableSlots = MAX_FILES - currentQueueLength;
+    if (availableSlots <= 0) {
+      skipped.push(...items.map(({ file }) => ({ path: file.name, reason: 'Upload queue full (10 files max)' })));
+      toast({
+        title: 'Upload queue full',
+        description: 'Process or remove existing files before adding more.',
+        variant: 'destructive',
+      });
+      return { added: 0, skipped };
+    }
+    const allowed: { file: File; folderPathOverride?: string[] }[] = [];
+    for (const item of items) {
+      if (item.file.size > maxSizeBytes) {
+        skipped.push({ path: item.file.name, reason: `File exceeds ${BULK_UPLOAD_MAX_FILE_MB}MB limit` });
+        continue;
+      }
+      if (!isSupportedFile(item.file.name)) {
+        skipped.push({ path: item.file.name, reason: 'Unsupported file type' });
+        continue;
+      }
+      allowed.push(item);
+    }
+    let limited = allowed;
+    if (allowed.length > availableSlots) {
+      skipped.push(...allowed.slice(availableSlots).map(({ file }) => ({
+        path: file.name,
+        reason: 'Upload queue full (10 files max)',
+      })));
+      limited = allowed.slice(0, availableSlots);
+      toast({
+        title: 'Upload limit reached',
+        description: `Only ${availableSlots} more file(s) can be queued right now.`,
+      });
+    }
+    const queueHashes = new Set(queue.map((q) => q.hash).filter(Boolean));
+    const entries = await Promise.all(limited.map(async ({ file, folderPathOverride }) => ({
+      file,
+      folderPathOverride,
+      progress: 0,
+      status: 'idle' as const,
+      hash: await computeContentHash(file),
+      previewUrl: URL.createObjectURL(file),
+      rotation: 0,
+      linkMode: 'new' as const,
+    })));
+    const deduped: typeof entries = [];
+    for (const entry of entries) {
+      if (entry.hash && queueHashes.has(entry.hash)) {
+        skipped.push({ path: entry.file.name, reason: 'Duplicate file already in queue' });
+        continue;
+      }
+      if (entry.hash) queueHashes.add(entry.hash);
+      deduped.push(entry);
+    }
+    if (deduped.length) {
+      setQueue((prev) => [...prev, ...deduped]);
+    }
+    return { added: deduped.length, skipped };
+  }, [queue, toast]);
+
+  const processZipFile = useCallback(async (zipFile: File) => {
+    if (!ensureBulkPrereqs()) {
+      if (zipInputRef.current) zipInputRef.current.value = '';
+      return;
+    }
+    try {
+      const basePath = folderPath.slice();
+      const skipList: { path: string; reason: string }[] = [];
+      const filesToQueue: { file: File; folderPathOverride?: string[] }[] = [];
+      const folderMap = new Map<string, string[]>();
+      const recordFolder = (segments: string[]) => {
+        const clean = segments.filter(Boolean);
+        if (!clean.length) return;
+        folderMap.set(clean.join('\u0000'), clean);
+      };
+      if (basePath.length) recordFolder(basePath);
+      const zip = await JSZip.loadAsync(zipFile);
+      const entries = Object.values(zip.files || {});
+      for (const entry of entries) {
+        if (entry.dir) {
+          const dirSegments = extractDirectorySegments(entry.name || '');
+          recordFolder([...basePath, ...dirSegments]);
+          continue;
+        }
+        const relativePath = entry.name || '';
+        if (shouldSkipPath(relativePath)) {
+          skipList.push({ path: relativePath, reason: 'System file skipped' });
+          continue;
+        }
+        const { folderSegments, fileName } = splitRelativePath(relativePath);
+        recordFolder([...basePath, ...folderSegments]);
+        if (!fileName) continue;
+        if (!isSupportedFile(fileName)) {
+          skipList.push({ path: relativePath, reason: 'Unsupported file type' });
+          continue;
+        }
+        const blob = await entry.async('blob');
+        const inferredType = blob.type && blob.type !== 'application/octet-stream'
+          ? blob.type
+          : guessMimeFromName(fileName);
+        const newFile = new File([blob], fileName, { type: inferredType, lastModified: zipFile.lastModified || Date.now() });
+        filesToQueue.push({ file: newFile, folderPathOverride: [...basePath, ...folderSegments] });
+      }
+      await ensureFolderStructure(Array.from(folderMap.values()));
+      const result = await enqueueFiles(filesToQueue);
+      const combinedSkips = [...skipList, ...((result && result.skipped) || [])];
+      setSkipDetails(combinedSkips.length ? combinedSkips : null);
+      if (combinedSkips.length) setShowAllSkipped(false);
+      if (result?.added) {
+        setLastBulkSummary({ count: result.added, path: basePath.slice() });
+        toast({ title: 'Files queued', description: `Added ${result.added} file(s) from archive.` });
+      } else {
+        setLastBulkSummary(null);
+        if (!combinedSkips.length) {
+          toast({ title: 'No files added', description: 'Archive did not contain supported files.', variant: 'destructive' });
+        }
+      }
+    } catch (error) {
+      toast({
+        title: 'ZIP processing failed',
+        description: error instanceof Error ? error.message : 'Unable to read archive.',
+        variant: 'destructive',
+      });
+    } finally {
+      if (zipInputRef.current) zipInputRef.current.value = '';
+    }
+  }, [enqueueFiles, ensureBulkPrereqs, folderPath, toast]);
+
+  const processFolderSelection = useCallback(async (files: FileList) => {
+    if (!ensureBulkPrereqs()) {
+      if (folderInputRef.current) folderInputRef.current.value = '';
+      return;
+    }
+    const basePath = folderPath.slice();
+    const entries = Array.from(files || []) as ExtendedFile[];
+    if (entries.length === 0) {
+      toast({
+        title: 'No files detected',
+        description: 'The selected folder does not contain any files.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    const prepared: { file: File; folderPathOverride?: string[] }[] = [];
+    const folderMap = new Map<string, string[]>();
+    const recordFolder = (segments: string[]) => {
+      const clean = segments.filter(Boolean);
+      if (!clean.length) return;
+      folderMap.set(clean.join('\u0000'), clean);
+    };
+    if (basePath.length) recordFolder(basePath);
+    const skipList: { path: string; reason: string }[] = [];
+    for (const entry of entries) {
+      const relative = entry.webkitRelativePath || entry.name;
+      if (!relative) continue;
+      const { folderSegments, fileName } = splitRelativePath(relative);
+      recordFolder([...basePath, ...folderSegments]);
+      if (shouldSkipPath(relative)) {
+        skipList.push({ path: relative, reason: 'System file skipped' });
+        continue;
+      }
+      if (!fileName) continue;
+      if (!isSupportedFile(fileName)) {
+        skipList.push({ path: relative, reason: 'Unsupported file type' });
+        continue;
+      }
+      const needsRetype = !entry.type || entry.type === 'application/octet-stream';
+      const typedFile = needsRetype
+        ? new File([entry], entry.name, { type: guessMimeFromName(entry.name), lastModified: entry.lastModified })
+        : entry;
+      prepared.push({ file: typedFile, folderPathOverride: [...basePath, ...folderSegments] });
+    }
+    await ensureFolderStructure(Array.from(folderMap.values()));
+    if (prepared.length === 0) {
+      setSkipDetails(skipList.length ? skipList : null);
+      if (skipList.length) setShowAllSkipped(false);
+      if (!skipList.length) {
+        toast({
+          title: 'No supported files',
+          description: 'This folder does not contain supported files.',
+          variant: 'destructive',
+        });
+      }
+      if (folderInputRef.current) folderInputRef.current.value = '';
+      return;
+    }
+    const result = await enqueueFiles(prepared);
+    const combinedSkips = [...skipList, ...((result && result.skipped) || [])];
+    setSkipDetails(combinedSkips.length ? combinedSkips : null);
+    if (combinedSkips.length) setShowAllSkipped(false);
+    if (result?.added) {
+      setLastBulkSummary({ count: result.added, path: basePath.slice() });
+      toast({ title: 'Files queued', description: `Added ${result.added} file(s) from folder.` });
+    } else {
+      setLastBulkSummary(null);
+    }
+    if (folderInputRef.current) folderInputRef.current.value = '';
+  }, [enqueueFiles, ensureBulkPrereqs, folderPath, toast]);
   
   const navigateToFolder = (segments?: string[] | null) => {
     const cleaned = Array.isArray(segments) ? segments.map((s) => String(s).trim()).filter(Boolean) : [];
@@ -88,36 +429,113 @@ function UploadContent() {
   }, [selectedDepartmentId, getCategoriesForDepartment, categories]);
   
   const saveAllReady = async () => {
-    const readyItems = queue
+    if (isSavingAll) return;
+    const readyEntries = queue
       .map((item, index) => ({ item, index }))
       .filter(({ item }) => item.status === 'ready' && !item.locked);
 
-    if (readyItems.length === 0) {
+    if (readyEntries.length === 0) {
       toast({ title: 'No items to save', description: 'All ready items are already saved or being processed.' });
       return;
     }
 
+    setIsSavingAll(true);
     let lastPath: string[] | null = null;
 
-    for (const { index } of readyItems) {
-      try {
-        const result = await onDone(index);
-        if (result) lastPath = result.path;
-      } catch (error) {
-        console.error('Error saving item:', error);
+    try {
+      for (const { index } of readyEntries) {
+        try {
+          const result = await onDone(index);
+          if (result) lastPath = result.path;
+        } catch (error) {
+          console.error('Error saving item:', error);
+        }
       }
-    }
 
-    if (lastPath) {
-      navigateToFolder(lastPath);
+      if (lastPath) {
+        setRecentSavePath(lastPath);
+        toast({
+          title: 'Documents saved',
+          description: `Saved ${readyEntries.length} document${readyEntries.length === 1 ? '' : 's'}. Use "View folder" when ready.`,
+        });
+      }
+    } finally {
+      setIsSavingAll(false);
     }
   };
 
   const handleSave = async (index: number) => {
     const result = await onDone(index);
     if (!result) return;
-    if (!result.hasMoreReady) {
-      navigateToFolder(result.path);
+    setRecentSavePath(result.path);
+    toast({
+      title: 'Document saved',
+      description: result.hasMoreReady
+        ? 'Continue reviewing remaining files or view the folder when ready.'
+        : 'All documents saved. Use "View folder" to open the destination.',
+    });
+  };
+
+  const handleReject = async (index: number) => {
+    const item = queue[index];
+    if (!item) return;
+    const orgId = getApiContext().orgId || '';
+    if (!orgId) {
+      toast({
+        title: 'No organization selected',
+        description: 'Select an organization before rejecting documents.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    setQueue((prev) =>
+      prev.map((q, i) =>
+        i === index ? { ...q, locked: true, note: 'Rejecting…', status: q.status === 'ready' ? 'saving' : q.status } : q
+      )
+    );
+    try {
+      if (item.docId) {
+        let rejected = false;
+        try {
+          await apiFetch(`/orgs/${orgId}/ingestion-jobs/${item.docId}/reject`, {
+            method: 'POST',
+            body: { reason: 'Discarded before saving' },
+          });
+          rejected = true;
+        } catch (err: any) {
+          if (err?.status !== 404 && err?.status !== 403) {
+            throw err;
+          }
+        }
+        if (!rejected) {
+          await apiFetch(`/orgs/${orgId}/documents/${item.docId}/draft`, { method: 'DELETE' });
+        }
+      }
+      setQueue((prev) => {
+        const next = prev.filter((_, i) => i !== index);
+        if (next.length === 0) {
+          setActiveIndex(null);
+        } else if (activeIndex !== null && index === activeIndex) {
+          setActiveIndex(Math.min(activeIndex, next.length - 1));
+        }
+        return next;
+      });
+      toast({
+        title: 'Rejected',
+        description: `${item.file.name} was discarded.`,
+      });
+    } catch (error: any) {
+      console.error('Reject failed:', error);
+      toast({
+        title: 'Reject failed',
+        description: error?.message || 'Unable to reject document. Please try again.',
+        variant: 'destructive',
+      });
+      setQueue((prev) =>
+        prev.map((q, i) =>
+          i === index ? { ...q, locked: false, status: 'ready', note: 'Reject failed. Try again.' } : q
+        )
+      );
     }
   };
   const removeQueueItem = async (index: number) => {
@@ -144,11 +562,7 @@ function UploadContent() {
   };
   const [docType, setDocType] = useState<Document['type']>('PDF');
   const [extracted, setExtracted] = useState<Extracted | null>(null);
-  const { documents, folders, createFolder, refresh } = useDocuments();
   const [preferredBaseId, setPreferredBaseId] = useState<string | null>(null);
-  const { hasRoleAtLeast, hasPermission, bootstrapData } = useAuth();
-  const [folderPath, setFolderPath] = useState<string[]>([]);
-  const searchParams = useSearchParams();
   
   // Check page permission with fallback to functional permission for backward compatibility
   const permissions = bootstrapData?.permissions || {};
@@ -192,74 +606,155 @@ function UploadContent() {
     }
   }, [searchParams]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const fromQueue = searchParams?.get('fromQueue');
+    if (fromQueue !== 'true') return;
+
+    const storedStateRaw = window.sessionStorage?.getItem('queueDocumentState');
+    if (!storedStateRaw) return;
+
+    window.sessionStorage.removeItem('queueDocumentState');
+    try {
+      const parsed: QueueDocumentPrefill = JSON.parse(storedStateRaw) || {};
+      const {
+        docId,
+        title,
+        filename,
+        sender,
+        receiver,
+        documentDate,
+        subject,
+        description,
+        category,
+        keywords,
+        tags,
+        folderPath: storedFolderPath,
+        storageKey,
+        mimeType,
+        extractedMetadata,
+        failureReason,
+      } = parsed;
+
+      const folderPathFromState = Array.isArray(storedFolderPath)
+        ? storedFolderPath.filter((segment) => typeof segment === 'string' && segment.trim().length > 0)
+        : [];
+      if (folderPathFromState.length) {
+        setFolderPath(folderPathFromState);
+      }
+
+      const placeholderName = filename || title || 'Document.pdf';
+      const placeholderMime = mimeType || 'application/pdf';
+      const placeholderFile = new File([], placeholderName, { type: placeholderMime });
+      const metadata = (extractedMetadata ||
+        {
+          title,
+          subject,
+          description,
+          category,
+          keywords,
+          tags,
+          sender,
+          receiver,
+          documentDate,
+        }) as Partial<ExtractDocumentMetadataOutput> & {
+        summary?: string;
+        senderOptions?: string[];
+        receiverOptions?: string[];
+      };
+
+      const keywordsString = Array.isArray(keywords)
+        ? keywords.join(', ')
+        : typeof keywords === 'string'
+        ? keywords
+        : '';
+      const tagsString = Array.isArray(tags)
+        ? tags.join(', ')
+        : typeof tags === 'string'
+        ? tags
+        : '';
+
+      const resolvedKeywords = Array.isArray(metadata.keywords)
+        ? metadata.keywords.map((kw) => String(kw)).join(', ')
+        : keywordsString;
+      const resolvedTags = Array.isArray(metadata.tags)
+        ? metadata.tags.map((tag) => String(tag)).join(', ')
+        : tagsString;
+      const senderOptions = Array.isArray(metadata.senderOptions) ? metadata.senderOptions : [];
+      const receiverOptions = Array.isArray(metadata.receiverOptions) ? metadata.receiverOptions : [];
+
+      const form: FormData = {
+        title: metadata.title || placeholderName,
+        filename: placeholderName,
+        sender: metadata.sender || '',
+        receiver: metadata.receiver || '',
+        documentDate: metadata.documentDate || '',
+        documentType: metadata.documentType || 'General Document',
+        folder: folderPathFromState.length ? folderPathFromState.join('/') : 'Root',
+        subject: metadata.subject || '',
+        description: metadata.description || metadata.summary || description || '',
+        category: metadata.category || category || 'General',
+        keywords: resolvedKeywords,
+        tags: resolvedTags,
+      };
+
+      const extractedMetadataPayload = metadata as ExtractDocumentMetadataOutput;
+
+      setQueue([
+        {
+          file: placeholderFile,
+          progress: 100,
+          status: 'ready',
+          note: failureReason,
+          hash: '',
+          extracted: { ocrText: '', metadata: extractedMetadataPayload },
+          form,
+          locked: false,
+          previewUrl: undefined,
+          rotation: 0,
+          linkMode: 'new',
+          baseId: undefined,
+          candidates: [],
+          senderOptions,
+          receiverOptions,
+          storageKey,
+          geminiFile: undefined,
+          docId,
+          ingestionJob: undefined,
+          folderPathOverride: folderPathFromState,
+          prefilledFromQueue: true,
+        },
+      ]);
+      setActiveIndex(0);
+    } catch (error) {
+      console.error('Failed to restore queued document state', error);
+    }
+  }, [searchParams]);
+
 
 
   const onSelect = async (list: FileList | File[]) => {
     const arr = Array.from(list);
     if (arr.length === 0) return;
 
-    // Check total queue limit (max 10 files)
-    const MAX_FILES = 10;
-    const currentQueueLength = queue.length;
-    const availableSlots = MAX_FILES - currentQueueLength;
-    
-    if (availableSlots <= 0) {
-      toast({
-        title: 'Upload limit reached',
-        description: `Maximum ${MAX_FILES} files can be uploaded at once. Please process current files first.`,
-        variant: 'destructive'
-      });
-      return;
+    const zipCandidates = arr.filter(isZipFile);
+    for (const zip of zipCandidates) {
+      await processZipFile(zip);
     }
 
-    // Filter out files that exceed size limit (50MB)
-    const maxSizeBytes = 50 * 1024 * 1024; // 50MB in bytes
-    const validFiles = arr.filter(f => {
-      if (f.size > maxSizeBytes) {
-        toast({
-          title: 'File too large',
-          description: `${f.name} is ${(f.size / 1024 / 1024).toFixed(1)}MB. Files must be smaller than 50MB.`,
-          variant: 'destructive'
-        });
-        return false;
-      }
-      return true;
-    });
+    const normalFiles = arr.filter((file) => !isZipFile(file));
+    if (normalFiles.length === 0) return;
 
-    // Limit new files to available slots
-    const limitedArr = validFiles.slice(0, availableSlots);
-    if (arr.length > availableSlots) {
-      toast({
-        title: 'Some files skipped',
-        description: `Only ${availableSlots} files added. Maximum ${MAX_FILES} files allowed per upload session.`,
-        variant: 'destructive'
-      });
+    const result = await enqueueFiles(normalFiles.map((file) => ({ file })));
+    if (result?.skipped?.length) {
+      setSkipDetails(result.skipped);
+      setShowAllSkipped(false);
+    } else if (!zipCandidates.length) {
+      setSkipDetails(null);
     }
-
-    // Push to queue with initial state; compute hashes to dedupe
-    const entries = await Promise.all(limitedArr.map(async (f) => ({
-      file: f,
-      progress: 0,
-      status: 'idle' as const,
-      hash: await computeContentHash(f),
-      previewUrl: URL.createObjectURL(f),
-      rotation: 0,
-      linkMode: 'new' as const,
-    })));
-    
-    // Only dedupe within queue; allow matching existing docs (we will suggest linking as version instead)
-    const queueHashes = new Set(queue.map(q => q.hash).filter(Boolean));
-    const filtered = entries.filter(e => {
-      if (!e.hash) return true;
-      if (queueHashes.has(e.hash)) {
-        console.log('Skipping duplicate in queue:', e.file.name, 'hash:', e.hash);
-        return false;
-      }
-      return true;
-    });
-    // Ensure all items have the correct types
-    const properlyTyped = filtered;
-    setQueue(prev => [...prev, ...properlyTyped]);
+    if (result?.added) {
+      setLastBulkSummary({ count: result.added, path: folderPath.slice() });
+    }
   };
 
   const onBrowse = () => {
@@ -272,8 +767,38 @@ function UploadContent() {
 
   const onDrop: React.DragEventHandler<HTMLDivElement> = async (e) => {
     e.preventDefault();
-    const list = e.dataTransfer.files;
-    if (list && list.length) onSelect(list);
+    const { items, files } = e.dataTransfer;
+    const extended = Array.from(files || []) as ExtendedFile[];
+
+    if (!extended.length) return;
+
+    const hasRelativePaths = extended.some((file) => Boolean((file.webkitRelativePath || '').includes('/')));
+    if (hasRelativePaths) {
+      await processFolderSelection(files);
+      return;
+    }
+
+    const zipFiles = extended.filter(isZipFile);
+    if (zipFiles.length > 0) {
+      for (const zip of zipFiles) {
+        await processZipFile(zip);
+      }
+      const remaining = extended.filter((file) => !isZipFile(file));
+      if (remaining.length === 0) return;
+      await onSelect(remaining);
+      return;
+    }
+
+    if (items && items.length) {
+      const dirEntries = Array.from(items).map((item) => (item as any).webkitGetAsEntry?.()).filter(Boolean);
+      const hasDirectoryEntry = dirEntries.some((entry: FileSystemEntry) => entry.isDirectory);
+      if (hasDirectoryEntry) {
+        await processFolderSelection(files);
+        return;
+      }
+    }
+
+    await onSelect(files);
   };
 
   type AnalyzeSuccessResponse = {
@@ -330,6 +855,18 @@ function UploadContent() {
     }
   };
 
+  const handleZipInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      void processZipFile(file);
+    }
+  };
+  const handleFolderInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const list = event.target.files;
+    if (list && list.length) {
+      void processFolderSelection(list);
+    }
+  };
   const processItem = async (index: number) => {
     const item = queue[index];
     if (!item || item.locked || item.status === 'processing' || item.status === 'uploading' || item.status === 'success' || item.status === 'ready') return;
@@ -670,8 +1207,11 @@ function UploadContent() {
     }
 
     const currentFolderPath = folderPath.slice();
+    const targetFolderPath = item.folderPathOverride && item.folderPathOverride.length > 0
+      ? item.folderPathOverride
+      : currentFolderPath;
 
-    setQueue(prev => prev.map((q, i) => i === index ? { ...q, locked: true, status: 'saving' } : q));
+    setQueue(prev => prev.map((q, i) => i === index ? { ...q, locked: true, status: 'saving', note: 'Saving…' } : q));
 
     try {
       const summary = (item.extracted.metadata.summary || '').trim();
@@ -706,11 +1246,11 @@ function UploadContent() {
         return null;
       }
 
-      console.log('Creating document with folderPath:', currentFolderPath, 'Type:', typeof currentFolderPath, 'Is Array:', Array.isArray(currentFolderPath));
-      console.log('🔍 Creating folder structure for path:', currentFolderPath);
+      console.log('Creating document with folderPath:', targetFolderPath, 'Type:', typeof targetFolderPath, 'Is Array:', Array.isArray(targetFolderPath));
+      console.log('🔍 Creating folder structure for path:', targetFolderPath);
       try {
-        for (let i = 0; i < currentFolderPath.length; i++) {
-          const slice = currentFolderPath.slice(0, i + 1);
+        for (let i = 0; i < targetFolderPath.length; i++) {
+          const slice = targetFolderPath.slice(0, i + 1);
           const parentPath = slice.slice(0, -1);
           const folderName = slice[slice.length - 1];
 
@@ -755,7 +1295,7 @@ function UploadContent() {
         title: docTitle,
         filename: item.form.filename || item.file.name,
         type: docType,
-        folderPath: [...currentFolderPath],
+        folderPath: [...targetFolderPath],
         subject: docSubject,
         description: docDescription,
         category: item.form.category || item.extracted.metadata.category,
@@ -772,7 +1312,7 @@ function UploadContent() {
         title: versionDraft.title,
         filename: versionDraft.filename,
         type: versionDraft.type,
-        folder_path: currentFolderPath,
+        folder_path: targetFolderPath,
         subject: versionDraft.subject,
         description: versionDraft.description,
         category: versionDraft.category,
@@ -816,7 +1356,7 @@ function UploadContent() {
 
       let nextQueueSnapshot: typeof queue = [];
       setQueue(prev => {
-        nextQueueSnapshot = prev.map((q, i) => i === index ? { ...q, status: 'success', locked: true } : q);
+        nextQueueSnapshot = prev.map((q, i) => i === index ? { ...q, status: 'success', locked: true, note: 'Saved' } : q);
         return nextQueueSnapshot;
       });
       toast({ title: 'Saved', description: `${item.file.name} stored.` });
@@ -830,7 +1370,7 @@ function UploadContent() {
       const remainingReady = nextQueueSnapshot.some(q => q.status === 'ready' && !q.locked);
       const effectivePath = Array.isArray(savedDoc?.folderPath) && savedDoc.folderPath.length > 0
         ? savedDoc.folderPath.filter(Boolean)
-        : currentFolderPath.filter(Boolean);
+        : targetFolderPath.filter(Boolean);
 
       return { path: effectivePath, hasMoreReady: remainingReady };
     } catch (error) {
@@ -952,8 +1492,9 @@ function UploadContent() {
                 </div>
                 <div id="upload-help" className="mt-4 text-xs text-muted-foreground text-center space-y-1">
                   <div>We'll automatically extract metadata and generate a summary for you</div>
+                  <div>Need nested folders? Drop a .zip or use the buttons above to upload a folder.</div>
                 </div>
-                <div className="mt-8 flex items-center justify-center gap-3">
+                <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
                   <input
                     ref={inputRef}
                     type="file"
@@ -961,16 +1502,136 @@ function UploadContent() {
                     accept=".pdf,.txt,.md,.jpg,.jpeg,.png,application/pdf,text/plain,text/markdown,image/jpeg,image/png"
                     className="hidden"
                     onChange={(e) => e.target.files && onSelect(e.target.files)}
+                    onClick={(e) => e.stopPropagation()}
                   />
                   <Button 
                     onClick={(e) => { e.stopPropagation(); onBrowse(); }} 
                     className="gap-2 hover-premium focus-premium px-6 py-2"
-                    size="lg"
+                    size="sm"
                   >
                     <UploadCloud className="h-4 w-4" /> 
-                    Browse files
+                    Browse Files
+                  </Button>
+                  <input
+                    ref={zipInputRef}
+                    type="file"
+                    accept=".zip,application/zip"
+                    className="hidden"
+                    onChange={handleZipInputChange}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    onClick={(e) => { e.stopPropagation(); zipInputRef.current?.click(); }}
+                  >
+                    <UploadCloud className="h-4 w-4" />
+                    Upload ZIP
+                  </Button>
+                  <input
+                    ref={(el) => {
+                      folderInputRef.current = el;
+                      if (el) {
+                        el.setAttribute('webkitdirectory', 'true');
+                        el.setAttribute('directory', 'true');
+                        el.multiple = true;
+                      }
+                    }}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={handleFolderInputChange}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    onClick={(e) => { e.stopPropagation(); folderInputRef.current?.click(); }}
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                    Upload Folder
                   </Button>
                 </div>
+                <p className="mt-4 text-xs text-muted-foreground">
+                  Supports up to {BULK_UPLOAD_LIMIT} files per bulk upload (PDF, TXT/MD, JPG, PNG). Individual files must be under {BULK_UPLOAD_MAX_FILE_MB}MB.
+                </p>
+                {(lastBulkSummary || skipDetails) && (
+                  <div className="mt-4 w-full rounded-md border bg-muted/30 p-3 text-xs space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="font-medium text-foreground">
+                        {lastBulkSummary
+                          ? `Queued ${lastBulkSummary.count} file${lastBulkSummary.count === 1 ? '' : 's'} to /${lastBulkSummary.path.length ? lastBulkSummary.path.join('/') : 'Root'}`
+                          : 'Upload summary'}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {lastBulkSummary && (
+                          <Button size="sm" variant="outline" onClick={() => navigateToFolder(lastBulkSummary.path)}>
+                            View folder
+                          </Button>
+                        )}
+                        <Button size="sm" variant="ghost" onClick={handleClearBulkSummary}>
+                          Dismiss
+                        </Button>
+                      </div>
+                    </div>
+                    {skipDetails && skipDetails.length > 0 && (
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <div className="font-medium text-destructive">Skipped {skipDetails.length} file{skipDetails.length === 1 ? '' : 's'}</div>
+                          {skipDetails.length > 5 && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setShowAllSkipped((prev) => !prev)}
+                            >
+                              {showAllSkipped ? 'Show less' : 'Show all'}
+                            </Button>
+                          )}
+                        </div>
+                        <ul className="list-disc pl-5 space-y-1 text-destructive/90">
+                          {(showAllSkipped ? skipDetails : skipDetails.slice(0, 5)).map((item, idx) => (
+                            <li key={`${item.path}-${idx}`}>{item.path}: {item.reason}</li>
+                          ))}
+                          {!showAllSkipped && skipDetails.length > 5 && (
+                            <li className="text-muted-foreground">…and {skipDetails.length - 5} more</li>
+                          )}
+                        </ul>
+                      </div>
+                    )}
+                    {!skipDetails && lastBulkSummary && (
+                      <div className="text-muted-foreground">
+                        Review each file below to add metadata before saving.
+                      </div>
+                    )}
+                  </div>
+                )}
+                {recentSavePath && (
+                  <div className="mt-4 w-full rounded-md border bg-muted/30 p-3 text-xs flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-foreground">
+                      Recently saved to{' '}
+                      <span className="font-medium">
+                        /{recentSavePath.length ? recentSavePath.join('/') : 'Root'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          navigateToFolder(recentSavePath);
+                          setRecentSavePath(null);
+                        }}
+                      >
+                        View folder
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setRecentSavePath(null)}>
+                        Dismiss
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -1051,18 +1712,48 @@ function UploadContent() {
                   (() => {
                     const item = queue[activeIndex]!;
                     const i = activeIndex!;
+                    const targetFolderPath = item.folderPathOverride && item.folderPathOverride.length > 0
+                      ? item.folderPathOverride
+                      : folderPath;
+                    const shouldUseRemotePreview = Boolean(item.docId) && (!item.previewUrl || item.prefilledFromQueue);
                     return (
                       <div className={`rounded-lg border p-6 ring-1 ring-primary`}>
                         {/* Header with file info and actions */}
                         <div className="flex items-center justify-between gap-3 mb-6">
                           <div className="min-w-0">
                             <div className="truncate font-medium text-lg" title={item.file.name}>{item.file.name}</div>
+                            <div className="text-xs text-muted-foreground truncate">/{targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}</div>
                             <div className="text-sm text-muted-foreground capitalize">{item.status}</div>
                           </div>
-                          <div className="w-40"><Progress value={item.progress} /></div>
+                          <div className="w-40 flex flex-col items-end gap-1">
+                            <Progress value={item.progress} />
+                            {item.note && (
+                              <span className="text-xs text-muted-foreground text-right">{item.note}</span>
+                            )}
+                          </div>
                           <div className="flex items-center gap-2">
                             {item.status === 'idle' && !isProcessingAll && <Button size="sm" onClick={() => processItem(i)} disabled={!!item.locked}>Process</Button>}
-                            {item.status === 'ready' && <Button size="sm" onClick={() => handleSave(i)} disabled={item.locked}>Save</Button>}
+                            {item.status === 'ready' && (
+                              <>
+                                <Button size="sm" onClick={() => handleSave(i)} disabled={item.locked}>
+                                  Save
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => handleReject(i)}
+                                  disabled={item.locked}
+                                >
+                                  Reject
+                                </Button>
+                              </>
+                            )}
+                            {item.status === 'saving' && (
+                              <Button size="sm" variant="outline" disabled className="gap-2">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                {item.note || 'Saving…'}
+                              </Button>
+                            )}
                             {(item.status === 'success' || item.status === 'error') && <Button size="sm" variant="outline" onClick={() => void removeQueueItem(i)}>Remove</Button>}
                           </div>
                         </div>
@@ -1233,11 +1924,19 @@ function UploadContent() {
                           <div className="space-y-4">
                             <div>
                               <h3 className="text-sm font-medium mb-3">Document Preview</h3>
-                              <UploadFilePreview file={item.file} previewUrl={item.previewUrl} height="75vh" />
+                              {shouldUseRemotePreview ? (
+                                <FilePreview
+                                  documentId={item.docId as string}
+                                  mimeType={item.file.type || 'application/pdf'}
+                                  extractedContent={item.extracted?.ocrText}
+                                />
+                              ) : (
+                                <UploadFilePreview file={item.file} previewUrl={item.previewUrl} height="75vh" />
+                              )}
                             </div>
                             
                             {/* Image rotation controls */}
-                            {!item.file.name.toLowerCase().endsWith('.pdf') && (
+                            {!shouldUseRemotePreview && !item.file.name.toLowerCase().endsWith('.pdf') && (
                               <div className="flex items-center gap-2">
                                 <Button size="sm" variant="outline" onClick={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, rotation: ((q.rotation || 0) - 90 + 360) % 360 } : q))}>Rotate Left</Button>
                                 <Button size="sm" variant="outline" onClick={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, rotation: ((q.rotation || 0) + 90) % 360 } : q))}>Rotate Right</Button>
@@ -1256,10 +1955,35 @@ function UploadContent() {
                           <div className="truncate font-medium" title={item.file.name}>{item.file.name}</div>
                           <div className="text-xs text-muted-foreground capitalize">{item.status}</div>
                         </div>
-                        <div className="w-40"><Progress value={item.progress} /></div>
+                        <div className="w-40 flex flex-col items-end gap-1">
+                          <Progress value={item.progress} />
+                          {item.note && (
+                            <span className="text-xs text-muted-foreground text-right">{item.note}</span>
+                          )}
+                        </div>
                         <div className="flex items-center gap-2">
                           {item.status === 'idle' && !isProcessingAll && <Button size="sm" onClick={() => processItem(i)} disabled={!!item.locked}>Process</Button>}
-                          {item.status === 'ready' && <Button size="sm" onClick={() => handleSave(i)} disabled={item.locked}>Save</Button>}
+                          {item.status === 'ready' && (
+                            <>
+                              <Button size="sm" onClick={() => handleSave(i)} disabled={item.locked}>
+                                Save
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => handleReject(i)}
+                                disabled={item.locked}
+                              >
+                                Reject
+                              </Button>
+                            </>
+                          )}
+                          {item.status === 'saving' && (
+                            <Button size="sm" variant="outline" disabled className="gap-2">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              {item.note || 'Saving…'}
+                            </Button>
+                          )}
                           {(item.status === 'success' || item.status === 'error') && <Button size="sm" variant="outline" onClick={() => setQueue(prev => prev.filter((_, idx) => idx !== i))}>Remove</Button>}
                         </div>
                       </div>
@@ -1460,10 +2184,28 @@ function UploadContent() {
                       } finally {
                         setIsProcessingAll(false);
                       }
-                    }}>Process All</Button>
+                    }} disabled={isProcessingAll} className="gap-2">
+                      {isProcessingAll ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Processing…
+                        </>
+                      ) : (
+                        'Process All'
+                      )}
+                    </Button>
                     )}
                     {readyCount > 0 && (
-                      <Button onClick={saveAllReady}>Save All & Go to Documents</Button>
+                      <Button onClick={saveAllReady} disabled={isSavingAll} className="gap-2">
+                        {isSavingAll ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Saving all…
+                          </>
+                        ) : (
+                          'Save All'
+                        )}
+                      </Button>
                     )}
                   </div>
                 </div>

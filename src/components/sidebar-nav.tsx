@@ -2,7 +2,7 @@
 
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { LayoutDashboard, Folder, CloudUpload, Activity, Trash2, Wrench, PlusSquare } from 'lucide-react';
+import { LayoutDashboard, Folder, CloudUpload, Activity, Trash2, Wrench, PlusSquare, ListChecks } from 'lucide-react';
 import {
   SidebarMenu,
   SidebarMenuItem,
@@ -24,6 +24,7 @@ const links = [
 ];
 
 const adminLinks = [
+  { href: '/queue', label: 'Queue', Icon: ListChecks },
   { href: '/recycle-bin', label: 'Recycle Bin', Icon: Trash2 },
   { href: '/chat', label: 'Chat Bot', Icon: Wrench },
 ];
@@ -40,6 +41,7 @@ export default function SidebarNav() {
   const canUpload = permissions['pages.upload'] !== false; // Default to true if not explicitly false
   const canViewDocuments = permissions['pages.documents'] !== false;
   const canViewActivity = permissions['pages.activity'] !== false;
+  const canViewQueue = permissions['pages.queue'] !== false; // Default to true
   const canViewRecycleBin = permissions['pages.recycle_bin'] === true;
   const canChat = permissions['pages.chat'] !== false; // Default to true
 
@@ -124,7 +126,8 @@ export default function SidebarNav() {
                   // Team leads should not see audit
                   if (!isAdmin && href === '/audit') return false;
                   // Filter based on page permissions
-                  if (href === '/recycle-bin' && !canViewRecycleBin) return false;
+                  if (href === '/queue' && !canViewQueue) return false;
+                  if (href === '/recycle-bin' && !canViewRecycleBin) return false;  
                   if (href === '/chat' && !canChat) return false;
                   return true;
                 }).map(({ href, label, Icon }) => (

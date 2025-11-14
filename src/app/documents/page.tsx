@@ -18,7 +18,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
-import { formatAppDateTime, parseFlexibleDate } from '@/lib/utils';
+import { formatAppDateTime } from '@/lib/utils';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDepartments } from '@/hooks/use-departments';
@@ -323,7 +323,7 @@ function DocumentsPageContent() {
     return (d.type || 'doc').toLowerCase();
   };
 
-  const parseDocDate = (d: StoredDocument): Date | null => parseFlexibleDate(d.documentDate) || d.uploadedAt || null;
+  const parseDocDate = (d: StoredDocument): Date | null => d.uploadedAt || null;
 
   const formatNiceDate = (d: StoredDocument) => {
     const dt = parseDocDate(d);
@@ -808,9 +808,10 @@ function DocumentsPageContent() {
                   <tr>
                     <th className="p-3 w-10 text-center"><input type="checkbox" checked={selectAll} onChange={toggleAll} aria-label="Select all" /></th>
                     <th className="text-left p-3">Name</th>
-                        <th className="text-left p-3">Type</th>
-                        <th className="text-left p-3">Sender</th>
-                        <th className="text-left p-3">Team</th>
+                    <th className="text-left p-3">Type</th>
+                    <th className="text-left p-3">Category</th>
+                    <th className="text-left p-3">Sender</th>
+                    <th className="text-left p-3">Team</th>
                     <th className="text-left p-3">Date</th>
                     <th className="p-3"></th>
                   </tr>
@@ -838,6 +839,7 @@ function DocumentsPageContent() {
                       <td className="p-3 lowercase">
                         <span className="rounded-md border px-2 py-0.5 text-[10px] uppercase tracking-wide">FOLDER</span>
                       </td>
+                      <td className="p-3">—</td>
                       <td className="p-3">—</td>
                       <td className="p-3">
                         {hasRoleAtLeast('teamLead') ? (
@@ -904,6 +906,7 @@ function DocumentsPageContent() {
                       <td className="p-3 lowercase">
                         <span className="rounded-md border px-2 py-0.5 text-[10px] uppercase tracking-wide">{getExt(d)}</span>
                       </td>
+                      <td className="p-3">{d.category || '—'}</td>
                       <td className="p-3">{d.sender || '—'}</td>
                       <td className="p-3">
                         {hasRoleAtLeast('systemAdmin') ? (
@@ -940,7 +943,7 @@ function DocumentsPageContent() {
                     </tr>
                   ))}
                   {currentDocs.length === 0 && (
-                    <tr><td className="p-3 text-sm text-muted-foreground" colSpan={6}>No documents</td></tr>
+                    <tr><td className="p-3 text-sm text-muted-foreground" colSpan={8}>No documents</td></tr>
                   )}
                 </tbody>
               </table>

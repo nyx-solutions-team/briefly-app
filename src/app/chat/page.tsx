@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/layout/app-layout';
 import { useAuth } from '@/hooks/use-auth';
 import { AccessDenied } from '@/components/access-denied';
@@ -41,8 +41,26 @@ import { type ChatContext } from '@/components/chat-context-selector';
 import { createFolderChatEndpoint } from '@/lib/folder-utils';
 import BrieflyChatBox from '@/components/ai-elements/briefly-chat-box';
 import { useDocuments } from '@/hooks/use-documents';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
 
 // Helper functions to improve citation display
+function getHostname(url?: string | null): string | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname.replace(/^www\./, '');
+  } catch {
+    return undefined;
+  }
+}
+
 function getCitationDisplayTitle(citation: any): string {
   const rawTitle = citation?.title || citation?.name || citation?.docName;
   if (rawTitle) {
@@ -50,6 +68,11 @@ function getCitationDisplayTitle(citation: any): string {
     if (cleaned.trim().length > 0 && cleaned !== `Document ${citation?.docId?.slice(0, 8)}...`) {
       return cleaned;
     }
+  }
+
+  const hostname = getHostname(citation?.url);
+  if (hostname) {
+    return hostname;
   }
 
   const fields = citation?.fields || {};
@@ -65,6 +88,10 @@ function getCitationDisplayDescription(citation: any): string {
     return snippet.length > 160 ? `${snippet.slice(0, 157)}...` : snippet;
   }
 
+  if (citation?.url) {
+    return citation.url;
+  }
+
   const fields = citation?.fields || {};
   const usefulFields = ['description', 'excerpt', 'sender', 'receiver', 'date', 'category'];
   const parts: string[] = [];
@@ -77,9 +104,158 @@ function getCitationDisplayDescription(citation: any): string {
   return parts.slice(0, 2).join(' • ') || 'Click to view document details';
 }
 
+function dedupeCitations(citations: CitationMeta[] = []): CitationMeta[] {
+  const seen = new Set<string>();
+  const result: CitationMeta[] = [];
+
+  for (const citation of citations) {
+    if (!citation) continue;
+    const key = citation.docId
+      ? `doc:${citation.docId}`
+      : citation.url
+      ? `url:${citation.url}`
+      : `text:${citation.docName || citation.title || citation.snippet || JSON.stringify(citation)}`;
+
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(citation);
+  }
+
+  return result;
+}
+
+type ProcessingStep = {
+  step?: string;
+  title?: string;
+  status?: string;
+  description?: string;
+  task?: string;
+  category?: string;
+};
+
+type ToolUsage = {
+  name?: string;
+  status?: string;
+  description?: string;
+};
+
+function dedupeSteps(steps: ProcessingStep[] = []): ProcessingStep[] {
+  const seen = new Set<string>();
+  const result: ProcessingStep[] = [];
+
+  steps.forEach((step, idx) => {
+    if (!step) return;
+    const key = (step.step || step.title || `step-${idx}`).toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    result.push({
+      status: step.status || 'completed',
+      ...step
+    });
+  });
+
+  return result;
+}
+
+function dedupeTools(tools: ToolUsage[] = []): ToolUsage[] {
+  const seen = new Set<string>();
+  const result: ToolUsage[] = [];
+
+  tools.forEach((tool, idx) => {
+    if (!tool) return;
+    const key = (tool.name || `tool-${idx}`).toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    result.push({
+      status: tool.status || 'completed',
+      ...tool
+    });
+  });
+
+  return result;
+}
+
+function buildActivityInsights(
+  message: Message,
+  streamingSteps: ProcessingStep[],
+  streamingTools: ToolUsage[]
+) {
+  if (message.isStreaming) {
+    return {
+      steps: dedupeSteps(streamingSteps),
+      tools: dedupeTools(streamingTools)
+    };
+  }
+
+  const citations = dedupeCitations(message.citations || []);
+  const hasDocs = citations.some(cit => cit.docId);
+  const hasWeb = citations.some(cit => cit.sourceType === 'web' || (!cit.docId && !!cit.url));
+
+  const backendSteps = dedupeSteps((message as any).processingSteps || []);
+  const backendTools = dedupeTools((message as any).tools || []);
+
+  const steps: ProcessingStep[] = [];
+  const tools: ToolUsage[] = [];
+
+  const addStep = (step: ProcessingStep) => {
+    const key = (step.step || step.title || '').toLowerCase();
+    if (!key) return;
+    if (steps.some(existing => (existing.step || existing.title || '').toLowerCase() === key)) return;
+    steps.push(step);
+  };
+
+  const addTool = (tool: ToolUsage) => {
+    const key = (tool.name || '').toLowerCase();
+    if (!key) return;
+    if (tools.some(existing => (existing.name || '').toLowerCase() === key)) return;
+    tools.push(tool);
+  };
+
+  if (hasDocs || hasWeb) {
+    backendSteps.forEach(addStep);
+    backendTools.forEach(addTool);
+  }
+
+  if (hasDocs) {
+    addStep({
+      step: 'document_analysis',
+      title: 'Document analysis',
+      description: 'Read and summarized relevant internal documents',
+      status: 'completed'
+    });
+    addTool({
+      name: 'document_retriever',
+      status: 'completed',
+      description: 'Vector search across organization documents'
+    });
+    addTool({
+      name: 'document_analyzer',
+      status: 'completed',
+      description: 'Summarized and reasoned over retrieved docs'
+    });
+  }
+
+  if (hasWeb) {
+    addStep({
+      step: 'web_search',
+      title: 'Web search',
+      description: 'Pulled current articles from trusted news sources',
+      status: 'completed'
+    });
+    addTool({
+      name: 'web_search',
+      status: 'completed',
+      description: 'DuckDuckGo recent-news lookup'
+    });
+  }
+
+  return { steps, tools };
+}
+
 // Function to render assistant content with inline citation components
 function processContentWithCitations(content: string, citations: any[] = []) {
   if (!content || typeof content !== 'string') return content;
+  const normalizedCitations = dedupeCitations(citations);
 
   const collapseSingleTrailingNewline = (text: string) => {
     if (/\n\s*$/.test(text) && !/\n\s*\n\s*$/.test(text)) {
@@ -90,7 +266,7 @@ function processContentWithCitations(content: string, citations: any[] = []) {
 
   // Create a map of citation numbers to citation objects (1-based indexing)
   const citationMap = new Map<number, any>();
-  citations.forEach((citation, index) => {
+  normalizedCitations.forEach((citation, index) => {
     citationMap.set(index + 1, citation);
   });
 
@@ -111,13 +287,13 @@ function processContentWithCitations(content: string, citations: any[] = []) {
       .map(num => citationMap.get(num))
       .filter(Boolean);
 
-    if (matchedCitations.length > 0) {
-      // Create URLs and titles for the citations
-      const sourceData = matchedCitations.map((cit: any) => ({
-        url: cit.docId ? `/documents/${cit.docId}` : '',
-        title: getCitationDisplayTitle(cit),
-        citation: cit
-      })).filter(item => item.url);
+      if (matchedCitations.length > 0) {
+        // Create URLs and titles for the citations
+        const sourceData = matchedCitations.map((cit: any) => ({
+          url: cit.docId ? `/documents/${cit.docId}` : (cit.url || ''),
+          title: getCitationDisplayTitle(cit),
+          citation: cit
+        })).filter(item => item.url);
 
       if (sourceData.length > 0) {
         const sourceUrls = sourceData.map(item => item.url);
@@ -144,10 +320,10 @@ function processContentWithCitations(content: string, citations: any[] = []) {
                     </InlineCitationCarouselHeader>
                     <InlineCitationCarouselContent>
                       {matchedCitations.map((cit: any, idx: number) => (
-                        <InlineCitationCarouselItem key={`${cit.docId}-${idx}`}>
+                        <InlineCitationCarouselItem key={`${cit.docId || cit.url || 'citation'}-${idx}`}>
                           <InlineCitationSource
                             title={getCitationDisplayTitle(cit)}
-                            url={cit.docId ? `/documents/${cit.docId}` : undefined}
+                            url={cit.docId ? `/documents/${cit.docId}` : cit.url}
                             description={getCitationDisplayDescription(cit)}
                           />
                         </InlineCitationCarouselItem>
@@ -404,22 +580,37 @@ function getThemeColors(accentColor: string) {
   return colorMap[accentColor] || colorMap.default;
 }
 
+interface CitationMeta {
+  docId?: string | null;
+  docName?: string;
+  title?: string;
+  snippet?: string;
+  url?: string;
+  sourceType?: 'document' | 'web' | string;
+  fields?: Record<string, any>;
+  folderPath?: string[];
+}
+
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  citations?: Array<{ docId: string; docName?: string }>;
+  citations?: CitationMeta[];
   isStreaming?: boolean;
 }
 
+const INITIAL_ASSISTANT_TEXT = "Hello! I'm your Briefly Agent with enhanced AI-powered capabilities! 🚀";
+
+const buildInitialMessages = (): Message[] => [
+  {
+    id: `initial_${Date.now()}`,
+    role: 'assistant',
+    content: INITIAL_ASSISTANT_TEXT
+  }
+];
+
 export default function TestAgentEnhancedPage() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 'initial_msg',
-      role: 'assistant',
-      content: "Hello! I'm your Briefly Agent with enhanced AI-powered capabilities! 🚀"
-    }
-  ]);
+  const [messages, setMessages] = useState<Message[]>(() => buildInitialMessages());
   
   const [currentTaskSteps, setCurrentTaskSteps] = useState<any[]>([]);
   const [currentTools, setCurrentTools] = useState<any[]>([]);
@@ -438,12 +629,59 @@ export default function TestAgentEnhancedPage() {
   const [inputValue, setInputValue] = useState('');
   const [chatContext, setChatContext] = useState<ChatContext>({ type: 'org' });
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [isWebSearchDialogOpen, setIsWebSearchDialogOpen] = useState(false);
+  const [pendingWebSearchToggle, setPendingWebSearchToggle] = useState<boolean | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const { settings } = useSettings();
   const themeColors = getThemeColors(settings.accent_color);
   const hasUserMessage = messages.some(m => m.role === 'user');
   const { documents: allDocs, folders: allFolders, getFolderMetadata } = useDocuments();
   const { bootstrapData } = useAuth();
+
+  const resetChatSession = useCallback(() => {
+    setMessages(buildInitialMessages());
+    setCurrentTaskSteps([]);
+    setCurrentTools([]);
+    taskStepsRef.current = [];
+    toolsRef.current = [];
+    setLastListDocIds([]);
+    setIsLoading(false);
+    setInputValue('');
+    const nextSessionId =
+      typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function'
+        ? (crypto as any).randomUUID()
+        : Math.random().toString(36).slice(2);
+    setSessionId(nextSessionId);
+  }, []);
+
+  const handleWebSearchChange = useCallback((nextValue: boolean) => {
+    if (nextValue === webSearchEnabled) return;
+    if (nextValue) {
+      if (!hasUserMessage) {
+        resetChatSession();
+        setWebSearchEnabled(true);
+        return;
+      }
+      setPendingWebSearchToggle(true);
+      setIsWebSearchDialogOpen(true);
+    } else {
+      setWebSearchEnabled(false);
+    }
+  }, [hasUserMessage, resetChatSession, webSearchEnabled]);
+
+  const confirmWebSearchEnable = useCallback(() => {
+    if (pendingWebSearchToggle) {
+      resetChatSession();
+      setWebSearchEnabled(true);
+    }
+    setPendingWebSearchToggle(null);
+    setIsWebSearchDialogOpen(false);
+  }, [pendingWebSearchToggle, resetChatSession]);
+
+  const cancelWebSearchEnable = useCallback(() => {
+    setPendingWebSearchToggle(null);
+    setIsWebSearchDialogOpen(false);
+  }, []);
   
   // Check page permission with fallback for backward compatibility
   const permissions = bootstrapData?.permissions || {};
@@ -662,31 +900,46 @@ export default function TestAgentEnhancedPage() {
               ));
             } else if (data.type === 'complete') {
               const finalContent = data.full_content || streamingContent;
-              const citations = data.citations || [];
+              const citations = dedupeCitations(data.citations || []);
+              const baseSteps = Array.isArray(data.processingSteps) && data.processingSteps.length > 0
+                ? data.processingSteps
+                : taskStepsRef.current;
+              const baseTools = Array.isArray(data.tools) && data.tools.length > 0
+                ? data.tools
+                : toolsRef.current;
               
-              setMessages(prev => prev.map(m => 
-                m.id === assistantId 
-                  ? { 
-                      ...m, 
-                      content: finalContent,
-                      citations: citations,
-                      isStreaming: false,
-                      tools: (Array.isArray(data.tools) && data.tools.length > 0) ? data.tools : toolsRef.current,
-                      reasoning: data.reasoning || data.agentInsights?.join('\n'),
-                      agent: data.agent || 'Smart Assistant',
-                      processingSteps: (Array.isArray(data.processingSteps) && data.processingSteps.length > 0)
-                        ? data.processingSteps
-                        : taskStepsRef.current
-                    }
-                  : m
-              ));
+              setMessages(prev => prev.map(m => {
+                if (m.id !== assistantId) return m;
+                
+                const derivedInsights = buildActivityInsights(
+                  { ...m, citations, isStreaming: false },
+                  baseSteps,
+                  baseTools
+                );
+                
+                return { 
+                  ...m, 
+                  content: finalContent,
+                  citations: citations,
+                  isStreaming: false,
+                  tools: derivedInsights.tools,
+                  reasoning: data.reasoning || data.agentInsights?.join('\n'),
+                  agent: data.agent || 'Smart Assistant',
+                  processingSteps: derivedInsights.steps
+                };
+              }));
               
               // Keep the processing steps and tools visible in the message
               // Don't clear them - they should remain visible
               
               // Update lastListDocIds for follow-up questions
               if (citations.length > 0) {
-                setLastListDocIds(citations.map((c: any) => c.docId).slice(0, 5));
+                const docOnlyIds = citations
+                  .map((c: any) => c.docId)
+                  .filter((id: string | null | undefined): id is string => Boolean(id));
+                if (docOnlyIds.length > 0) {
+                  setLastListDocIds(docOnlyIds.slice(0, 5));
+                }
               }
 
               // Persist session id for continuity
@@ -700,8 +953,8 @@ export default function TestAgentEnhancedPage() {
                       ...m, 
                       content: streamingContent + `\n\n❌ **Error**: ${data.error}`,
                       isStreaming: false,
-                      processingSteps: taskStepsRef.current,
-                      tools: toolsRef.current
+                      processingSteps: dedupeSteps(taskStepsRef.current),
+                      tools: dedupeTools(toolsRef.current)
                     }
                   : m
               ));
@@ -810,8 +1063,11 @@ export default function TestAgentEnhancedPage() {
                         <div className="flex-1 min-w-0 space-y-4">
                           {/* Agent activity using Task component */}
                           {(() => {
-                            const activitySteps = message.isStreaming ? currentTaskSteps : (message as any).processingSteps || [];
-                            const tools = message.isStreaming ? currentTools : (message as any).tools || [];
+                            const { steps: activitySteps, tools } = buildActivityInsights(
+                              message,
+                              currentTaskSteps,
+                              currentTools
+                            );
                             const hasSteps = activitySteps.length > 0;
                             const hasTools = tools.length > 0;
                             
@@ -941,7 +1197,7 @@ export default function TestAgentEnhancedPage() {
                                   <div>
                                     <p className="text-sm font-semibold text-foreground">Sources</p>
                                     <p className="text-xs text-muted-foreground">
-                                      {message.citations.length} document{message.citations.length > 1 ? 's' : ''} referenced
+                                      {message.citations.length} source{message.citations.length > 1 ? 's' : ''} referenced
                                     </p>
                                   </div>
                                 </div>
@@ -957,9 +1213,16 @@ export default function TestAgentEnhancedPage() {
                                 {message.citations.map((citation, index) => {
                                   const title = getCitationDisplayTitle(citation);
                                   const description = getCitationDisplayDescription(citation);
+                                  const isWebSource = citation?.sourceType === 'web' || (!citation?.docId && !!citation?.url);
+                                  const linkTarget = citation?.docId
+                                    ? `/documents/${citation.docId}`
+                                    : citation?.url || undefined;
+                                  const identifier = isWebSource
+                                    ? getHostname(citation?.url) || 'web'
+                                    : citation.docId?.slice(0, 16);
                                   return (
                                     <div
-                                      key={`${citation.docId}-${index}`}
+                                      key={`${citation.docId || citation.url || 'citation'}-${index}`}
                                       className={cn(
                                         "rounded-xl border border-border/40 p-3.5 flex items-center justify-between gap-3",
                                         "bg-gradient-to-br from-card/80 to-card/40",
@@ -967,15 +1230,25 @@ export default function TestAgentEnhancedPage() {
                                       )}
                                     >
                                       <div className="flex-1 min-w-0">
-                                        <p className="text-sm font-medium text-foreground mb-1">{title}</p>
+                                        <div className="flex items-center gap-2">
+                                          <p className="text-sm font-medium text-foreground mb-1">{title}</p>
+                                          <span className={cn(
+                                            "text-[10px] px-2 py-0.5 rounded-full border",
+                                            isWebSource ? "border-amber-400/60 text-amber-600 dark:text-amber-400" : "border-primary/40 text-primary"
+                                          )}>
+                                            {isWebSource ? 'Web' : 'Document'}
+                                          </span>
+                                        </div>
                                         {description && (
                                           <p className="text-xs text-muted-foreground line-clamp-2">{description}</p>
                                         )}
-                                        <p className="text-[10px] text-muted-foreground/70 mt-2 font-mono">
-                                          {citation.docId?.slice(0, 16)}{citation.docId && citation.docId.length > 16 ? '...' : ''}
-                                        </p>
+                                        {identifier && (
+                                          <p className="text-[10px] text-muted-foreground/70 mt-2 font-mono">
+                                            {identifier}{citation.docId && citation.docId.length > 16 ? '...' : ''}
+                                          </p>
+                                        )}
                                       </div>
-                                      {citation.docId && (
+                                      {linkTarget && (
                                         <Button 
                                           variant="ghost" 
                                           size="sm" 
@@ -985,8 +1258,8 @@ export default function TestAgentEnhancedPage() {
                                           )} 
                                           asChild
                                         >
-                                          <a href={`/documents/${citation.docId}`} target="_blank" rel="noopener noreferrer">
-                                            Open →
+                                          <a href={linkTarget} target="_blank" rel="noopener noreferrer">
+                                            {isWebSource ? 'Open link →' : 'Open document →'}
                                           </a>
                                         </Button>
                                       )}
@@ -1023,6 +1296,8 @@ export default function TestAgentEnhancedPage() {
                     documents={documentOptions}
                     defaultMode={chatContext.type === 'folder' ? 'folder' : chatContext.type === 'document' ? 'document' : 'all'}
                     defaultWebSearch={webSearchEnabled}
+                    webSearch={webSearchEnabled}
+                    onWebSearchChange={handleWebSearchChange}
                     defaultFolderId={selectedFolderId}
                     defaultDocumentId={selectedDocumentId}
                     placeholder={
@@ -1114,6 +1389,8 @@ export default function TestAgentEnhancedPage() {
                     documents={documentOptions}
                     defaultMode={chatContext.type === 'folder' ? 'folder' : chatContext.type === 'document' ? 'document' : 'all'}
                     defaultWebSearch={webSearchEnabled}
+                    webSearch={webSearchEnabled}
+                    onWebSearchChange={handleWebSearchChange}
                     defaultFolderId={selectedFolderId}
                     defaultDocumentId={selectedDocumentId}
                     placeholder={
@@ -1145,6 +1422,35 @@ export default function TestAgentEnhancedPage() {
           </div>
         )}
       </div>
+
+      <Dialog
+        open={isWebSearchDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            cancelWebSearchEnable();
+          } else {
+            setIsWebSearchDialogOpen(true);
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Enable web search?</DialogTitle>
+            <DialogDescription>
+              Turning on web search starts a fresh chat session so the assistant can cite live articles.
+              Continue and reset the current conversation?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2">
+            <Button variant="outline" onClick={cancelWebSearchEnable}>
+              Cancel
+            </Button>
+            <Button onClick={confirmWebSearchEnable}>
+              Enable web search
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AppLayout>
   );
 }
