@@ -1,3 +1,6 @@
+/* Poppins font for chat (lightweight import) */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -284,6 +287,11 @@
 }
 
 @layer components {
+  /* Poppins utility for targeted areas like chat */
+  .font-poppins {
+    font-family: 'Poppins', var(--font-sans), ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  }
+
   /* Premium Dark Mode Enhancements */
 
   /* Subtle gradients for cards and surfaces */

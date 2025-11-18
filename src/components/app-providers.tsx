@@ -9,6 +9,7 @@ import { DashboardStatsProvider } from '@/hooks/use-dashboard-stats';
 import { CategoriesProvider } from '@/hooks/use-categories';
 import { useAuth } from '@/hooks/use-auth';
 import ErrorBoundary from '@/components/error-boundary';
+import { PlanBanner } from '@/components/plan-banner';
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
   const { bootstrapData } = useAuth();
@@ -39,7 +40,10 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
             <DashboardStatsProvider>
               <DepartmentsProvider bootstrapData={bootstrapData ? { departments: bootstrapData.departments } : undefined}>
                 <ErrorBoundary>
-                  <DocumentsProvider>{children}</DocumentsProvider>
+                  <DocumentsProvider>
+                    <PlanBanner />
+                    {children}
+                  </DocumentsProvider>
                 </ErrorBoundary>
               </DepartmentsProvider>
             </DashboardStatsProvider>

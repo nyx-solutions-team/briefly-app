@@ -33,6 +33,18 @@ type BootstrapData = {
     is_member?: boolean;
     is_lead?: boolean;
   }>;
+  plan?: {
+    key: string;
+    storageUsedBytes: number;
+    storageLimitBytes: number;
+    planStartedAt?: string | null;
+    planEndsAt?: string | null;
+    graceEndsAt?: string | null;
+    expired?: boolean;
+    storageFull?: boolean;
+    withinGrace?: boolean;
+    usageCalculatedAt?: string | null;
+  };
 };
 
 type AuthContextValue = {

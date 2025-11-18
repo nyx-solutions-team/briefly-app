@@ -97,3 +97,14 @@ export function formatBytes(bytes: number, decimals = 2) {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
+
+type OpsDateInput = string | number | Date | null | undefined;
+
+export function formatOpsDate(value: OpsDateInput, opts: { withTime?: boolean } = {}): string {
+  if (value === null || value === undefined || value === '') return '—';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  const base = formatDateFns(date, "d MMM ''yy");
+  if (!opts.withTime) return base;
+  return `${base} · ${formatDateFns(date, 'h:mm a')}`;
+}

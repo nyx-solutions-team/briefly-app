@@ -34,8 +34,9 @@ import {
   InlineCitationSource,
 } from '@/components/ai-elements/inline-citation';
 import { ssePost } from '@/lib/api';
+import MermaidDiagram from '@/components/ai-elements/mermaid-diagram';
 import { useSettings } from '@/hooks/use-settings';
-import { Bot, FileText, ChevronDown, Sparkles } from 'lucide-react';
+import { Bot, FileText, ChevronDown, Sparkles, Globe, FileSpreadsheet, FileArchive, FileImage, FileVideo, FileAudio, FileCode, File as FileGeneric } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { type ChatContext } from '@/components/chat-context-selector';
 import { createFolderChatEndpoint } from '@/lib/folder-utils';
@@ -102,6 +103,75 @@ function getCitationDisplayDescription(citation: any): string {
   });
 
   return parts.slice(0, 2).join(' • ') || 'Click to view document details';
+}
+
+function getCitationFileExtension(citation: any): string | undefined {
+  const filename = citation?.filename || citation?.name || citation?.title || '';
+  const url: string | undefined = citation?.url;
+  const fromFilename = typeof filename === 'string' && filename.includes('.') ? filename.split('.').pop()?.toLowerCase() : undefined;
+  if (fromFilename) return fromFilename;
+  if (typeof url === 'string') {
+    try {
+      const u = new URL(url);
+      const last = u.pathname.split('/').pop() || '';
+      if (last.includes('.')) {
+        return last.split('.').pop()?.toLowerCase();
+      }
+    } catch {
+      // ignore
+    }
+  }
+  const mime = citation?.mimeType || citation?.contentType;
+  if (typeof mime === 'string' && mime.includes('/')) {
+    const subtype = mime.split('/')[1];
+    if (subtype) return subtype.toLowerCase();
+  }
+  return undefined;
+}
+
+function getCitationIcon(citation: any, className?: string) {
+  const isWeb = citation?.sourceType === 'web' || (!citation?.docId && !!citation?.url);
+  if (isWeb) return <Globe className={className} />;
+
+  const ext = getCitationFileExtension(citation);
+  switch (ext) {
+    case 'pdf':
+      return <FileText className={className} />;
+    case 'xlsx':
+    case 'xls':
+    case 'csv':
+      return <FileSpreadsheet className={className} />;
+    case 'zip':
+    case 'rar':
+    case '7z':
+      return <FileArchive className={className} />;
+    case 'png':
+    case 'jpg':
+    case 'jpeg':
+    case 'gif':
+    case 'webp':
+      return <FileImage className={className} />;
+    case 'mp4':
+    case 'mov':
+    case 'webm':
+      return <FileVideo className={className} />;
+    case 'mp3':
+    case 'wav':
+      return <FileAudio className={className} />;
+    case 'docx':
+    case 'doc':
+    case 'md':
+    case 'txt':
+      return <FileText className={className} />;
+    case 'json':
+    case 'ts':
+    case 'tsx':
+    case 'js':
+    case 'py':
+      return <FileCode className={className} />;
+    default:
+      return <FileGeneric className={className} />;
+  }
 }
 
 function dedupeCitations(citations: CitationMeta[] = []): CitationMeta[] {
@@ -257,11 +327,44 @@ function processContentWithCitations(content: string, citations: any[] = []) {
   if (!content || typeof content !== 'string') return content;
   const normalizedCitations = dedupeCitations(citations);
 
-  const collapseSingleTrailingNewline = (text: string) => {
-    if (/\n\s*$/.test(text) && !/\n\s*\n\s*$/.test(text)) {
-      return text.replace(/\n\s*$/, ' ');
+  // Extract mermaid fenced blocks and replace with placeholders to avoid interfering with citation parsing
+  const mermaidBlocks: string[] = [];
+  const MERMAID_RE = /```mermaid\s*([\s\S]*?)```/g;
+  let contentWithPlaceholders = content.replace(MERMAID_RE, (_m, code) => {
+    const idx = mermaidBlocks.push(String(code || '').trim()) - 1;
+    return `⟦⟦MMD:${idx}⟧⟧`;
+  });
+
+  // Preserve newlines exactly to avoid breaking markdown blocks (lists, headings)
+  const preserveNewlines = (text: string) => text;
+
+  // Helper to render text while replacing mermaid placeholders with diagrams
+  const renderTextWithMermaid = (text: string, keyPrefix: string) => {
+    const elements: JSX.Element[] = [];
+    const parts = text.split(/(⟦⟦MMD:(\d+)⟧⟧)/g);
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const placeholderMatch = part && part.match(/^⟦⟦MMD:(\d+)⟧⟧$/);
+      if (placeholderMatch) {
+        const idx = parseInt(placeholderMatch[1], 10);
+        const code = mermaidBlocks[idx] || '';
+        elements.push(
+          <div key={`${keyPrefix}-mmd-${i}`} className="my-3 overflow-auto">
+            <MermaidDiagram code={code} />
+          </div>
+        );
+      } else if (part) {
+        elements.push(
+          <Response
+            key={`${keyPrefix}-txt-${i}`}
+            className="block w-auto h-auto align-baseline"
+          >
+            {part}
+          </Response>
+        );
+      }
     }
-    return text;
+    return elements;
   };
 
   // Create a map of citation numbers to citation objects (1-based indexing)
@@ -275,7 +378,7 @@ function processContentWithCitations(content: string, citations: any[] = []) {
   const citationPattern = /\[\^(\d+(?:\s*,\s*\^?\d+)*)\]/g;
   let match;
 
-  while ((match = citationPattern.exec(content)) !== null) {
+  while ((match = citationPattern.exec(contentWithPlaceholders)) !== null) {
     // Parse citation numbers from the match
     const citationNumbers = match[1]
       .split(',')
@@ -341,14 +444,14 @@ function processContentWithCitations(content: string, citations: any[] = []) {
 
   // If no citations found, clean and return
   if (citationData.length === 0) {
-    const cleaned = content
+    const cleaned = contentWithPlaceholders
       .replace(/\s*\[\^\d+\]/g, '')
       .replace(/\s*\[\^\d+(?:\s*,\s*\d+)*\]/g, '')
       .replace(/\s*\[\^\?\]/g, '')
       .replace(/\s*\[([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\]/gi, '')
       .replace(/^\[\^\d+\]:.*$/gm, '')
       .trim();
-    return <Response className="inline">{cleaned}</Response>;
+    return <span className="inline">{renderTextWithMermaid(cleaned, `clean`)}</span>;
   }
 
   // Sort citations by index (forward order)
@@ -361,8 +464,8 @@ function processContentWithCitations(content: string, citations: any[] = []) {
   for (const citation of citationData) {
     // Add text before citation
     if (citation.index > lastIndex) {
-      let textBefore = content.slice(lastIndex, citation.index);
-      textBefore = collapseSingleTrailingNewline(textBefore);
+      let textBefore = contentWithPlaceholders.slice(lastIndex, citation.index);
+      textBefore = preserveNewlines(textBefore);
       if (textBefore) {
         parts.push(textBefore);
       }
@@ -375,8 +478,8 @@ function processContentWithCitations(content: string, citations: any[] = []) {
   }
 
   // Add remaining text after last citation
-  if (lastIndex < content.length) {
-    const textAfter = content.slice(lastIndex);
+  if (lastIndex < contentWithPlaceholders.length) {
+    const textAfter = contentWithPlaceholders.slice(lastIndex);
     if (textAfter) {
       parts.push(textAfter);
     }
@@ -393,14 +496,7 @@ function processContentWithCitations(content: string, citations: any[] = []) {
     } else {
       // Render accumulated text as markdown
       if (currentText) {
-        renderedParts.push(
-          <Response
-            key={`text-${renderedParts.length}`}
-            className="inline w-auto h-auto align-baseline [&_p]:inline [&_p]:m-0"
-          >
-            {currentText}
-          </Response>
-        );
+        renderTextWithMermaid(currentText, `chunk-${renderedParts.length}`).forEach(el => renderedParts.push(el));
         currentText = '';
       }
       // Add citation component (already inline)
@@ -410,14 +506,7 @@ function processContentWithCitations(content: string, citations: any[] = []) {
 
   // Render any remaining text
   if (currentText) {
-    renderedParts.push(
-      <Response
-        key={`text-${renderedParts.length}`}
-        className="inline w-auto h-auto align-baseline [&_p]:inline [&_p]:m-0"
-      >
-        {currentText}
-      </Response>
-    );
+    renderTextWithMermaid(currentText, `tail-${renderedParts.length}`).forEach(el => renderedParts.push(el));
   }
 
   return <span className="inline">{renderedParts}</span>;
@@ -811,11 +900,15 @@ export default function TestAgentEnhancedPage() {
       await ssePost(endpoint, {
         session_id: ensuredSessionId,
         question: input,
-        conversation: messages.map(m => ({
-          role: m.role,
-          content: m.content,
-          citations: m.citations
-        })),
+        conversation: messages.map(m => {
+          const rawCitations = Array.isArray((m as any).citations) ? (m as any).citations : [];
+          const sanitizedCitations = rawCitations.filter((c: any) => typeof c?.docId === 'string' && c.docId);
+          return {
+            role: m.role,
+            content: m.content,
+            citations: sanitizedCitations
+          };
+        }),
         memory: {
           lastListDocIds: lastListDocIds,
           focusDocIds: [],
@@ -996,7 +1089,7 @@ export default function TestAgentEnhancedPage() {
 
   return (
     <AppLayout>
-      <div className="flex flex-col h-[calc(100vh-8rem)] max-w-6xl mx-auto px-4">
+      <div className="flex flex-col h-[calc(100vh-8rem)] max-w-6xl mx-auto px-4 font-poppins text-sm">
         {/* Minimal Header */}
         <div className="flex items-center justify-center py-4 border-b border-border/40">
           <div className="flex items-center gap-3">
@@ -1014,7 +1107,7 @@ export default function TestAgentEnhancedPage() {
         {hasUserMessage ? (
           <div className="flex-1 flex flex-col min-h-0">
             <ScrollArea className="flex-1 px-4 [scrollbar-gutter:stable]" ref={scrollAreaRef}>
-              <div className="max-w-5xl mx-auto py-8 space-y-8 pb-40">
+              <div className="max-w-6xl mx-auto py-8 space-y-8 pb-24">
                 {messages.map((message, idx) => {
                 console.log('Rendering message:', message);
                 return (
@@ -1158,7 +1251,7 @@ export default function TestAgentEnhancedPage() {
                               "border border-border/30",
                               "transition-all duration-300 hover:border-border/50"
                             )}>
-                              <div className="prose prose-sm max-w-none text-foreground dark:prose-invert [&>p]:leading-relaxed [&>p]:text-[15px]">
+                              <div className="prose prose-sm max-w-none text-foreground dark:prose-invert [&>p]:leading-relaxed">
                                 {processContentWithCitations(message.content, message.citations)}
                               </div>
                             </div>
@@ -1221,33 +1314,38 @@ export default function TestAgentEnhancedPage() {
                                     ? getHostname(citation?.url) || 'web'
                                     : citation.docId?.slice(0, 16);
                                   return (
-                                    <div
-                                      key={`${citation.docId || citation.url || 'citation'}-${index}`}
-                                      className={cn(
-                                        "rounded-xl border border-border/40 p-3.5 flex items-center justify-between gap-3",
-                                        "bg-gradient-to-br from-card/80 to-card/40",
-                                        "transition-all duration-300 hover:shadow-md hover:border-border/60 hover:-translate-y-0.5"
-                                      )}
-                                    >
-                                      <div className="flex-1 min-w-0">
-                                        <div className="flex items-center gap-2">
-                                          <p className="text-sm font-medium text-foreground mb-1">{title}</p>
-                                          <span className={cn(
-                                            "text-[10px] px-2 py-0.5 rounded-full border",
-                                            isWebSource ? "border-amber-400/60 text-amber-600 dark:text-amber-400" : "border-primary/40 text-primary"
-                                          )}>
-                                            {isWebSource ? 'Web' : 'Document'}
-                                          </span>
-                                        </div>
-                                        {description && (
-                                          <p className="text-xs text-muted-foreground line-clamp-2">{description}</p>
-                                        )}
-                                        {identifier && (
-                                          <p className="text-[10px] text-muted-foreground/70 mt-2 font-mono">
-                                            {identifier}{citation.docId && citation.docId.length > 16 ? '...' : ''}
-                                          </p>
-                                        )}
-                                      </div>
+                                     <div
+                                       key={`${citation.docId || citation.url || 'citation'}-${index}`}
+                                       className={cn(
+                                         "rounded-xl border border-border/40 p-3.5 flex items-center justify-between gap-3",
+                                         "bg-gradient-to-br from-card/80 to-card/40",
+                                         "transition-all duration-300 hover:shadow-md hover:border-border/60 hover:-translate-y-0.5"
+                                       )}
+                                     >
+                                       <div className="flex-1 min-w-0 flex items-center gap-3">
+                                         <div className="w-8 h-8 rounded-lg flex items-center justify-center border border-border/40 bg-muted/30 shrink-0">
+                                           {getCitationIcon(citation, "h-4 w-4 text-muted-foreground")}
+                                         </div>
+                                         <div className="min-w-0">
+                                           <div className="flex items-center gap-2">
+                                             <p className="text-sm font-medium text-foreground mb-1 line-clamp-1">{title}</p>
+                                             <span className={cn(
+                                               "text-[10px] px-2 py-0.5 rounded-full border",
+                                               isWebSource ? "border-amber-400/60 text-amber-600 dark:text-amber-400" : "border-primary/40 text-primary"
+                                             )}>
+                                               {isWebSource ? 'Web' : 'Document'}
+                                             </span>
+                                           </div>
+                                           {description && (
+                                             <p className="text-xs text-muted-foreground line-clamp-2">{description}</p>
+                                           )}
+                                           {identifier && (
+                                             <p className="text-[10px] text-muted-foreground/70 mt-2 font-mono">
+                                               {identifier}{citation.docId && citation.docId.length > 16 ? '...' : ''}
+                                             </p>
+                                           )}
+                                         </div>
+                                       </div>
                                       {linkTarget && (
                                         <Button 
                                           variant="ghost" 
@@ -1281,7 +1379,7 @@ export default function TestAgentEnhancedPage() {
 
             {/* Input Area - Floating with elegant shadow */}
             <div className={cn(
-              "sticky bottom-0 pt-4 pb-6",
+              "sticky bottom-0 pt-3 pb-3",
               "bg-gradient-to-t from-background via-background to-transparent",
               "transition-all duration-300"
             )}>

@@ -1,10 +1,5 @@
 "use client";
 
-import { 
-  LayoutDashboard, 
-  Folder, 
-  PlusSquare 
-} from 'lucide-react';
 import {
   Sidebar,
   SidebarContent,
@@ -25,21 +20,16 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/hooks/use-auth';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { Button } from '@/components/ui/button';
+import { usePathname, useRouter } from 'next/navigation';
 import { Moon, Sun, LogOut, MoreHorizontal } from 'lucide-react';
 import { useSettings } from '@/hooks/use-settings';
-
-const simpleOpsLinks = [
-  { href: '/ops', label: 'Dashboard', Icon: LayoutDashboard },
-  { href: '/ops/orgs', label: 'Organizations', Icon: Folder },
-  { href: '/ops/new', label: 'Create Org', Icon: PlusSquare },
-];
+import { OPS_NAV_SECTIONS } from '@/lib/simple-ops-nav';
 
 export default function SimpleOpsSidebar() {
   const { user, signOut } = useAuth();
   const { settings, updateSettings } = useSettings();
   const router = useRouter();
+  const pathname = usePathname();
 
   const toggleTheme = () => {
     const newDarkMode = !settings.dark_mode;
@@ -59,22 +49,29 @@ export default function SimpleOpsSidebar() {
         </div>
       </SidebarHeader>
       
-      <SidebarContent>
-        <div className="px-2 py-4">
-          <div className="space-y-1">
-            {simpleOpsLinks.map(({ href, label, Icon }) => (
-              <Link key={href} href={href}>
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start gap-2 hover-premium"
-                >
-                  <Icon className="h-4 w-4" />
-                  <span>{label}</span>
-                </Button>
-              </Link>
-            ))}
+      <SidebarContent className="px-2 pb-4">
+        {OPS_NAV_SECTIONS.map((section) => (
+          <div key={section.title} className="py-3">
+            <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {section.title}
+            </p>
+            <SidebarMenu>
+              {section.items.map(({ href, label, Icon }) => {
+                const isActive = pathname === href || pathname.startsWith(`${href}/`);
+                return (
+                  <SidebarMenuItem key={href}>
+                    <SidebarMenuButton asChild isActive={isActive} className="gap-2">
+                      <Link href={href}>
+                        <Icon className="h-4 w-4" />
+                        <span>{label}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
           </div>
-        </div>
+        ))}
       </SidebarContent>
       
       <SidebarFooter>

@@ -167,8 +167,12 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
         return Array.from(set).map(s => s.split('/'));
       });
       setHasLoadedAll(false);
-    } catch (error) {
-      console.error('Failed to load documents:', error);
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        console.debug('Documents load aborted');
+      } else {
+        console.error('Failed to load documents:', error);
+      }
     } finally {
       setIsLoading(false);
       loadingRef.current = false;
@@ -246,8 +250,12 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
         return Array.from(set).map(s => s.split('/'));
       });
       setHasLoadedAll(true);
-    } catch (error) {
-      console.error('Failed to load all documents:', error);
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        console.debug('Load-all aborted');
+      } else {
+        console.error('Failed to load all documents:', error);
+      }
     } finally {
       loadingRef.current = false;
       abortControllerRef.current = null;

@@ -1,18 +1,38 @@
-// Navigation component for the simplified Ops pages
-export const simpleOpsNav = [
+import type { ComponentType } from 'react';
+import {
+  LayoutDashboard,
+  HardDrive,
+  Workflow,
+  FolderKanban,
+  FolderArchive,
+  AlertTriangle,
+  ShieldCheck,
+  PlusSquare,
+} from 'lucide-react';
+
+export type OpsNavItem = { href: string; label: string; Icon: ComponentType<{ className?: string }> };
+export type OpsNavSection = { title: string; items: OpsNavItem[] };
+
+export const OPS_NAV_SECTIONS: OpsNavSection[] = [
   {
-    title: "Dashboard",
-    href: "/ops",
-    icon: "LayoutDashboard"
+    title: 'Overview',
+    items: [{ href: '/ops', label: 'Dashboard', Icon: LayoutDashboard }],
   },
   {
-    title: "Organizations",
-    href: "/ops/orgs",
-    icon: "Folder"
+    title: 'Operations',
+    items: [
+      { href: '/ops/storage', label: 'Storage', Icon: HardDrive },
+      { href: '/ops/ingestion', label: 'Ingestion', Icon: Workflow },
+      { href: '/ops/orgs', label: 'Organizations', Icon: FolderKanban },
+      { href: '/ops/orphan-files', label: 'Orphaned Files', Icon: FolderArchive },
+      { href: '/ops/incidents', label: 'Incidents', Icon: AlertTriangle },
+    ],
   },
   {
-    title: "Create Organization",
-    href: "/ops/new",
-    icon: "PlusSquare"
-  }
+    title: 'Security',
+    items: [
+      { href: '/ops/security', label: 'Security Center', Icon: ShieldCheck },
+      { href: '/ops/new', label: 'Create Org', Icon: PlusSquare },
+    ],
+  },
 ];

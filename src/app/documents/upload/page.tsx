@@ -21,15 +21,26 @@ import { Select as UiSelect, SelectContent as UiSelectContent, SelectItem as UiS
 // Calls will be proxied via backend: sign upload, finalize, analyze
 import { apiFetch, getApiContext } from '@/lib/api';
 import { useDocuments } from '@/hooks/use-documents';
+import { useFolders as useFolderExplorer } from '@/hooks/use-folders';
 import { useDepartments } from '@/hooks/use-departments';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/use-auth';
-import { computeContentHash } from '@/lib/utils';
+import { computeContentHash, formatBytes } from '@/lib/utils';
 import { useCategories } from '@/hooks/use-categories';
 import { useUserDepartmentCategories } from '@/hooks/use-department-categories';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import UploadFilePreview from '@/components/upload-file-preview';
 import FilePreview from '@/components/file-preview';
 import JSZip from 'jszip';
+import {
+  CommandDialog,
+  CommandInput,
+  CommandList,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+  CommandSeparator,
+} from '@/components/ui/command';
 
 const toDataUri = (file: File): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -140,6 +151,9 @@ const extractDirectorySegments = (relativePath: string) => {
   return sanitized.split('/').filter(Boolean).map(normalizeSegment);
 };
 
+const GB_BYTES = 1024 ** 3;
+const SUPPORT_CONTACT = 'mailto:support@brieflydocs.com?subject=Plan%20upgrade';
+
 function UploadContent() {
   const [queue, setQueue] = useState<{ file: File; progress: number; status: 'idle' | 'uploading' | 'processing' | 'ready' | 'saving' | 'success' | 'error'; note?: string; hash?: string; extracted?: Extracted; form?: FormData; locked?: boolean; previewUrl?: string; rotation?: number; linkMode?: 'new' | 'version'; baseId?: string; candidates?: { id: string; label: string }[]; senderOptions?: string[]; receiverOptions?: string[]; storageKey?: string; geminiFile?: { fileId: string; fileUri: string; mimeType?: string }; docId?: string; ingestionJob?: any; folderPathOverride?: string[]; prefilledFromQueue?: boolean }[]>([]);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
@@ -161,9 +175,105 @@ function UploadContent() {
   const router = useRouter();
   const { categories } = useCategories();
   const { getCategoriesForDepartment } = useUserDepartmentCategories();
-  const { documents, folders, createFolder, refresh } = useDocuments();
+  const { documents, folders: documentFolders, createFolder, refresh } = useDocuments();
+  const { load: loadFolderChildren } = useFolderExplorer();
   const { hasRoleAtLeast, hasPermission, bootstrapData } = useAuth();
+  const planInfo = bootstrapData?.plan;
+  const planExpired = !!planInfo?.expired;
+  const planStorageFull = !!planInfo?.storageFull;
+  const planWithinGrace = !!planInfo?.withinGrace;
+  const planBlocked = planExpired || planStorageFull;
+  const planLimitBytes = Number(planInfo?.storageLimitBytes || 0);
+  const planUsageBytes = Number(planInfo?.storageUsedBytes || 0);
+  const planUsagePercent = planLimitBytes > 0 ? Math.min(1, planUsageBytes / planLimitBytes) : 0;
+  const safeFormatBytes = (value?: number | null) => {
+    try {
+      return formatBytes(value || 0);
+    } catch {
+      if (!value || value <= 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let idx = 0;
+      let current = value;
+      while (current >= 1024 && idx < units.length - 1) {
+        current /= 1024;
+        idx++;
+      }
+      const decimals = current >= 10 ? 1 : 2;
+      return `${current.toFixed(decimals)} ${units[idx]}`;
+    }
+  };
+  const planEndsDisplay = planInfo?.planEndsAt ? new Date(planInfo.planEndsAt).toLocaleDateString() : null;
+  const planBlockingMessage = planBlocked
+    ? planExpired
+      ? `Your plan expired${planEndsDisplay ? ` on ${planEndsDisplay}` : ''}.`
+      : planLimitBytes > 0
+        ? `Storage limit reached (${safeFormatBytes(planUsageBytes)} of ${safeFormatBytes(planLimitBytes)} used).`
+        : `Storage limit reached (${safeFormatBytes(planUsageBytes)} used).`
+    : '';
+  const planGraceMessage = !planBlocked && planWithinGrace
+    ? `Your plan term ended${planEndsDisplay ? ` on ${planEndsDisplay}` : ''}. Please contact us to keep processing documents.`
+    : '';
   const [folderPath, setFolderPath] = useState<string[]>([]);
+  const [folderCommandOpen, setFolderCommandOpen] = useState(false);
+  const [folderOptions, setFolderOptions] = useState<{ id: string; path: string[]; label: string }[]>([]);
+
+  useEffect(() => {
+    const dedup = new Map<string, { id: string; path: string[]; label: string }>();
+    (documentFolders || []).forEach((segmentsRaw) => {
+      const segments = (segmentsRaw || []).filter(Boolean);
+      if (segments.length === 0) return;
+      const id = segments.join('/');
+      dedup.set(id, { id, path: segments, label: `/${segments.join('/')}` });
+    });
+    setFolderOptions(Array.from(dedup.values()).sort((a, b) => a.label.localeCompare(b.label)));
+  }, [documentFolders]);
+
+  useEffect(() => {
+    if (!folderCommandOpen) return;
+    let cancelled = false;
+    const run = async () => {
+      const dedup = new Map<string, { id: string; path: string[]; label: string }>();
+      (documentFolders || []).forEach((segmentsRaw) => {
+        const segments = (segmentsRaw || []).filter(Boolean);
+        if (segments.length === 0) return;
+        const id = segments.join('/');
+        dedup.set(id, { id, path: segments, label: `/${segments.join('/')}` });
+      });
+      const queue: string[][] = [[]];
+      const visited = new Set<string>();
+
+      while (queue.length > 0 && !cancelled) {
+        const path = queue.shift() || [];
+        const key = path.join('/') || '__root__';
+        if (visited.has(key)) continue;
+        visited.add(key);
+        try {
+          const children = await loadFolderChildren(path);
+          for (const child of children || []) {
+            const childPath =
+              child.fullPath && child.fullPath.length > 0
+                ? child.fullPath
+                : [...path, child.name].filter(Boolean);
+            if (!childPath.length) continue;
+            const id = childPath.join('/');
+            if (!dedup.has(id)) {
+              dedup.set(id, { id, path: childPath, label: `/${childPath.join('/')}` });
+            }
+            queue.push(childPath);
+          }
+        } catch {
+          // ignore load errors; likely already fetched
+        }
+      }
+      if (!cancelled) {
+        setFolderOptions(Array.from(dedup.values()).sort((a, b) => a.label.localeCompare(b.label)));
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [folderCommandOpen, loadFolderChildren, documentFolders]);
   const searchParams = useSearchParams();
 const ensureBulkPrereqs = useCallback(() => {
   if (hasRoleAtLeast('systemAdmin') && folderPath.length === 0 && !selectedDepartmentId) {
@@ -429,6 +539,14 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
   }, [selectedDepartmentId, getCategoriesForDepartment, categories]);
   
   const saveAllReady = async () => {
+    if (planBlocked) {
+      toast({
+        title: 'Plan limit reached',
+        description: planBlockingMessage || 'Please contact support to continue.',
+        variant: 'destructive',
+      });
+      return;
+    }
     if (isSavingAll) return;
     const readyEntries = queue
       .map((item, index) => ({ item, index }))
@@ -870,6 +988,14 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
   const processItem = async (index: number) => {
     const item = queue[index];
     if (!item || item.locked || item.status === 'processing' || item.status === 'uploading' || item.status === 'success' || item.status === 'ready') return;
+    if (planBlocked) {
+      toast({
+        title: 'Plan limit reached',
+        description: planBlockingMessage || 'Please contact support to continue.',
+        variant: 'destructive',
+      });
+      return;
+    }
     // lock row to avoid duplicate processing
     setQueue(prev => prev.map((q, i) => i === index ? { ...q, locked: true } : q));
     setActiveIndex(index);
@@ -899,9 +1025,54 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
       });
       const storageKey = uploadResult.storageKey;
 
-      // 2) Finalize DB row if already created, else we will create on Save
+      // 2) Finalize DB row immediately so background ingestion can start
       const orgId = getApiContext().orgId || '';
       if (!orgId) throw new Error('No organization set');
+
+      let docId = item.docId;
+      let ingestionJob = item.ingestionJob;
+      if (!docId) {
+        const initialFolderPath = item.folderPathOverride && item.folderPathOverride.length > 0
+          ? [...item.folderPathOverride]
+          : folderPath.slice();
+        const initialDraftPayload: any = {
+          title: item.file.name,
+          filename: item.file.name,
+          type: inferred,
+          folderPath: initialFolderPath,
+          subject: '',
+          description: '',
+          category: 'General',
+          tags: [],
+          keywords: [],
+          sender: '',
+          receiver: '',
+          documentDate: '',
+          departmentId: selectedDepartmentId || undefined,
+          isDraft: true,
+        };
+        const createdDraft = await apiFetch<StoredDocument>(`/orgs/${orgId}/documents`, { method: 'POST', body: initialDraftPayload });
+        if (!createdDraft?.id) throw new Error('Failed to create draft document');
+        docId = createdDraft.id;
+      }
+
+      const finalizeResp = await apiFetch(`/orgs/${orgId}/uploads/finalize`, {
+        method: 'POST',
+        body: {
+          documentId: docId,
+          storageKey,
+          fileSizeBytes: item.file.size,
+          mimeType: item.file.type || 'application/octet-stream',
+          contentHash: item.hash,
+        }
+      });
+      ingestionJob = finalizeResp?.ingestionJob || ingestionJob;
+
+      setQueue(prev => prev.map((q, i) => i === index ? { ...q, docId, ingestionJob, storageKey } : q));
+      toast({
+        title: 'Processing in background',
+        description: 'Document queued for ingestion. You can leave this page while AI completes.',
+      });
 
       // 3) Ask backend AI to analyze from signed Storage URL
       let analyzeResp: AnalyzeSuccessResponse;
@@ -948,45 +1119,6 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
       }
       const ocrResult = { extractedText: analyzeResp.ocrText } as any;
       const metadataResult = analyzeResp.metadata as any;
-
-      // Create or reuse a draft document so background ingestion can start immediately
-      let docId = item.docId;
-      let ingestionJob = item.ingestionJob;
-      const draftPayload: any = {
-        title: metadataResult.title || item.file.name,
-        filename: metadataResult.filename || item.file.name,
-        type: inferred,
-        subject: metadataResult.subject || '',
-        description: metadataResult.description || metadataResult.summary || '',
-        category: metadataResult.category || 'General',
-        tags: (metadataResult.tags || []).filter(Boolean),
-        keywords: (metadataResult.keywords || []).filter(Boolean),
-        sender: metadataResult.sender || '',
-        receiver: metadataResult.receiver || '',
-        documentDate: metadataResult.documentDate || '',
-        folderPath: folderPath.slice(),
-        departmentId: selectedDepartmentId || undefined,
-        isDraft: true,
-      };
-      if (!docId) {
-        const createdDraft = await apiFetch<StoredDocument>(`/orgs/${orgId}/documents`, { method: 'POST', body: draftPayload });
-        if (!createdDraft?.id) throw new Error('Failed to create draft document');
-        docId = createdDraft.id;
-      }
-      const finalizeResp = await apiFetch(`/orgs/${orgId}/uploads/finalize`, {
-        method: 'POST',
-        body: {
-          documentId: docId,
-          storageKey,
-          fileSizeBytes: item.file.size,
-          mimeType: item.file.type || 'application/octet-stream',
-          contentHash: item.hash,
-          geminiFileId: analyzeResp.geminiFile?.fileId,
-          geminiFileUri: analyzeResp.geminiFile?.fileUri,
-          geminiFileMimeType: analyzeResp.geminiFile?.mimeType,
-        }
-      });
-      ingestionJob = finalizeResp?.ingestionJob || ingestionJob;
 
       // Use the original summary without padding extra content
       const summary = (metadataResult.summary || '').trim();
@@ -1056,6 +1188,15 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
         } else {
           errorMessage = e.message;
         }
+      }
+      const status = (e as any)?.status;
+      const planCode = (e as any)?.data?.code;
+      if (status === 402 && typeof planCode === 'string' && planCode.startsWith('plan.')) {
+        toast({
+          title: 'Plan limit reached',
+          description: (e as any)?.data?.error || 'Your plan no longer allows uploads. Please contact support.',
+          variant: 'destructive',
+        });
       }
       
       setQueue(prev => prev.map((q, i) => i === index ? { ...q, status: 'error', note: errorMessage, locked: false } : q));
@@ -1196,6 +1337,14 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
   const onDone = async (index: number): Promise<{ path: string[]; hasMoreReady: boolean } | null> => {
     const item = queue[index];
     if (!item || !item.extracted || !item.form || item.status === 'success' || item.locked) return null;
+    if (planBlocked) {
+      toast({
+        title: 'Plan limit reached',
+        description: planBlockingMessage || 'Please contact support to continue.',
+        variant: 'destructive',
+      });
+      return null;
+    }
 
     if (hasRoleAtLeast('systemAdmin') && folderPath.length === 0 && !selectedDepartmentId) {
       toast({
@@ -1256,7 +1405,7 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
 
           console.log(`🔍 Level ${i + 1}: Creating folder "${folderName}" with parent path:`, parentPath);
 
-          const existing = folders.find(f => JSON.stringify(f) === JSON.stringify(slice));
+        const existing = documentFolders.find(f => JSON.stringify(f) === JSON.stringify(slice));
           if (!existing) {
             console.log(`🔍 Folder "${folderName}" doesn't exist, creating...`);
             const result = await createFolder(parentPath, folderName);
@@ -1354,6 +1503,16 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
         console.warn('Failed to save extraction data (non-critical):', extractionError);
       }
 
+      try {
+        await apiFetch(`/orgs/${orgId}/ingestion-jobs/${item.docId}/accept`, {
+          method: 'POST',
+        });
+      } catch (acceptError: any) {
+        if (acceptError?.status !== 404 && acceptError?.status !== 403) {
+          console.warn('Failed to mark ingestion job accepted:', acceptError);
+        }
+      }
+
       let nextQueueSnapshot: typeof queue = [];
       setQueue(prev => {
         nextQueueSnapshot = prev.map((q, i) => i === index ? { ...q, status: 'success', locked: true, note: 'Saved' } : q);
@@ -1376,6 +1535,15 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
     } catch (error) {
       console.error('Document save error:', error);
       setQueue(prev => prev.map((q, i) => i === index ? { ...q, status: 'error', note: 'Save failed', locked: false } : q));
+      const status = (error as any)?.status;
+      const planCode = (error as any)?.data?.code;
+      if (status === 402 && typeof planCode === 'string' && planCode.startsWith('plan.')) {
+        toast({
+          title: 'Plan limit reached',
+          description: (error as any)?.data?.error || 'Your plan no longer allows uploads. Please contact support.',
+          variant: 'destructive',
+        });
+      }
       toast({
         title: 'Save Failed',
         description: `Failed to save ${item.file.name}: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -1406,6 +1574,30 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
   return (
     <AppLayout>
       <div className="p-0 md:p-0 space-y-6">
+        {planBlocked && (
+          <Alert variant="destructive">
+            <AlertTitle>{planExpired ? 'Plan expired' : 'Storage limit reached'}</AlertTitle>
+            <AlertDescription>
+              {planBlockingMessage} <a className="underline" href={SUPPORT_CONTACT}>Contact support</a> to continue.
+              {planLimitBytes > 0 && (
+                <div className="mt-3">
+                  <Progress value={planUsagePercent * 100} />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {safeFormatBytes(planUsageBytes)} / {safeFormatBytes(planLimitBytes)} used
+                  </p>
+                </div>
+              )}
+            </AlertDescription>
+          </Alert>
+        )}
+        {!planBlocked && planGraceMessage && (
+          <Alert className="border-yellow-400/70 bg-yellow-50 text-yellow-900">
+            <AlertTitle>Plan term reached</AlertTitle>
+            <AlertDescription>
+              {planGraceMessage} <a className="underline" href={SUPPORT_CONTACT}>Contact support</a>.
+            </AlertDescription>
+          </Alert>
+        )}
         <div className="bg-card/50 border-b border-border/50 backdrop-blur-sm sticky top-0 z-10">
           <div className="px-4 md:px-6 py-3">
             <div className="max-w-6xl mx-auto">
@@ -1659,6 +1851,7 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                         variant="default"
                         size="sm"
                         onClick={saveAllReady}
+                        disabled={planBlocked || isSavingAll}
                         className="gap-2 hover-premium focus-premium"
                       >
                         <Check className="h-3 w-3" />
@@ -1722,7 +1915,12 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                         <div className="flex items-center justify-between gap-3 mb-6">
                           <div className="min-w-0">
                             <div className="truncate font-medium text-lg" title={item.file.name}>{item.file.name}</div>
-                            <div className="text-xs text-muted-foreground truncate">/{targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}</div>
+                            <div
+                              className="text-xs text-muted-foreground break-words whitespace-normal"
+                              title={`/${targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}`}
+                            >
+                              /{targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}
+                            </div>
                             <div className="text-sm text-muted-foreground capitalize">{item.status}</div>
                           </div>
                           <div className="w-40 flex flex-col items-end gap-1">
@@ -1732,10 +1930,18 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                             )}
                           </div>
                           <div className="flex items-center gap-2">
-                            {item.status === 'idle' && !isProcessingAll && <Button size="sm" onClick={() => processItem(i)} disabled={!!item.locked}>Process</Button>}
+                            {item.status === 'idle' && !isProcessingAll && (
+                              <Button
+                                size="sm"
+                                onClick={() => processItem(i)}
+                                disabled={planBlocked || !!item.locked}
+                              >
+                                Process
+                              </Button>
+                            )}
                             {item.status === 'ready' && (
                               <>
-                                <Button size="sm" onClick={() => handleSave(i)} disabled={item.locked}>
+                                <Button size="sm" onClick={() => handleSave(i)} disabled={planBlocked || item.locked}>
                                   Save
                                 </Button>
                                 <Button
@@ -1890,24 +2096,21 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                                 )}
                               </label>
                               <div className="mt-1 grid grid-cols-1 md:grid-cols-2 gap-2">
-                                <UiSelect value={folderPath.length ? folderPath.join('/') : '__root__'} onValueChange={(v) => {
-                                  if (v === '__root__') setFolderPath([]); else setFolderPath(v.split('/').filter(Boolean));
-                                }}>
-                                  <UiSelectTrigger className="w-full">
-                                    <UiSelectValue placeholder={folderPath.length ? `/${folderPath.join('/')}` : "Root folder"} />
-                                  </UiSelectTrigger>
-                                  <UiSelectContent>
-                                    <UiSelectItem value="__root__">📁 Root</UiSelectItem>
-                                    {folders.map((p, idx) => (
-                                      <UiSelectItem key={idx} value={p.join('/')}>📁 {p.join('/')}</UiSelectItem>
-                                    ))}
-                                  </UiSelectContent>
-                                </UiSelect>
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    className="flex-1 rounded-md border bg-background p-2 text-sm"
+                                    value={`/${folderPath.join('/')}`}
+                                    readOnly
+                                  />
+                                  <Button variant="outline" size="sm" onClick={() => setFolderCommandOpen(true)}>
+                                    Browse…
+                                  </Button>
+                                </div>
                                 <input 
-                                  className="rounded-md border bg-background p-2" 
-                                  placeholder="Custom path e.g., Finance/2025/Q1" 
-                                  value={folderPath.join('/')} 
-                                  onChange={(e) => setFolderPath(e.target.value.split('/').filter(Boolean))} 
+                                  className="rounded-md border bg-background p-2"
+                                  placeholder="Or type path e.g., Finance/2025/Q1"
+                                  value={folderPath.join('/')}
+                                  onChange={(e) => setFolderPath(e.target.value.split('/').filter(Boolean))}
                                 />
                               </div>
                               <p className="mt-1 text-xs text-muted-foreground">
@@ -1948,12 +2151,22 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                     );
                   })()
                 ) : (
-                  queue.map((item, i) => (
-                    <div key={i} className={`rounded-lg border p-3 ${activeIndex === i ? 'ring-1 ring-primary' : ''}`}>
+                  queue.map((item, i) => {
+                    const targetFolderPath = item.folderPathOverride && item.folderPathOverride.length > 0
+                      ? item.folderPathOverride
+                      : folderPath;
+                    return (
+                      <div key={i} className={`rounded-lg border p-3 ${activeIndex === i ? 'ring-1 ring-primary' : ''}`}>
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
                           <div className="truncate font-medium" title={item.file.name}>{item.file.name}</div>
                           <div className="text-xs text-muted-foreground capitalize">{item.status}</div>
+                          <div
+                            className="text-xs text-muted-foreground break-words whitespace-normal"
+                            title={`/${targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}`}
+                          >
+                            /{targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}
+                          </div>
                         </div>
                         <div className="w-40 flex flex-col items-end gap-1">
                           <Progress value={item.progress} />
@@ -1962,10 +2175,14 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                           )}
                         </div>
                         <div className="flex items-center gap-2">
-                          {item.status === 'idle' && !isProcessingAll && <Button size="sm" onClick={() => processItem(i)} disabled={!!item.locked}>Process</Button>}
+                          {item.status === 'idle' && !isProcessingAll && (
+                            <Button size="sm" onClick={() => processItem(i)} disabled={planBlocked || !!item.locked}>
+                              Process
+                            </Button>
+                          )}
                           {item.status === 'ready' && (
                             <>
-                              <Button size="sm" onClick={() => handleSave(i)} disabled={item.locked}>
+                              <Button size="sm" onClick={() => handleSave(i)} disabled={planBlocked || item.locked}>
                                 Save
                               </Button>
                               <Button
@@ -2141,8 +2358,9 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                         </div>
                       </div>
                       )}
-                    </div>
-                  ))
+                      </div>
+                    );
+                  })
                 )}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -2253,6 +2471,45 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
           </Dialog>
         )}
       </div>
+      <CommandDialog open={folderCommandOpen} onOpenChange={setFolderCommandOpen}>
+        <DialogHeader className="px-4 pt-4">
+          <DialogTitle>Select folder</DialogTitle>
+        </DialogHeader>
+        <CommandInput placeholder="Search folders…" />
+        <CommandList>
+          <CommandEmpty>No folders found.</CommandEmpty>
+          <CommandGroup heading="Shortcuts">
+            <CommandItem
+              value="/"
+              onSelect={() => {
+                setFolderPath([]);
+                setFolderCommandOpen(false);
+              }}
+            >
+              / (Root)
+            </CommandItem>
+          </CommandGroup>
+          <CommandSeparator />
+          <CommandGroup heading="Folders">
+            {folderOptions.length === 0 ? (
+              <div className="px-2 py-1 text-xs text-muted-foreground">No folders yet</div>
+            ) : (
+              folderOptions.map((opt) => (
+                <CommandItem
+                  key={opt.id}
+                  value={opt.label}
+                  onSelect={() => {
+                    setFolderPath(opt.path);
+                    setFolderCommandOpen(false);
+                  }}
+                >
+                  {opt.label}
+                </CommandItem>
+              ))
+            )}
+          </CommandGroup>
+        </CommandList>
+      </CommandDialog>
     </AppLayout>
   );
 }
