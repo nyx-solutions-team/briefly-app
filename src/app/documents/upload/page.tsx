@@ -2154,7 +2154,11 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                                   extractedContent={item.extracted?.ocrText}
                                 />
                               ) : (
-                                <UploadFilePreview file={item.file} previewUrl={item.previewUrl} height="50vh sm:75vh" />
+                                <UploadFilePreview
+                                  file={item.file}
+                                  previewUrl={item.previewUrl}
+                                  height="70vh"
+                                />
                               )}
                             </div>
                             
