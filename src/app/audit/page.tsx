@@ -24,6 +24,7 @@ import { DateRange } from 'react-day-picker';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { PageHeader } from '@/components/page-header';
+import { MobileFilterButton, FilterSection } from '@/components/mobile-filter-button';
 import { FileText, User, Calendar as CalendarIcon, Clock, Search, Filter, Eye, Edit, Trash2, Plus, Move, Link as LinkIcon, Unlink, Download, Upload, Activity } from 'lucide-react';
 
 const TYPE_LABEL: Record<string, string> = {
@@ -246,8 +247,8 @@ export default function AuditPage() {
   if (checkingAccess) {
     return (
       <AppLayout>
-        <div className="p-4 md:p-6">
-          <div className="rounded-md border p-4 text-sm text-muted-foreground">
+        <div className="px-3 pt-2 pb-24 md:px-6 md:pb-6">
+          <div className="rounded-md border p-4 text-xs sm:text-sm text-muted-foreground">
             Checking access permissions...
           </div>
         </div>
@@ -271,40 +272,42 @@ export default function AuditPage() {
 
   return (
     <AppLayout>
-      <div className="p-0 md:p-0 space-y-6">
+      <div className="px-3 pt-2 pb-24 md:px-6 md:pb-6 space-y-5 md:space-y-6">
         <PageHeader
           title="Activity"
-          subtitle="Recent user and document actions"
-          meta={<span>{filtered.length} shown • {events.length} total</span>}
+          subtitle={<span className="hidden sm:inline">Recent user and document actions</span>}
+          meta={<span className="text-[10px] sm:text-xs">{filtered.length} shown • {events.length} total</span>}
           sticky
-          icon={<FileText className="h-5 w-5" />}
+          icon={<FileText className="h-4 w-4 sm:h-5 sm:w-5" />}
         />
-        <div className="px-4 md:px-6">
+        <div className="max-w-6xl mx-auto w-full">
 
-        <Card className="rounded-2xl">
-          <CardHeader>
-            <CardTitle>Recent Actions</CardTitle>
+        <Card className="rounded-xl sm:rounded-2xl border border-border/60 shadow-md">
+          <CardHeader className="p-4 sm:p-6 pb-1 sm:pb-2">
+            <CardTitle className="text-base sm:text-xl">Recent Actions</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/40 p-3 md:p-4">
-              <div className="flex items-center gap-2 flex-1 min-w-[280px]">
-                <Search className="h-4 w-4 text-muted-foreground" />
-                <Input 
-                  className="flex-1" 
-                  value={q} 
-                  onChange={(e) => setQ(e.target.value)} 
-                  placeholder="Search actor, document, note…" 
-                />
-              </div>
-              
+          <CardContent className="space-y-4 p-4 sm:p-6 text-xs sm:text-sm">
+            {/* Search Bar - Always Visible */}
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 p-3">
+              <Search className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+              <Input 
+                className="flex-1 text-xs sm:text-sm" 
+                value={q} 
+                onChange={(e) => setQ(e.target.value)} 
+                placeholder="Search actor, document, note…" 
+              />
+            </div>
+
+            {/* Desktop Filters - Hidden on Mobile */}
+            <div className="hidden md:flex flex-wrap items-center gap-3 rounded-lg border bg-muted/40 p-4 text-sm">
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-40 h-9 justify-between">
+                  <Button variant="outline" className="w-full sm:w-40 h-9 justify-between text-sm">
                     <Filter className="h-4 w-4" />
                     Types {selectedTypes.length > 0 ? `(${selectedTypes.length})` : ''}
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-64 p-3">
+                <PopoverContent className="w-[calc(100vw-2rem)] sm:w-64 p-3">
                   <div className="text-xs text-muted-foreground mb-3 font-medium">Select one or more activity types</div>
                   <div className="max-h-56 overflow-auto space-y-2">
                     <div className="flex items-center gap-2 p-2 rounded-md hover:bg-muted/50">
@@ -355,12 +358,12 @@ export default function AuditPage() {
               
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-32 h-9 justify-between">
+                  <Button variant="outline" className="w-full sm:w-32 h-9 justify-between text-sm">
                     <User className="h-4 w-4" />
                     People {actorsPick.length > 0 ? `(${actorsPick.length})` : ''}
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-64 p-3">
+                <PopoverContent className="w-[calc(100vw-2rem)] sm:w-64 p-3">
                   <div className="text-xs text-muted-foreground mb-3 font-medium">Select one or more users</div>
                   <div className="max-h-56 overflow-auto space-y-2">
                     <div className="flex items-center gap-2 p-2 rounded-md hover:bg-muted/50">
@@ -386,21 +389,21 @@ export default function AuditPage() {
               </Popover>
               
               {(user?.role === 'systemAdmin') && (
-                <div className="flex items-center gap-2 pl-2 border-l">
+                <div className="flex items-center gap-2 pl-0 sm:pl-2 border-l-0 sm:border-l w-full sm:w-auto">
                   <Switch id="include-self" checked={includeSelf} onCheckedChange={(v) => setIncludeSelf(!!v)} />
-                  <label htmlFor="include-self" className="text-sm">Include my activity</label>
+                  <label htmlFor="include-self" className="text-xs sm:text-sm">Include my activity</label>
                 </div>
               )}
               
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-40 h-9 justify-between">
+                  <Button variant="outline" className="w-full sm:w-40 h-9 justify-between text-sm">
                     <CalendarIcon className="h-4 w-4" />
                     Date range
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="p-3 w-auto" align="end">
-                  <div className="flex gap-4">
+                <PopoverContent className="p-3 w-auto max-w-[calc(100vw-2rem)]" align="end">
+                  <div className="flex flex-col sm:flex-row gap-4">
                     <Calendar
                       mode="range"
                       selected={range}
@@ -410,20 +413,133 @@ export default function AuditPage() {
                         if (r?.to) setEnd(fmt(r.to));
                         setPage(1);
                       }}
-                      numberOfMonths={2}
+                      numberOfMonths={1}
                     />
-                    <div className="flex flex-col gap-2 text-sm">
-                      <Button variant="outline" size="sm" onClick={() => { const d1 = new Date(); const d0 = new Date(d1.getTime()-6*86400000); setRange({ from: d0, to: d1 }); setStart(fmt(d0)); setEnd(fmt(d1)); setPage(1); }}>Last 7 days</Button>
-                      <Button variant="outline" size="sm" onClick={() => { const d1 = new Date(); const d0 = new Date(d1.getTime()-13*86400000); setRange({ from: d0, to: d1 }); setStart(fmt(d0)); setEnd(fmt(d1)); setPage(1); }}>Last 14 days</Button>
-                      <Button variant="outline" size="sm" onClick={() => { const d1 = new Date(); const d0 = new Date(d1.getTime()-29*86400000); setRange({ from: d0, to: d1 }); setStart(fmt(d0)); setEnd(fmt(d1)); setPage(1); }}>Last 30 days</Button>
-                      <Button variant="outline" size="sm" onClick={() => { const d1 = new Date(); const d0 = new Date(d1.getFullYear(), d1.getMonth(), 1); setRange({ from: d0, to: d1 }); setStart(fmt(d0)); setEnd(fmt(d1)); setPage(1); }}>This month</Button>
+                    <div className="flex flex-row sm:flex-col gap-2 text-xs sm:text-sm">
+                      <Button variant="outline" size="sm" className="text-xs" onClick={() => { const d1 = new Date(); const d0 = new Date(d1.getTime()-6*86400000); setRange({ from: d0, to: d1 }); setStart(fmt(d0)); setEnd(fmt(d1)); setPage(1); }}>Last 7 days</Button>
+                      <Button variant="outline" size="sm" className="text-xs" onClick={() => { const d1 = new Date(); const d0 = new Date(d1.getTime()-13*86400000); setRange({ from: d0, to: d1 }); setStart(fmt(d0)); setEnd(fmt(d1)); setPage(1); }}>Last 14 days</Button>
+                      <Button variant="outline" size="sm" className="text-xs" onClick={() => { const d1 = new Date(); const d0 = new Date(d1.getTime()-29*86400000); setRange({ from: d0, to: d1 }); setStart(fmt(d0)); setEnd(fmt(d1)); setPage(1); }}>Last 30 days</Button>
+                      <Button variant="outline" size="sm" className="text-xs" onClick={() => { const d1 = new Date(); const d0 = new Date(d1.getFullYear(), d1.getMonth(), 1); setRange({ from: d0, to: d1 }); setStart(fmt(d0)); setEnd(fmt(d1)); setPage(1); }}>This month</Button>
                     </div>
                   </div>
                 </PopoverContent>
               </Popover>
             </div>
 
-            <div className="text-xs grid grid-cols-6 font-semibold text-muted-foreground pt-3 pb-2 border-b">
+            {/* Mobile Filter Button */}
+            <MobileFilterButton
+              title="Filter Activity"
+              description="Filter by type, people, and date range"
+              activeCount={selectedTypes.length + actorsPick.length + (start !== defaultStart || end !== defaultEnd ? 1 : 0)}
+            >
+              <div className="space-y-1">
+                {/* Type Filter */}
+                <FilterSection
+                  title="Activity Types"
+                  badge={selectedTypes.length}
+                  defaultOpen={selectedTypes.length > 0}
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 p-2 rounded-md hover:bg-muted/50">
+                      <Checkbox
+                        id="mobile-all-types"
+                        checked={selectedTypes.length === 0}
+                        onCheckedChange={() => setSelectedTypes([])}
+                      />
+                      <label htmlFor="mobile-all-types" className="text-sm font-medium">All Types</label>
+                    </div>
+                    {Object.entries(TYPE_LABEL).map(([key, label]) => {
+                      const Icon = TYPE_ICONS[key];
+                      const checked = selectedTypes.includes(key);
+                      return (
+                        <div key={key} className="flex items-center gap-3 p-2 rounded-md hover:bg-muted/50">
+                          <Checkbox
+                            id={`mobile-type-${key}`}
+                            checked={checked}
+                            onCheckedChange={(v) => {
+                              setSelectedTypes(prev => {
+                                if (v) return Array.from(new Set([...prev, key]));
+                                return prev.filter(x => x !== key);
+                              });
+                            }}
+                          />
+                          <div className="flex items-center gap-2 text-sm">
+                            {Icon && <Icon className="h-3 w-3" />}
+                            {label}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </FilterSection>
+
+                {/* People Filter */}
+                <FilterSection
+                  title="People"
+                  badge={actorsPick.length}
+                  defaultOpen={actorsPick.length > 0}
+                >
+                  <div className="max-h-48 overflow-auto space-y-2">
+                    <div className="flex items-center gap-2 p-2 rounded-md hover:bg-muted/50">
+                      <Checkbox id="mobile-all" checked={actorsPick.length === 0} onCheckedChange={() => setActorsPick([])} />
+                      <label htmlFor="mobile-all" className="text-sm font-medium">All Users</label>
+                    </div>
+                    {actors.map(a => {
+                      const checked = actorsPick.includes(a);
+                      return (
+                        <div key={a} className="flex items-center gap-3 p-2 rounded-md hover:bg-muted/50">
+                          <Checkbox id={`mobile-act-${a}`} checked={checked} onCheckedChange={(v) => {
+                            setActorsPick(prev => {
+                              if (v) return Array.from(new Set([...prev, a]));
+                              return prev.filter(x => x !== a);
+                            });
+                          }} />
+                          <UserAvatar email={a} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </FilterSection>
+
+                {/* Date Range Filter */}
+                <FilterSection
+                  title="Date Range"
+                  badge={start !== defaultStart || end !== defaultEnd ? 1 : 0}
+                  defaultOpen={start !== defaultStart || end !== defaultEnd}
+                >
+                  <div className="space-y-3">
+                    <Calendar
+                      mode="range"
+                      selected={range}
+                      onSelect={(r) => {
+                        setRange(r);
+                        if (r?.from) setStart(fmt(r.from));
+                        if (r?.to) setEnd(fmt(r.to));
+                        setPage(1);
+                      }}
+                      numberOfMonths={1}
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button variant="outline" size="sm" className="text-xs" onClick={() => { const d1 = new Date(); const d0 = new Date(d1.getTime()-6*86400000); setRange({ from: d0, to: d1 }); setStart(fmt(d0)); setEnd(fmt(d1)); setPage(1); }}>Last 7 days</Button>
+                      <Button variant="outline" size="sm" className="text-xs" onClick={() => { const d1 = new Date(); const d0 = new Date(d1.getTime()-13*86400000); setRange({ from: d0, to: d1 }); setStart(fmt(d0)); setEnd(fmt(d1)); setPage(1); }}>Last 14 days</Button>
+                      <Button variant="outline" size="sm" className="text-xs" onClick={() => { const d1 = new Date(); const d0 = new Date(d1.getTime()-29*86400000); setRange({ from: d0, to: d1 }); setStart(fmt(d0)); setEnd(fmt(d1)); setPage(1); }}>Last 30 days</Button>
+                      <Button variant="outline" size="sm" className="text-xs" onClick={() => { const d1 = new Date(); const d0 = new Date(d1.getFullYear(), d1.getMonth(), 1); setRange({ from: d0, to: d1 }); setStart(fmt(d0)); setEnd(fmt(d1)); setPage(1); }}>This month</Button>
+                    </div>
+                  </div>
+                </FilterSection>
+
+                {/* Include Self Switch */}
+                {(user?.role === 'systemAdmin') && (
+                  <div className="flex items-center justify-between p-3 rounded-md border bg-muted/30 mt-2">
+                    <label htmlFor="mobile-include-self" className="text-sm font-medium">Include my activity</label>
+                    <Switch id="mobile-include-self" checked={includeSelf} onCheckedChange={(v) => setIncludeSelf(!!v)} />
+                  </div>
+                )}
+              </div>
+            </MobileFilterButton>
+
+            {/* Desktop Table Header - Hidden on mobile */}
+            <div className="hidden md:grid md:grid-cols-6 text-xs font-semibold text-muted-foreground pt-3 pb-2 border-b">
               <div className="flex items-center gap-1"><Clock className="h-3 w-3" />When</div>
               <div className="flex items-center gap-1"><User className="h-3 w-3" />User</div>
               <div>Role</div>
@@ -431,23 +547,83 @@ export default function AuditPage() {
               <div className="flex items-center gap-1"><FileText className="h-3 w-3" />Document</div>
               <div></div>
             </div>
-            <div className="divide-y">
+            <div className="divide-y rounded-lg border border-border/40 bg-card/60">
               {pageSlice.map(e => {
                 const u = users.find(x => x.email && e.actor && e.actor.toLowerCase() === x.email.toLowerCase());
                 const doc = e.docId ? getDocumentById(e.docId) : null;
                 const roleLabel = normalizeRoleLabel((e as any).actorRole) || normalizeRoleLabel(u?.role);
+                const actorName = u?.username || u?.email?.split('@')[0] || e.actor?.split('@')[0] || 'User';
+                const actorInitial = actorName?.[0]?.toUpperCase() || 'U';
                 return (
-                  <div key={e.id} className="grid grid-cols-6 py-3 text-sm items-center hover:bg-muted/30 transition-colors">
-                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <div key={e.id} className="md:grid md:grid-cols-6 py-3 text-sm items-center hover:bg-muted/30 transition-colors">
+                    {/* Mobile Card Layout */}
+                    <div className="md:hidden rounded-lg border border-border/60 bg-card/70 p-3 space-y-3">
+                        {/* Header: Time and Action Type */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground flex-1 min-w-0">
+                            <Clock className="h-3.5 w-3.5 flex-shrink-0" />
+                            <span className="truncate" title={formatAppDateTime(new Date(e.ts))}>
+                              {formatAppDateTime(new Date(e.ts))}
+                            </span>
+                          </div>
+                          <TypeBadge t={e.type} />
+                        </div>
+
+                        {/* User + Role */}
+                        <div className="flex items-center gap-2.5 flex-wrap text-xs">
+                          <div className="flex items-center gap-2">
+                            <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center text-[11px] font-semibold text-foreground/80">
+                              {actorInitial}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-semibold text-foreground truncate">{actorName}</p>
+                              {(e as any).actorEmail && (
+                                <p className="text-[11px] text-muted-foreground truncate">{(e as any).actorEmail}</p>
+                              )}
+                            </div>
+                          </div>
+                          <RoleBadge role={roleLabel} />
+                        </div>
+
+                        {/* Document Link with Better Truncation */}
+                        <div className="min-w-0 space-y-1 text-xs">
+                          {e.docId ? (
+                            <Link 
+                              className="inline-flex items-start gap-1.5 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 transition-colors font-medium" 
+                              href={`/documents/${e.docId}`}
+                              title={e.title || doc?.title || doc?.name || e.docId}
+                            >
+                              <FileText className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+                              <span className="line-clamp-2 break-words min-w-0 flex-1">
+                                {e.title || doc?.title || doc?.name || e.docId}
+                              </span>
+                            </Link>
+                          ) : (
+                            <div className="flex items-start gap-1.5 text-muted-foreground">
+                              <FileText className="h-3.5 w-3.5 flex-shrink-0 mt-0.5 opacity-50" />
+                              <span className="line-clamp-2 break-words">{e.title || '—'}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Note if available */}
+                        {e.note && (
+                          <p className="text-[11px] text-muted-foreground line-clamp-2" title={e.note}>
+                            {e.note}
+                          </p>
+                        )}
+                    </div>
+                    {/* Desktop Table Layout */}
+                    <div className="hidden md:flex items-center gap-1 text-xs text-muted-foreground">
                       <Clock className="h-3 w-3" />
                       {formatAppDateTime(new Date(e.ts))}
                     </div>
-                    <div>
+                    <div className="hidden md:block">
                       <UserAvatar email={(e as any).actorEmail || e.actor} name={u?.email} />
                     </div>
-                    <div><RoleBadge role={roleLabel} /></div>
-                    <div><TypeBadge t={e.type} /></div>
-                    <div className="truncate" title={e.title || e.docId || undefined}>
+                    <div className="hidden md:block"><RoleBadge role={roleLabel} /></div>
+                    <div className="hidden md:block"><TypeBadge t={e.type} /></div>
+                    <div className="hidden md:block truncate" title={e.title || e.docId || undefined}>
                       {e.docId ? (
                         <Link className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 transition-colors" href={`/documents/${e.docId}`}>
                           <FileText className="h-3 w-3" />
@@ -457,22 +633,22 @@ export default function AuditPage() {
                         <span className="text-muted-foreground">{e.title || '—'}</span>
                       )}
                     </div>
-                    <div></div>
+                    <div className="hidden md:block"></div>
                   </div>
                 );
               })}
               {pageSlice.length === 0 && (
-                <div className="py-8 text-sm text-muted-foreground col-span-6 text-center">No matching activity.</div>
+                <div className="py-8 text-xs sm:text-sm text-muted-foreground md:col-span-6 text-center">No matching activity.</div>
               )}
             </div>
 
-            <div className="flex items-center justify-between pt-2 text-xs text-muted-foreground">
-              <div>
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 text-[11px] sm:text-xs text-muted-foreground">
+              <div className="text-center sm:text-left">
                 Page {currentPage} of {totalPages}
               </div>
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>Prev</Button>
-                <Button variant="outline" size="sm" disabled={currentPage >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>Next</Button>
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <Button variant="outline" size="sm" className="flex-1 sm:flex-none text-xs" disabled={currentPage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>Prev</Button>
+                <Button variant="outline" size="sm" className="flex-1 sm:flex-none text-xs" disabled={currentPage >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>Next</Button>
               </div>
             </div>
           </CardContent>

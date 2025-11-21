@@ -16,7 +16,6 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -103,11 +102,19 @@ function Combobox<T extends { id: string; name: string; path?: string[] }>({
             variant="outline"
             role="combobox"
             aria-expanded={open}
-            className="h-9 min-w-[220px] w-full max-w-full justify-between rounded-xl border-dashed px-3"
+            className="h-9 min-w-[120px] sm:min-w-[220px] w-full max-w-full justify-between rounded-xl border-dashed px-2 sm:px-3"
           >
             <span className="flex items-center gap-2 min-w-0">
               {Icon ? <Icon className="h-4 w-4 shrink-0" /> : null}
-              <span className="truncate">{selected ? shorten(formatName(selected as T)) : triggerLabel}</span>
+              <span className="truncate">
+                {selected ? (
+                  <span className="flex items-center gap-1.5">
+                    <Check className="h-3.5 w-3.5 text-primary" />
+                    <span className="hidden sm:inline">{shorten(formatName(selected as T))}</span>
+                    <span className="sm:hidden">Selected</span>
+                  </span>
+                ) : triggerLabel}
+              </span>
             </span>
             <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
           </Button>
@@ -194,12 +201,21 @@ function ModePopover({
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="outline" className="h-9 rounded-xl px-3">
-          <span className="flex items-center gap-2">
+        <Button variant="outline" className="h-9 rounded-xl px-2 sm:px-3">
+          <span className="flex items-center gap-1.5 sm:gap-2">
             <current.icon className="h-4 w-4" />
             {mode === 'all' ? (
-              <span className="text-xs">{current.label}</span>
-            ) : null}
+              <>
+                <span className="text-xs hidden sm:inline">{current.label}</span>
+                <span className="text-xs sm:hidden">All</span>
+              </>
+            ) : (
+              <span className="flex items-center gap-1.5">
+                <Check className="h-3.5 w-3.5 text-primary" />
+                <span className="text-xs hidden sm:inline">{current.label}</span>
+                <span className="text-xs sm:hidden">Selected</span>
+              </span>
+            )}
             <ChevronDown className="h-4 w-4 opacity-50" />
           </span>
         </Button>
@@ -346,15 +362,21 @@ export function BrieflyChatBox({
             />
           )}
         </div>
-        <div className="ml-auto flex items-center gap-2 rounded-xl border px-3 py-2">
+        <button
+          type="button"
+          onClick={() => handleWebSearchToggle(!effectiveWebSearch)}
+          aria-pressed={effectiveWebSearch}
+          className={cn(
+            "ml-auto flex h-9 w-9 items-center justify-center rounded-xl border",
+            "transition-colors",
+            effectiveWebSearch
+              ? "bg-primary/10 text-primary border-primary/40"
+              : "text-muted-foreground hover:text-foreground"
+          )}
+        >
           <Globe className="h-4 w-4" />
-          <Label htmlFor="websearch" className="mr-1 text-xs">Web search</Label>
-          <Switch
-            id="websearch"
-            checked={effectiveWebSearch}
-            onCheckedChange={handleWebSearchToggle}
-          />
-        </div>
+          <span className="sr-only">{effectiveWebSearch ? "Disable web search" : "Enable web search"}</span>
+        </button>
       </div>
 
       {/* Input Row */}
@@ -379,10 +401,11 @@ export function BrieflyChatBox({
           type="button"
           disabled={!canSend || sending}
           onClick={handleSubmit}
-          className="h-10 rounded-2xl px-4"
+          className="h-10 w-11 sm:w-auto rounded-2xl px-0 sm:px-4 justify-center"
         >
-          <Send className="mr-2 h-4 w-4" />
-          {sending ? "Sending…" : "Send"}
+          <Send className="h-4 w-4" />
+          <span className="sr-only sm:hidden">{sending ? "Sending…" : "Send"}</span>
+          <span className="hidden sm:inline ml-2">{sending ? "Sending…" : "Send"}</span>
         </Button>
       </div>
 

@@ -38,6 +38,7 @@ import {
 import { useAuth } from '@/hooks/use-auth';
 import Link from 'next/link';
 import { useSettings } from '@/hooks/use-settings';
+import { MobileTabBar } from '@/components/mobile-tab-bar';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = React.useState('light');
@@ -153,7 +154,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </SidebarMenu>
         </SidebarFooter>
       </Sidebar>
-      <SidebarInset>{children}</SidebarInset>
+      <SidebarInset className="pb-20 md:pb-0">{children}</SidebarInset>
+      <MobileTabBar />
     </SidebarProvider>
   );
 }

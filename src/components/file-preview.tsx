@@ -13,6 +13,8 @@ interface FilePreviewProps {
   mimeType?: string;
   extractedContent?: string;
   className?: string;
+  showTitle?: boolean;
+  showMetaInfo?: boolean;
 }
 
 interface FileMetadata {
@@ -22,7 +24,14 @@ interface FileMetadata {
   expires: string;
 }
 
-export default function FilePreview({ documentId, mimeType, extractedContent, className = "" }: FilePreviewProps) {
+export default function FilePreview({
+  documentId,
+  mimeType,
+  extractedContent,
+  className = "",
+  showTitle = true,
+  showMetaInfo = true,
+}: FilePreviewProps) {
   const [fileMetadata, setFileMetadata] = useState<FileMetadata | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -220,60 +229,66 @@ export default function FilePreview({ documentId, mimeType, extractedContent, cl
 
   return (
     <Card className={className}>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-lg flex items-center gap-2">
-            {canPreview ? <Eye className="h-5 w-5" /> : <FileText className="h-5 w-5" />}
-            Content Preview
-          </CardTitle>
-          <div className="flex items-center gap-2">
-            {/* Toggle between file and extracted content */}
-            {canPreview && extractedContent && (
-              <div className="flex items-center rounded-md border">
-                <Button
-                  size="sm"
-                  variant={!showExtracted ? "default" : "ghost"}
-                  onClick={() => setShowExtracted(false)}
-                  className="rounded-r-none"
-                  disabled={loading}
-                >
-                  <Eye className="h-4 w-4 mr-1" />
-                  Original
-                </Button>
-                <Button
-                  size="sm"
-                  variant={showExtracted ? "default" : "ghost"}
-                  onClick={() => setShowExtracted(true)}
-                  className="rounded-l-none border-l"
-                >
-                  <FileText className="h-4 w-4 mr-1" />
-                  Extracted
-                </Button>
-              </div>
+      {(showTitle || canPreview || (!fileMetadata && !loading && !canPreview)) && (
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            {showTitle && (
+              <CardTitle className="text-lg flex items-center gap-2">
+                {canPreview ? <Eye className="h-5 w-5" /> : <FileText className="h-5 w-5" />}
+                Content Preview
+              </CardTitle>
             )}
-            
+            <div className="flex items-center gap-2">
+              {/* Toggle between file and extracted content */}
+              {canPreview && extractedContent && (
+                <div className="flex items-center rounded-md border">
+                  <Button
+                    size="sm"
+                    variant={!showExtracted ? 'default' : 'ghost'}
+                    onClick={() => setShowExtracted(false)}
+                    className="rounded-r-none"
+                    disabled={loading}
+                  >
+                    <Eye className="h-4 w-4 mr-1" />
+                    Original
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={showExtracted ? 'default' : 'ghost'}
+                    onClick={() => setShowExtracted(true)}
+                    className="rounded-l-none border-l"
+                  >
+                    <FileText className="h-4 w-4 mr-1" />
+                    Extracted
+                  </Button>
+                </div>
+              )}
 
-            
-            {/* Manual load button for non-auto-loading cases */}
-            {!fileMetadata && !loading && !canPreview && (
-              <Button size="sm" onClick={loadFileMetadata} variant="outline">
-                <Eye className="h-4 w-4 mr-1" />
-                Load File
-              </Button>
-            )}
+              {/* Manual load button for non-auto-loading cases */}
+              {!fileMetadata && !loading && !canPreview && (
+                <Button size="sm" onClick={loadFileMetadata} variant="outline">
+                  <Eye className="h-4 w-4 mr-1" />
+                  Load File
+                </Button>
+              )}
+            </div>
           </div>
-        </div>
-        
-        {/* File info */}
-        {fileMetadata && (
-          <div className="text-xs text-muted-foreground space-y-1">
-            <div>{fileMetadata.filename} • {fileMetadata.mimeType}</div>
-            {canPreview && !showExtracted && (
-              <div className="text-blue-600">Live preview (expires {new Date(fileMetadata.expires).toLocaleTimeString()})</div>
-            )}
-          </div>
-        )}
-      </CardHeader>
+
+          {/* File info */}
+          {fileMetadata && showMetaInfo && (
+            <div className="text-xs text-muted-foreground space-y-1">
+              <div>
+                {fileMetadata.filename} • {fileMetadata.mimeType}
+              </div>
+              {canPreview && !showExtracted && (
+                <div className="text-blue-600">
+                  Live preview (expires {new Date(fileMetadata.expires).toLocaleTimeString()})
+                </div>
+              )}
+            </div>
+          )}
+        </CardHeader>
+      )}
       
       <CardContent className="p-4">
         {loading && (

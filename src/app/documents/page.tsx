@@ -8,7 +8,7 @@ import { useSettings } from '@/hooks/use-settings';
 import type { StoredDocument } from '@/lib/types';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import { Plus, Grid2X2, List, Grid3X3, Folder as FolderIcon, FileText, Trash2, ArrowLeft, X } from 'lucide-react';
+import { Grid2X2, List, Grid3X3, Folder as FolderIcon, FileText, Trash2, ArrowLeft, X } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
@@ -26,6 +26,9 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog as UiDialog, DialogContent as UiDialogContent, DialogFooter as UiDialogFooter, DialogHeader as UiDialogHeader, DialogTitle as UiDialogTitle } from '@/components/ui/dialog';
 import { Checkbox } from '@/components/ui/checkbox';
 import { apiFetch, getApiContext } from '@/lib/api';
+import { MobileFilterButton, FilterSection } from '@/components/mobile-filter-button';
+import { Plus, Upload } from 'lucide-react';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 
 type ViewMode = 'grid' | 'list' | 'cards';
 
@@ -137,7 +140,23 @@ function DocumentsPageContent() {
     void ensureFolderMetadata(path);
   }, [path, ensureFolderMetadata]);
   const [view, setView] = useState<ViewMode>('list');
+  const [isMobile, setIsMobile] = useState(false);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [fabOpen, setFabOpen] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handler = () => setIsMobile(window.innerWidth < 640);
+    handler();
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
+
+  useEffect(() => {
+    if (isMobile && view === 'list') {
+      setView('grid');
+    }
+  }, [isMobile, view]);
+
   const [newFolderName, setNewFolderName] = useState('');
   const { toast } = useToast();
 
@@ -145,6 +164,11 @@ function DocumentsPageContent() {
   const currentDocs = getDocumentsInPath(path);
   const [query, setQuery] = useState('');
   const [field, setField] = useState<'all' | 'title' | 'subject' | 'sender' | 'receiver' | 'keywords' | 'doctype'>('all');
+  const effectiveView: ViewMode = isMobile && view === 'list' ? 'grid' : view;
+  const mobileFilterCount =
+    (query.trim() ? 1 : 0) +
+    (field !== 'all' ? 1 : 0) +
+    (selectedDepartmentId ? 1 : 0);
 
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -488,6 +512,65 @@ function DocumentsPageContent() {
     );
   }
 
+        {hasRoleAtLeast('member') && canCreateDocuments && (
+          <Dialog open={newFolderOpen} onOpenChange={setNewFolderOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Create a new folder</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-2">
+                <label className="text-sm text-muted-foreground">Folder name</label>
+                <Input value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} placeholder="e.g., Q3 Reports" />
+                <p className="text-xs text-muted-foreground">It will be created under: /{path.join('/')}</p>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setNewFolderOpen(false)}>Cancel</Button>
+                <Button onClick={async () => {
+                  const name = newFolderName.trim();
+                  if (!name) { toast({ title: 'Please enter a folder name', variant: 'destructive' }); return; }
+                  if (name.includes('/')) { toast({ title: 'Folder name cannot contain /', variant: 'destructive' }); return; }
+                  if (name.length > 100) { toast({ title: 'Folder name too long (max 100 characters)', variant: 'destructive' }); return; }
+                  const existingFolders = listFolders(path);
+                  const normalizedName = name.toLowerCase().trim();
+                  const exists = existingFolders.some(p => (p[p.length - 1] || '').toLowerCase().trim() === normalizedName);
+                  if (exists) { 
+                    toast({ 
+                      title: 'Folder already exists', 
+                      description: `A folder named "${name}" already exists in this location.`,
+                      variant: 'destructive' 
+                    }); 
+                    return; 
+                  }
+                  try {
+                    await createFolder(path, name);
+                    setPath([...path, name]);
+                    setNewFolderName('');
+                    setNewFolderOpen(false);
+                    toast({ title: 'Folder created' });
+                  } catch (error: any) {
+                    let errorMessage = 'Unknown error occurred';
+                    if (error?.data?.message) {
+                      errorMessage = error.data.message;
+                    } else if (error?.data?.error) {
+                      errorMessage = error.data.error;
+                    } else if (error instanceof Error) {
+                      errorMessage = error.message;
+                    }
+                    if (error?.status === 409 || errorMessage.includes('already exists')) {
+                      errorMessage = `Folder "${name}" already exists in this location.`;
+                    }
+                    toast({ 
+                      title: 'Failed to create folder', 
+                      description: errorMessage,
+                      variant: 'destructive' 
+                    });
+                  }
+                }}>Create</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+
   // Check if user has permission to read documents
   if (!canReadDocuments) {
     return (
@@ -512,9 +595,9 @@ function DocumentsPageContent() {
 
   return (
     <AppLayout>
-      <div className="p-4 md:p-6 space-y-6">
+      <div className="px-3 pt-2 pb-24 md:px-6 md:pb-6 space-y-5 md:space-y-6">
         {/* Navigation Header with Back Button */}
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-4">
           {path.length > 0 && (
             <Button 
               variant="outline" 
@@ -526,7 +609,7 @@ function DocumentsPageContent() {
               Back
             </Button>
           )}
-          <div className="text-sm text-muted-foreground">
+          <div className="text-xs text-muted-foreground sm:text-sm">
             <button className="text-primary hover:underline" onClick={() => setPath([])}>Root</button>
             {path.map((seg, i) => (
               <span key={i} className="ml-2">/ <button className="hover:underline" onClick={() => setPath(path.slice(0, i + 1))}>{seg}</button></span>
@@ -534,20 +617,28 @@ function DocumentsPageContent() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           {hasRoleAtLeast('member') && canCreateDocuments && (
-          <Button asChild className="gap-2">
-            <Link href={`/documents/upload${path.length ? `?path=${encodeURIComponent(path.join('/'))}` : ''}`}><Plus className="h-4 w-4" /> Upload Document</Link>
-          </Button>
+            <div className="hidden md:flex items-center gap-2">
+              <Button asChild className="gap-2">
+                <Link href={`/documents/upload${path.length ? `?path=${encodeURIComponent(path.join('/'))}` : ''}`}>
+                  <Upload className="h-4 w-4" />
+                  Upload
+                </Link>
+              </Button>
+              <Button onClick={() => setNewFolderOpen(true)}>
+                <Plus className="h-4 w-4 mr-2" />
+                New Folder
+              </Button>
+            </div>
           )}
-          
           {/* Department Filter - Always visible for admins */}
           {hasRoleAtLeast('systemAdmin') && (
             <Select 
               value={selectedDepartmentId || '__all__'} 
               onValueChange={(v) => setSelectedDepartmentId(v === '__all__' ? null : v)}
             >
-              <SelectTrigger className="w-48">
+              <SelectTrigger className="hidden md:flex w-full sm:w-48">
                 <SelectValue placeholder="All Departments" />
               </SelectTrigger>
               <SelectContent>
@@ -561,8 +652,8 @@ function DocumentsPageContent() {
             </Select>
           )}
           
-          <div className="relative max-w-md">
-            <Input placeholder="Search documents..." value={query} onChange={(e) => setQuery(e.target.value)} />
+          <div className="relative flex-1 min-w-[220px] hidden md:block">
+            <Input placeholder="Search documents..." value={query} onChange={(e) => setQuery(e.target.value)} className="w-full" />
             {query.trim() && (
               <div className="absolute top-full left-0 mt-1 px-2 py-1 bg-accent text-accent-foreground text-xs rounded-md">
                 {isLoading ? (
@@ -578,8 +669,8 @@ function DocumentsPageContent() {
               </div>
             )}
           </div>
-          <Select value={field} onValueChange={(v) => setField(v as any)}>
-            <SelectTrigger className="w-40"><SelectValue placeholder="All Fields" /></SelectTrigger>
+          <Select value={field} onValueChange={(v) => setField(v as any)} >
+            <SelectTrigger className="hidden md:flex w-full sm:w-40"><SelectValue placeholder="All Fields" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Fields</SelectItem>
               <SelectItem value="title">Title</SelectItem>
@@ -593,8 +684,8 @@ function DocumentsPageContent() {
 
 
           {selectedIds.size > 0 && (
-            <div className="ml-auto flex items-center gap-2">
-              <Input ref={bulkTagInputRef} placeholder={`Add tag to ${selectedIds.size} selected`} value={bulkTag} onChange={(e) => setBulkTag(e.target.value)} className="w-56" />
+            <div className="ml-auto flex flex-wrap items-center gap-2 w-full lg:w-auto">
+              <Input ref={bulkTagInputRef} placeholder={`Add tag to ${selectedIds.size} selected`} value={bulkTag} onChange={(e) => setBulkTag(e.target.value)} className="w-full sm:w-56" />
               {hasRoleAtLeast('member') && (
                 <Button variant="outline" onClick={bulkAddTag}>Add Tag</Button>
               )}
@@ -624,89 +715,135 @@ function DocumentsPageContent() {
               )}
             </div>
           )}
-          <div className="ml-auto flex items-center gap-1">
-            <Button variant={view === 'grid' ? 'default' : 'outline'} size="icon" onClick={() => setView('grid')}><Grid2X2 className="h-4 w-4" /></Button>
-            <Button variant={view === 'list' ? 'default' : 'outline'} size="icon" onClick={() => setView('list')}><List className="h-4 w-4" /></Button>
-            <Button variant={view === 'cards' ? 'default' : 'outline'} size="icon" onClick={() => setView('cards')}><Grid3X3 className="h-4 w-4" /></Button>
-           {hasRoleAtLeast('member') && canCreateDocuments && (
-           <Dialog open={newFolderOpen} onOpenChange={setNewFolderOpen}>
-              <DialogTrigger asChild>
-                <Button className="ml-2">New Folder</Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Create a new folder</DialogTitle>
-                </DialogHeader>
-                <div className="space-y-2">
-                  <label className="text-sm text-muted-foreground">Folder name</label>
-                  <Input value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} placeholder="e.g., Q3 Reports" />
-                  <p className="text-xs text-muted-foreground">It will be created under: /{path.join('/')}</p>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setNewFolderOpen(false)}>Cancel</Button>
-                  <Button onClick={async () => {
-                    const name = newFolderName.trim();
-                    if (!name) { toast({ title: 'Please enter a folder name', variant: 'destructive' }); return; }
-                    if (name.includes('/')) { toast({ title: 'Folder name cannot contain /', variant: 'destructive' }); return; }
-                    if (name.length > 100) { toast({ title: 'Folder name too long (max 100 characters)', variant: 'destructive' }); return; }
-                    
-                    // Check for existing folders (case-insensitive)
-                    const existingFolders = listFolders(path);
-                    const normalizedName = name.toLowerCase().trim();
-                    const exists = existingFolders.some(p => (p[p.length - 1] || '').toLowerCase().trim() === normalizedName);
-                    if (exists) { 
-                      toast({ 
-                        title: 'Folder already exists', 
-                        description: `A folder named "${name}" already exists in this location.`,
-                        variant: 'destructive' 
-                      }); 
-                      return; 
-                    }
-                    
-                    try {
-                      console.log('Creating folder with path:', path, 'Type:', typeof path, 'Is Array:', Array.isArray(path));
-                      await createFolder(path, name);
-                      setPath([...path, name]);
-                      setNewFolderName('');
-                      setNewFolderOpen(false);
-                      toast({ title: 'Folder created' });
-                    } catch (error: any) {
-                      console.error('Failed to create folder:', error);
-                      
-                      // Extract user-friendly error message
-                      let errorMessage = 'Unknown error occurred';
-                      if (error?.data?.message) {
-                        errorMessage = error.data.message;
-                      } else if (error?.data?.error) {
-                        errorMessage = error.data.error;
-                      } else if (error instanceof Error) {
-                        errorMessage = error.message;
-                      }
-                      
-                      // Handle specific error cases
-                      if (error?.status === 409 || errorMessage.includes('already exists')) {
-                        errorMessage = `Folder "${name}" already exists in this location.`;
-                      }
-                      
-                      toast({ 
-                        title: 'Failed to create folder', 
-                        description: errorMessage,
-                        variant: 'destructive' 
-                      });
-                    }
-                  }}>Create</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
-           )}
+          <div className="ml-auto flex items-center gap-1 w-full sm:w-auto justify-between sm:justify-end">
+              <div className="flex items-center gap-1">
+              <Button variant={effectiveView === 'grid' ? 'default' : 'outline'} size="icon" onClick={() => setView('grid')}><Grid2X2 className="h-4 w-4" /></Button>
+              <Button variant={view === 'list' ? 'default' : 'outline'} size="icon" onClick={() => setView('list')} className="hidden sm:inline-flex"><List className="h-4 w-4" /></Button>
+              <Button variant={effectiveView === 'cards' ? 'default' : 'outline'} size="icon" onClick={() => setView('cards')}><Grid3X3 className="h-4 w-4" /></Button>
+            </div>
           </div>
         </div>
 
+        <div className="w-full md:hidden">
+          <MobileFilterButton
+            title="Filter documents"
+            description="Search and departments"
+            activeCount={mobileFilterCount}
+          >
+            <div className="space-y-2">
+              <FilterSection title="Search" badge={query.trim() ? 1 : 0} defaultOpen>
+                <div className="space-y-2">
+                  <Input
+                    placeholder="Search documents..."
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                  <Select value={field} onValueChange={(v) => setField(v as any)}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="All Fields" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Fields</SelectItem>
+                      <SelectItem value="title">Title</SelectItem>
+                      <SelectItem value="subject">Subject</SelectItem>
+                      <SelectItem value="sender">Sender</SelectItem>
+                      <SelectItem value="receiver">Receiver</SelectItem>
+                      <SelectItem value="keywords">Keywords</SelectItem>
+                      <SelectItem value="doctype">Doc Type</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </FilterSection>
+
+              {hasRoleAtLeast('systemAdmin') && (
+                <FilterSection
+                  title="Departments"
+                  badge={selectedDepartmentId ? 1 : 0}
+                  defaultOpen={!!selectedDepartmentId}
+                >
+                  <Select 
+                    value={selectedDepartmentId || '__all__'} 
+                    onValueChange={(v) => setSelectedDepartmentId(v === '__all__' ? null : v)}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="All Departments" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">All Departments</SelectItem>
+                      {departments.map(d => (
+                        <SelectItem key={d.id} value={d.id}>
+                          <span className="capitalize">{d.name}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </FilterSection>
+              )}
+            </div>
+          </MobileFilterButton>
+          {hasRoleAtLeast('member') && canCreateDocuments && (
+            <Button
+              type="button"
+              onClick={() => setFabOpen(true)}
+              className="fixed bottom-20 right-4 z-40 h-12 w-12 rounded-full shadow-lg md:hidden"
+              size="icon"
+            >
+              <Plus className="h-5 w-5" />
+              <span className="sr-only">Quick actions</span>
+            </Button>
+          )}
+          {hasRoleAtLeast('member') && canCreateDocuments && (
+            <Sheet open={fabOpen} onOpenChange={setFabOpen}>
+              <SheetContent side="bottom" className="rounded-t-[32px] border-none pb-12 pt-6">
+                <SheetHeader>
+                  <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-muted" />
+                  <SheetTitle className="text-base font-semibold text-center">
+                    Quick Actions
+                  </SheetTitle>
+                </SheetHeader>
+                <div className="mt-6 space-y-3">
+                  <Button
+                    className="w-full justify-between"
+                    onClick={() => {
+                      setFabOpen(false);
+                      window.location.href = `/documents/upload${path.length ? `?path=${encodeURIComponent(path.join('/'))}` : ''}`;
+                    }}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Upload className="h-4 w-4" />
+                      Upload Document
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {path.length ? `/${path.join('/')}` : '/'}
+                    </span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="w-full justify-between"
+                    onClick={() => {
+                      setFabOpen(false);
+                      setNewFolderOpen(true);
+                    }}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Plus className="h-4 w-4" />
+                      New Folder
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {path.length ? `/${path.join('/')}` : '/'}
+                    </span>
+                  </Button>
+                </div>
+              </SheetContent>
+            </Sheet>
+          )}
+        </div>
+
         {/* Folders section (cards)*/}
-        {view !== 'list' && (
+        {effectiveView !== 'list' && (
           <div>
-            <h2 className="text-sm font-semibold text-muted-foreground mb-3">Folders</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <h2 className="text-xs font-semibold text-muted-foreground mb-2 sm:text-sm">Folders</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
               {currentFolders.map((p, idx) => (
                 <Card
                   key={idx}
@@ -717,11 +854,11 @@ function DocumentsPageContent() {
                   onDragLeave={() => setDragOverFolderIdx(null)}
                   onDrop={onFolderDrop(p, idx)}
                 >
-                  <CardContent className="p-5 flex items-center gap-4">
-                    <ThemeIcon icon={FolderIcon} className="h-8 w-8" />
+                  <CardContent className="p-4 sm:p-5 flex items-center gap-3 sm:gap-4">
+                    <ThemeIcon icon={FolderIcon} className="h-7 w-7 sm:h-8 sm:w-8" />
                     <div className="flex-1">
-                      <div className="font-medium">{p[p.length - 1]}</div>
-                      <div className="text-xs text-muted-foreground mb-2">
+                      <div className="font-medium text-sm sm:text-base">{p[p.length - 1]}</div>
+                      <div className="text-[11px] text-muted-foreground mb-2">
                         {getDocumentsInPath(p).length} items
                       </div>
                       {/* Department/Team Badge */}
@@ -781,15 +918,15 @@ function DocumentsPageContent() {
 
         {/* Documents */}
         <div>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-3">
-              <h2 className="text-sm font-semibold text-muted-foreground">Documents</h2>
-              <span className="text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-xs font-semibold text-muted-foreground sm:text-sm">Documents</h2>
+              <span className="text-[11px] text-muted-foreground sm:text-xs">
                 ({filteredDocs.length} {query.trim() ? 'found' : 'in current folder'})
               </span>
             </div>
             {selectedDepartmentId && hasRoleAtLeast('systemAdmin') && (
-              <Badge variant="secondary" className="gap-1">
+              <Badge variant="secondary" className="gap-1 text-[11px]">
                 Filtered by: {departments.find(d => d.id === selectedDepartmentId)?.name}
                 <button 
                   onClick={() => setSelectedDepartmentId(null)}
@@ -801,19 +938,19 @@ function DocumentsPageContent() {
               </Badge>
             )}
           </div>
-          {view === 'list' ? (
-            <div className="overflow-x-auto rounded-md border">
-              <table className="w-full text-sm">
-                    <thead className="bg-muted/50">
-                  <tr>
-                    <th className="p-3 w-10 text-center"><input type="checkbox" checked={selectAll} onChange={toggleAll} aria-label="Select all" /></th>
-                    <th className="text-left p-3">Name</th>
-                    <th className="text-left p-3">Type</th>
-                    <th className="text-left p-3">Category</th>
-                    <th className="text-left p-3">Sender</th>
-                    <th className="text-left p-3">Team</th>
-                    <th className="text-left p-3">Date</th>
-                    <th className="p-3"></th>
+          {effectiveView === 'list' ? (
+            <div className="overflow-x-auto rounded-md border text-xs sm:text-sm">
+              <table className="w-full">
+                <thead className="bg-muted/50">
+                  <tr className="whitespace-nowrap">
+                    <th className="p-2 sm:p-3 w-10 text-center"><input type="checkbox" checked={selectAll} onChange={toggleAll} aria-label="Select all" /></th>
+                    <th className="text-left p-2 sm:p-3">Name</th>
+                    <th className="text-left p-2 sm:p-3">Type</th>
+                    <th className="text-left p-2 sm:p-3">Category</th>
+                    <th className="text-left p-2 sm:p-3">Sender</th>
+                    <th className="text-left p-2 sm:p-3">Team</th>
+                    <th className="text-left p-2 sm:p-3">Date</th>
+                    <th className="p-2 sm:p-3"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -827,21 +964,21 @@ function DocumentsPageContent() {
                       onDragOver={onFolderDragOver}
                       onDrop={onFolderDrop(p, idx)}
                     >
-                      <td className="p-3 text-center">
+                      <td className="p-2 sm:p-3 text-center">
                         <input type="checkbox" disabled aria-label={`Folder ${p[p.length-1]}`} />
                       </td>
-                      <td className="p-3">
+                      <td className="p-2 sm:p-3">
                         <div className="flex items-center gap-2">
-                          <ThemeIcon icon={FolderIcon} className="h-4 w-4" />
-                          <span className="font-medium">{p[p.length - 1]}</span>
+                          <ThemeIcon icon={FolderIcon} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                          <span className="font-medium text-xs sm:text-sm">{p[p.length - 1]}</span>
                         </div>
                       </td>
-                      <td className="p-3 lowercase">
-                        <span className="rounded-md border px-2 py-0.5 text-[10px] uppercase tracking-wide">FOLDER</span>
+                      <td className="p-2 sm:p-3 lowercase">
+                        <span className="rounded-md border px-2 py-0.5 text-[9px] sm:text-[10px] uppercase tracking-wide">FOLDER</span>
                       </td>
-                      <td className="p-3">—</td>
-                      <td className="p-3">—</td>
-                      <td className="p-3">
+                      <td className="p-2 sm:p-3">—</td>
+                      <td className="p-2 sm:p-3">—</td>
+                      <td className="p-2 sm:p-3">
                         {hasRoleAtLeast('teamLead') ? (
                           (() => {
                             const folderMetadata = getFolderMetadata(p);
@@ -871,20 +1008,20 @@ function DocumentsPageContent() {
                           <span className="text-muted-foreground">{getDocumentsInPath(p).length} items</span>
                         )}
                       </td>
-                      <td className="p-3 text-right flex items-center justify-end gap-3">
+                      <td className="p-2 sm:p-3 text-right flex items-center justify-end gap-2 sm:gap-3">
                         {/* Open and Share buttons removed */}
                       </td>
                     </tr>
                   ))}
                   {filteredDocs.map(d => (
                     <tr key={d.id} className="border-t" draggable onDragStart={onDocDragStart} data-id={d.id}>
-                      <td className="p-3 text-center"><input type="checkbox" checked={selectedIds.has(d.id)} onChange={() => toggleOne(d.id)} aria-label={`Select ${d.title || d.name}`} /></td>
-                      <td className="p-3">
+                      <td className="p-2 sm:p-3 text-center"><input type="checkbox" checked={selectedIds.has(d.id)} onChange={() => toggleOne(d.id)} aria-label={`Select ${d.title || d.name}`} /></td>
+                      <td className="p-2 sm:p-3">
                         <Popover>
                           <PopoverTrigger asChild>
                             {editingId === d.id ? (
                               <input
-                                className="border rounded px-2 py-1 text-sm w-full"
+                                className="border rounded px-2 py-1 text-xs sm:text-sm w-full"
                                 value={editingTitle}
                                 onChange={(e) => setEditingTitle(e.target.value)}
                                 onBlur={() => commitEdit(d.id)}
@@ -892,7 +1029,7 @@ function DocumentsPageContent() {
                                 autoFocus
                               />
                             ) : (
-                              <Link href={`/documents/${d.id}`} className="flex items-center gap-2 hover:underline" onDoubleClick={hasRoleAtLeast('member') && canUpdateDocuments ? (e) => { e.preventDefault(); startEdit(d); } : undefined}><ThemeIcon icon={FileText} className="h-4 w-4" /> {d.title || d.name}</Link>
+                              <Link href={`/documents/${d.id}`} className="flex items-center gap-2 hover:underline" onDoubleClick={hasRoleAtLeast('member') && canUpdateDocuments ? (e) => { e.preventDefault(); startEdit(d); } : undefined}><ThemeIcon icon={FileText} className="h-3.5 w-3.5 sm:h-4 sm:w-4" /> <span className="line-clamp-2">{d.title || d.name}</span></Link>
                             )}
                           </PopoverTrigger>
                           <PopoverContent align="start" className="w-96 p-4">
@@ -903,25 +1040,25 @@ function DocumentsPageContent() {
                           </PopoverContent>
                         </Popover>
                       </td>
-                      <td className="p-3 lowercase">
-                        <span className="rounded-md border px-2 py-0.5 text-[10px] uppercase tracking-wide">{getExt(d)}</span>
+                      <td className="p-2 sm:p-3 lowercase">
+                        <span className="rounded-md border px-2 py-0.5 text-[9px] sm:text-[10px] uppercase tracking-wide">{getExt(d)}</span>
                       </td>
-                      <td className="p-3">{d.category || '—'}</td>
-                      <td className="p-3">{d.sender || '—'}</td>
-                      <td className="p-3">
+                      <td className="p-2 sm:p-3">{d.category || '—'}</td>
+                      <td className="p-2 sm:p-3">{d.sender || '—'}</td>
+                      <td className="p-2 sm:p-3">
                         {hasRoleAtLeast('systemAdmin') ? (
                           renderDepartmentBadge((d as any).departmentId || (d as any).department_id || null)
                         ) : (
                           <span className="text-muted-foreground">—</span>
                         )}
                       </td>
-                      <td className="p-3">{formatNiceDate(d)}</td>
-                      <td className="p-3 text-right flex items-center justify-end gap-3">
+                      <td className="p-2 sm:p-3">{formatNiceDate(d)}</td>
+                      <td className="p-2 sm:p-3 text-right flex items-center justify-end gap-2 sm:gap-3">
                         {d.versionNumber && (
-                          <span className="rounded-md border px-2 py-0.5 text-[10px]">v{d.versionNumber}{d.isCurrentVersion ? ' · current' : ''}</span>
+                          <span className="rounded-md border px-2 py-0.5 text-[9px] sm:text-[10px]">v{d.versionNumber}{d.isCurrentVersion ? ' · current' : ''}</span>
                         )}
                         {Array.isArray(d.linkedDocumentIds) && d.linkedDocumentIds.length > 0 && (
-                          <Link href={`/documents/${d.id}#linked`} className="text-xs rounded-md border px-2 py-0.5" title={`${d.linkedDocumentIds.length} linked`}>
+                          <Link href={`/documents/${d.id}#linked`} className="text-[11px] rounded-md border px-2 py-0.5" title={`${d.linkedDocumentIds.length} linked`}>
                             {d.linkedDocumentIds.length} linked
                           </Link>
                         )}
@@ -948,24 +1085,24 @@ function DocumentsPageContent() {
                 </tbody>
               </table>
             </div>
-          ) : view === 'grid' ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          ) : effectiveView === 'grid' ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
               {filteredDocs.map(d => (
                 <Popover key={d.id}>
                   <PopoverTrigger asChild>
                     <Card className="hover:shadow-sm" draggable onDragStart={onDocDragStart} data-id={d.id}>
-                      <CardContent className="p-5">
-                        <Link href={`/documents/${d.id}`} className="flex flex-col gap-3">
+                      <CardContent className="p-4 sm:p-5">
+                        <Link href={`/documents/${d.id}`} className="flex flex-col gap-2.5 sm:gap-3">
                           <div className="flex items-center justify-between">
-                            <ThemeIcon icon={FileText} className="h-8 w-8" />
+                            <ThemeIcon icon={FileText} className="h-7 w-7 sm:h-8 sm:w-8" />
                             <div className="flex items-center gap-2">
                               {hasRoleAtLeast('systemAdmin') && renderDepartmentBadge((d as any).departmentId || (d as any).department_id || null)}
-                              <span className="rounded-md border px-2 py-0.5 text-[10px] uppercase tracking-wide">{(d.documentType || d.type)}</span>
+                              <span className="rounded-md border px-2 py-0.5 text-[9px] sm:text-[10px] uppercase tracking-wide">{(d.documentType || d.type)}</span>
                             </div>
                           </div>
                           {editingId === d.id ? (
                             <input
-                              className="border rounded px-2 py-1 text-sm w-full"
+                              className="border rounded px-2 py-1 text-xs sm:text-sm w-full"
                               value={editingTitle}
                               onChange={(e) => setEditingTitle(e.target.value)}
                               onBlur={() => commitEdit(d.id)}
@@ -973,7 +1110,7 @@ function DocumentsPageContent() {
                               autoFocus
                             />
                           ) : (
-                            <div className="font-medium line-clamp-2" onDoubleClick={hasRoleAtLeast('member') && canUpdateDocuments ? (e) => { e.preventDefault(); startEdit(d); } : undefined}>{d.title || d.name}</div>
+                            <div className="font-medium text-sm sm:text-base line-clamp-2" onDoubleClick={hasRoleAtLeast('member') && canUpdateDocuments ? (e) => { e.preventDefault(); startEdit(d); } : undefined}>{d.title || d.name}</div>
                           )}
                         </Link>
                       </CardContent>
@@ -993,20 +1130,20 @@ function DocumentsPageContent() {
             <div className="space-y-4">
               {filteredDocs.map(d => (
                 <Card key={d.id} className="hover:shadow-sm">
-                  <CardContent className="p-5 space-y-3">
+                  <CardContent className="p-4 sm:p-5 space-y-3">
                     <div className="flex items-center gap-3">
-                      <div className="h-9 w-9 rounded-md bg-violet-100 text-violet-700 flex items-center justify-center"><span className="text-xs font-bold">{(d.documentType || d.type).slice(0,3).toUpperCase()}</span></div>
+                      <div className="h-8 w-8 sm:h-9 sm:w-9 rounded-md bg-violet-100 text-violet-700 flex items-center justify-center"><span className="text-[11px] font-bold sm:text-xs">{(d.documentType || d.type).slice(0,3).toUpperCase()}</span></div>
                       <div className="flex-1">
-                        <div className="font-semibold">{d.title || d.name}</div>
+                        <div className="font-semibold text-sm sm:text-base">{d.title || d.name}</div>
                         {d.aiPurpose && (
-                          <p className="text-sm text-muted-foreground line-clamp-2">Purpose: {d.aiPurpose}</p>
+                          <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2">Purpose: {d.aiPurpose}</p>
                         )}
                       </div>
                       {hasRoleAtLeast('systemAdmin') && renderDepartmentBadge((d as any).departmentId || (d as any).department_id || null)}
                     </div>
-                    <div className="rounded-md border p-3 text-sm text-muted-foreground flex items-center gap-4">
+                    <div className="rounded-md border p-3 text-xs sm:text-sm text-muted-foreground flex flex-wrap items-center gap-2 sm:gap-4">
                       <span>From <span className="text-foreground">{d.sender || '—'}</span> → To <span className="text-foreground">{d.receiver || '—'}</span></span>
-                       <span className="ml-auto">{formatNiceDate(d)}</span>
+                       <span className="sm:ml-auto text-right">{formatNiceDate(d)}</span>
                     </div>
                     <div className="flex items-center justify-between text-xs text-muted-foreground">
                       <span>{d.fileSizeBytes ? `${(d.fileSizeBytes/1024).toFixed(2)} KB` : ''}</span>

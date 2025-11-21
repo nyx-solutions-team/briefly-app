@@ -30,6 +30,7 @@ type OrgPlan = {
 };
 type OrgDiag = {
   orgId: string;
+  orgName?: string | null;
   summary: { teams: number; users: number; documents: number; overrides: number };
   diagnostics: Diagnostic[];
   plan?: OrgPlan | null;
@@ -120,6 +121,18 @@ export default function OrgOpsPage() {
       setMsg(e?.message || 'Fix failed');
     }
   };
+  const fixInitSettings = async () => {
+    try {
+      const result = await apiFetch<{ ok: boolean; categoriesFixed: boolean; userSettingsFixed: number }>(`/ops/fix/${orgId}/init-settings`, { method: 'POST' });
+      const parts = [];
+      if (result.categoriesFixed) parts.push('added categories');
+      if (result.userSettingsFixed > 0) parts.push(`initialized ${result.userSettingsFixed} admin user setting${result.userSettingsFixed > 1 ? 's' : ''}`);
+      setMsg(parts.length > 0 ? `Fixed initialization: ${parts.join(', ')}.` : 'Initialization settings already complete.');
+      await load();
+    } catch (e: any) {
+      setMsg(e?.message || 'Fix failed');
+    }
+  };
 
   const openPolicySQL = useCallback(async () => {
     try {
@@ -147,7 +160,11 @@ export default function OrgOpsPage() {
     );
   }, [data, openPolicySQL]);
 
-  const headerMeta = data?.orgId || orgId ? `Org: ${data?.orgId || orgId}` : undefined;
+  const headerMeta = data?.orgName 
+    ? `${data.orgName} (${data?.orgId || orgId})`
+    : data?.orgId || orgId 
+    ? `Org: ${data?.orgId || orgId}` 
+    : undefined;
 
   if (!orgId) {
     return (
@@ -219,6 +236,7 @@ export default function OrgOpsPage() {
               onCoreTeam={fixCoreTeam}
               onRoleDrift={fixRoleDrift}
               onMembership={fixMembership}
+              onInitSettings={fixInitSettings}
             />
           </div>
 
@@ -370,12 +388,14 @@ function QuickActionsCard({
   onCoreTeam,
   onRoleDrift,
   onMembership,
+  onInitSettings,
 }: {
-  grouped: ReturnType<typeof useMemo>;
+  grouped: { errors: Diagnostic[]; warns: Diagnostic[]; infos: Diagnostic[] };
   onSeedRoles: () => void;
   onCoreTeam: () => void;
   onRoleDrift: () => void;
   onMembership: () => void;
+  onInitSettings: () => void;
 }) {
   const statusIcon =
     grouped.errors.length > 0 ? (
@@ -409,6 +429,11 @@ function QuickActionsCard({
       title: 'Fix membership',
       description: 'Add missing organization_users entries for department members.',
       action: onMembership,
+    },
+    {
+      title: 'Fix initialization',
+      description: 'Add categories to org_settings and initialize user_settings for orgAdmins if missing.',
+      action: onInitSettings,
     },
   ];
 

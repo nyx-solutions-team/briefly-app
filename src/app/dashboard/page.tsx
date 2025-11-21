@@ -20,10 +20,10 @@ import { apiFetch, getApiContext } from '@/lib/api';
 export default function DashboardPage() {
   return (
     <AppLayout>
-      <div className="p-0 md:p-0 space-y-8">
+      <div className="px-3 pt-2 pb-24 md:px-0 md:pb-0 space-y-6 md:space-y-8">
         <HeaderWithIdentity />
-        <div className="px-4 md:px-6">
-        <MainSections />
+        <div className="px-1 sm:px-4 md:px-6">
+          <MainSections />
         </div>
       </div>
     </AppLayout>
@@ -65,25 +65,25 @@ function AdminTeamCards() {
     return (
       <Card className="rounded-xl border border-border bg-card shadow-sm card-premium">
         <CardHeader>
-          <CardTitle className="text-foreground text-xl font-semibold">Team Statistics</CardTitle>
-          <Skeleton className="h-4 w-48" />
+          <CardTitle className="text-foreground text-lg font-semibold sm:text-xl">Team Statistics</CardTitle>
+          <Skeleton className="h-4 w-40 sm:w-48" />
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
             {Array.from({ length: 5 }).map((_, i) => (
-              <Card key={i} className="p-4">
-                <div className="space-y-3">
+              <Card key={i} className="p-4 sm:p-5">
+                <div className="space-y-2.5 sm:space-y-3">
                   <div className="flex items-center gap-3">
                     <Skeleton className="w-10 h-10 rounded-full" />
                     <div className="space-y-2">
-                      <Skeleton className="h-5 w-20" />
                       <Skeleton className="h-4 w-16" />
+                      <Skeleton className="h-3 w-12" />
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Skeleton className="h-4 w-full" />
-                    <Skeleton className="h-4 w-3/4" />
-                    <Skeleton className="h-4 w-1/2" />
+                    <Skeleton className="h-3.5 w-full" />
+                    <Skeleton className="h-3.5 w-3/4" />
+                    <Skeleton className="h-3.5 w-1/2" />
                   </div>
                 </div>
               </Card>
@@ -107,35 +107,35 @@ function AdminTeamCards() {
   return (
     <Card className="rounded-xl border border-border bg-card shadow-sm card-premium">
       <CardHeader>
-        <CardTitle className="text-foreground text-xl font-semibold">Team Statistics</CardTitle>
-        <p className="text-sm text-muted-foreground">Monitor document uploads and team performance</p>
+        <CardTitle className="text-foreground text-lg font-semibold sm:text-xl">Team Statistics</CardTitle>
+        <p className="text-xs text-muted-foreground sm:text-sm">Monitor document uploads and team performance</p>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
           {teams.map((team) => (
-            <Card key={team.id} className="p-4 hover:shadow-md transition-shadow">
-              <div className="space-y-3">
+            <Card key={team.id} className="p-4 sm:p-5 hover:shadow-md transition-shadow">
+              <div className="space-y-2.5 sm:space-y-3">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
                     <Building2 className="h-5 w-5 text-blue-600 dark:text-blue-400" />
                   </div>
                   <div>
-                    <h4 className="font-semibold text-lg">{team.name}</h4>
-                    <p className="text-sm text-muted-foreground">{team.memberCount} members</p>
+                    <h4 className="font-semibold text-base sm:text-lg">{team.name}</h4>
+                    <p className="text-xs text-muted-foreground sm:text-sm">{team.memberCount} members</p>
                   </div>
                 </div>
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">Today</span>
-                    <span className="font-medium text-green-600">{team.docsToday}</span>
+                    <span className="text-xs text-muted-foreground sm:text-sm">Today</span>
+                    <span className="text-sm font-medium text-green-600 sm:text-base">{team.docsToday}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">Yesterday</span>
-                    <span className="font-medium text-blue-600">{team.docsYesterday}</span>
+                    <span className="text-xs text-muted-foreground sm:text-sm">Yesterday</span>
+                    <span className="text-sm font-medium text-blue-600 sm:text-base">{team.docsYesterday}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">This Week</span>
-                    <span className="font-medium text-purple-600">{team.docsThisWeek}</span>
+                    <span className="text-xs text-muted-foreground sm:text-sm">This Week</span>
+                    <span className="text-sm font-medium text-purple-600 sm:text-base">{team.docsThisWeek}</span>
                   </div>
                 </div>
               </div>
@@ -183,25 +183,25 @@ function TeamLeadMemberCards() {
     return (
       <Card className="rounded-xl border border-border bg-card shadow-sm card-premium">
         <CardHeader>
-          <CardTitle className="text-foreground text-xl font-semibold">Team Member Statistics</CardTitle>
-          <Skeleton className="h-4 w-64" />
+          <CardTitle className="text-foreground text-lg font-semibold sm:text-xl">Team Member Statistics</CardTitle>
+          <Skeleton className="h-4 w-48 sm:w-64" />
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
             {Array.from({ length: 6 }).map((_, i) => (
-              <Card key={i} className="p-4">
-                <div className="space-y-3">
+              <Card key={i} className="p-4 sm:p-5">
+                <div className="space-y-2.5 sm:space-y-3">
                   <div className="flex items-center gap-3">
                     <Skeleton className="w-10 h-10 rounded-full" />
                     <div className="space-y-2">
-                      <Skeleton className="h-5 w-24" />
                       <Skeleton className="h-4 w-20" />
+                      <Skeleton className="h-3 w-16" />
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Skeleton className="h-4 w-full" />
-                    <Skeleton className="h-4 w-3/4" />
-                    <Skeleton className="h-4 w-1/2" />
+                    <Skeleton className="h-3.5 w-full" />
+                    <Skeleton className="h-3.5 w-3/4" />
+                    <Skeleton className="h-3.5 w-1/2" />
                   </div>
                 </div>
               </Card>
@@ -230,26 +230,26 @@ function TeamLeadMemberCards() {
       <CardHeader>
         <div className="flex items-center justify-between">
           <div>
-            <CardTitle className="text-foreground text-xl font-semibold">Active Members</CardTitle>
-            <p className="text-sm text-muted-foreground">
+            <CardTitle className="text-foreground text-lg font-semibold sm:text-xl">Active Members</CardTitle>
+            <p className="text-xs text-muted-foreground sm:text-sm">
               Track document uploads by your team members
             </p>
           </div>
         </div>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
           {filteredMembers.map((member) => {
             const hasRecentActivity = member.docsToday > 0 || member.docsYesterday > 0;
             const hasAnyActivity = member.docsThisWeek > 0;
             return (
               <Card
                 key={member.userId}
-                className={`p-4 hover:shadow-md transition-shadow ${
+                className={`p-4 sm:p-5 hover:shadow-md transition-shadow ${
                   !hasRecentActivity ? 'opacity-75' : ''
                 }`}
               >
-              <div className="space-y-3">
+              <div className="space-y-2.5 sm:space-y-3">
                 <div className="flex items-center gap-3">
                     <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
                       hasRecentActivity
@@ -267,24 +267,24 @@ function TeamLeadMemberCards() {
                       }`} />
                   </div>
                     <div className="flex-1">
-                      <h4 className="font-semibold text-lg">
+                      <h4 className="font-semibold text-base sm:text-lg">
                         {member.displayName.startsWith('User ') || member.displayName.length > 20
                           ? `${member.displayName} (${member.role})`
                           : member.displayName
                         }
                       </h4>
                       <div className="flex items-center gap-2">
-                    <p className="text-sm text-muted-foreground">{member.departmentName}</p>
+                    <p className="text-xs text-muted-foreground sm:text-sm">{member.departmentName}</p>
                         {hasRecentActivity ? (
-                          <Badge variant="outline" className="text-xs text-green-600 border-green-200">
+                          <Badge variant="outline" className="text-[10px] sm:text-xs text-green-600 border-green-200">
                             Active
                           </Badge>
                         ) : hasAnyActivity ? (
-                          <Badge variant="outline" className="text-xs text-blue-600 border-blue-200">
+                          <Badge variant="outline" className="text-[10px] sm:text-xs text-blue-600 border-blue-200">
                             This Week
                           </Badge>
                         ) : (
-                          <Badge variant="outline" className="text-xs text-gray-500 border-gray-200">
+                          <Badge variant="outline" className="text-[10px] sm:text-xs text-gray-500 border-gray-200">
                             New Member
                           </Badge>
                         )}
@@ -293,26 +293,26 @@ function TeamLeadMemberCards() {
                 </div>
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">Today</span>
+                    <span className="text-xs text-muted-foreground sm:text-sm">Today</span>
                       <span className={`font-medium ${
                         member.docsToday > 0 ? 'text-green-600' : 'text-gray-400'
-                      }`}>
+                      } text-sm sm:text-base`}>
                         {member.docsToday}
                       </span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">Yesterday</span>
+                    <span className="text-xs text-muted-foreground sm:text-sm">Yesterday</span>
                       <span className={`font-medium ${
                         member.docsYesterday > 0 ? 'text-blue-600' : 'text-gray-400'
-                      }`}>
+                      } text-sm sm:text-base`}>
                         {member.docsYesterday}
                       </span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">This Week</span>
+                    <span className="text-xs text-muted-foreground sm:text-sm">This Week</span>
                       <span className={`font-medium ${
                         member.docsThisWeek > 0 ? 'text-purple-600' : 'text-gray-400'
-                      }`}>
+                      } text-sm sm:text-base`}>
                         {member.docsThisWeek}
                       </span>
                     </div>
@@ -504,7 +504,7 @@ function MainSections() {
   const showTeamLeadCards = !hasAdminDashboard && isTeamLead;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       {/* Always show AdminStats (KPIs) for all users - filtered by dashboard level */}
       <AdminStats />
 
@@ -546,13 +546,13 @@ function HeaderWithIdentity() {
   return (
     <PageHeader
       title="Welcome to Briefly"
-      subtitle="Manage your documents, get AI insights, and streamline your workflows."
+      subtitle={<span className="hidden sm:inline">Manage your documents, get AI insights, and streamline your workflows.</span>}
       sticky
       meta={(
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Badge variant="outline" className="text-xs">{roleText(user?.role)}</Badge>
+        <div className="flex items-center gap-1.5 sm:gap-2 text-[10px] sm:text-xs text-muted-foreground">
+          <Badge variant="outline" className="text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5">{roleText(user?.role)}</Badge>
           {team && (
-            <Badge variant="outline" className="text-xs capitalize" data-color={team.color || 'default'}>{team.name}</Badge>
+            <Badge variant="outline" className="text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 capitalize" data-color={team.color || 'default'}>{team.name}</Badge>
           )}
         </div>
       )}
@@ -643,12 +643,12 @@ function AdminStats() {
 
   if (isLoading) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {Array.from({ length: 4 }).map((_, i) => (
           <Card key={i} className="rounded-2xl">
-            <CardContent className="p-6">
-              <Skeleton className="h-4 w-20 mb-2" />
-              <Skeleton className="h-8 w-16" />
+            <CardContent className="p-4 sm:p-6">
+              <Skeleton className="h-3.5 w-20 mb-2" />
+              <Skeleton className="h-7 w-16" />
             </CardContent>
           </Card>
         ))}
@@ -669,7 +669,7 @@ function AdminStats() {
   return (
     <div className="space-y-6">
       {/* Key Metrics - Always visible for all users */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <MetricCard
           title="Total Documents"
           value={stats.documents.total}
@@ -716,18 +716,18 @@ function MetricCard({ title, value, icon: Icon, trend, color }: {
 
   return (
     <Card className="rounded-xl border border-border bg-card shadow-sm card-premium hover-premium">
-      <CardContent className="p-6">
+      <CardContent className="p-4 sm:p-6">
         <div className="flex items-center justify-between">
           <div className="flex-1">
-            <p className="text-sm font-medium text-muted-foreground mb-1">{title}</p>
-            <p className="text-3xl font-bold text-foreground mb-3">{value}</p>
+            <p className="text-xs font-medium text-muted-foreground mb-0.5 sm:text-sm">{title}</p>
+            <p className="text-2xl font-bold text-foreground mb-2 sm:text-3xl sm:mb-3">{value}</p>
             <div className="flex items-center gap-2">
-              <div className={`w-12 h-1 rounded-full ${themeColors.progressBar} shadow-sm`}></div>
-              <p className="text-xs text-muted-foreground">{trend}</p>
+              <div className={`w-10 sm:w-12 h-1 rounded-full ${themeColors.progressBar} shadow-sm`}></div>
+              <p className="text-[11px] text-muted-foreground sm:text-xs">{trend}</p>
             </div>
           </div>
           <div className={`p-3 rounded-lg ${themeColors.iconBg} ml-4 border border-border/30 shadow-sm`}>
-            <Icon className={`h-6 w-6 ${themeColors.primary}`} />
+            <Icon className={`h-5 w-5 sm:h-6 sm:w-6 ${themeColors.primary}`} />
           </div>
         </div>
       </CardContent>

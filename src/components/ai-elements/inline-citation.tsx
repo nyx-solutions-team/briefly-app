@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { ArrowLeftIcon, ArrowRightIcon } from "lucide-react";
 import {
   type ComponentProps,
+  type ReactNode,
   createContext,
   useCallback,
   useContext,
@@ -294,12 +295,14 @@ export type InlineCitationSourceProps = ComponentProps<"div"> & {
   title?: string;
   url?: string;
   description?: string;
+  actions?: React.ReactNode;
 };
 
 export const InlineCitationSource = ({
   title,
   url,
   description,
+  actions,
   className,
   children,
   ...props
@@ -317,6 +320,7 @@ export const InlineCitationSource = ({
       </p>
     )}
     {children}
+    {actions && <div className="pt-2 flex justify-end">{actions}</div>}
   </div>
 );
 

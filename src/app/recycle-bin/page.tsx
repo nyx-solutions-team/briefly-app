@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Trash2, RotateCcw, RefreshCw, FileText, Clock, AlertTriangle } from 'lucide-react';
 import { formatAppDateTime } from '@/lib/utils';
+import { Checkbox } from '@/components/ui/checkbox';
 
 function getThemeColors(accentColor: string) {
   const colorMap: Record<string, {
@@ -110,6 +111,7 @@ export default function RecycleBinPage() {
   const { isAuthenticated, hasPermission, bootstrapData } = useAuth();
   const [items, setItems] = useState<BinDoc[]>([]);
   const [loading, setLoading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   
   // Check page permission with fallback to functional permissions for backward compatibility
   const permissions = bootstrapData?.permissions || {};
@@ -124,6 +126,10 @@ export default function RecycleBinPage() {
       const { orgId } = getApiContext();
       const res = await apiFetch<BinDoc[]>(`/orgs/${orgId}/recycle-bin`);
       setItems(res || []);
+      setSelectedIds((prev) => {
+        const valid = new Set((res || []).map((d) => d.id));
+        return prev.filter((id) => valid.has(id));
+      });
     } catch (e) {
       console.error('Failed to load recycle bin', e);
     } finally {
@@ -179,6 +185,56 @@ export default function RecycleBinPage() {
       }
       await refresh();
     } catch (e) { console.error('permanent delete failed', e); } finally { setLoading(false); }
+  };
+
+  const bulkDelete = async () => {
+    if (!selectedIds.length) return;
+    if (!confirm(`Permanently delete ${selectedIds.length} document${selectedIds.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    setLoading(true);
+    try {
+      const { orgId } = getApiContext();
+      await Promise.all(
+        selectedIds.map((id) =>
+          apiFetch(`/orgs/${orgId}/documents/${id}/permanent`, { method: 'DELETE' }).catch((err) => {
+            console.error('bulk delete failed for', id, err);
+          })
+        )
+      );
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('documentPurged', { detail: { ids: selectedIds } }));
+      }
+      setSelectedIds([]);
+      await refresh();
+    } catch (e) {
+      console.error('bulk delete failed', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleSelect = (id: string, checked: boolean | string) => {
+    const isChecked = checked === true;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (isChecked) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return Array.from(next);
+    });
+  };
+
+  const allSelected = items.length > 0 && selectedIds.length === items.length;
+
+  const toggleSelectAll = (checked: boolean | string) => {
+    const isChecked = checked === true;
+    if (!items.length) return;
+    if (isChecked) {
+      setSelectedIds(items.map((d) => d.id));
+    } else {
+      setSelectedIds([]);
+    }
   };
 
   const { settings } = useSettings();
@@ -244,6 +300,36 @@ export default function RecycleBinPage() {
           </CardHeader>
         </Card>
 
+        {/* Bulk actions */}
+        {items.length > 0 && (
+          <div className="flex flex-col gap-3 rounded-xl border border-border bg-card/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                checked={allSelected}
+                onCheckedChange={toggleSelectAll}
+                aria-label="Select all documents"
+              />
+              <span className="text-sm text-muted-foreground">
+                {selectedIds.length
+                  ? `${selectedIds.length} selected`
+                  : 'Select documents to enable bulk actions'}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={!selectedIds.length || loading}
+                onClick={bulkDelete}
+                className="gap-2"
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete selected
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Documents list */}
         {items.length === 0 ? (
           <Card className="rounded-xl border border-border bg-card shadow-sm card-premium">
@@ -267,10 +353,16 @@ export default function RecycleBinPage() {
                 <Card key={d.id} className="rounded-xl border border-border bg-card shadow-sm card-premium hover-premium">
                   <CardContent className="p-6">
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4 min-w-0 flex-1">
-                        <div className={`w-12 h-12 rounded-lg ${themeColors.iconBg} flex items-center justify-center border border-border/30 shadow-sm`}>
-                          <FileText className={`h-6 w-6 ${themeColors.primary}`} />
-                        </div>
+                    <div className="flex items-center gap-4 min-w-0 flex-1">
+                      <Checkbox
+                        checked={selectedIds.includes(d.id)}
+                        onCheckedChange={(val) => toggleSelect(d.id, Boolean(val))}
+                        aria-label={`Select ${d.title || d.filename || d.name || d.id}`}
+                        className="mt-1"
+                      />
+                      <div className={`w-12 h-12 rounded-lg ${themeColors.iconBg} flex items-center justify-center border border-border/30 shadow-sm`}>
+                        <FileText className={`h-6 w-6 ${themeColors.primary}`} />
+                      </div>
                         <div className="min-w-0 flex-1">
                           <div className="font-semibold text-foreground truncate" title={d.title || d.filename || d.name || d.id}>
                             {d.title || d.filename || d.name || d.id}

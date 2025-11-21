@@ -41,29 +41,36 @@ export function PageHeader({
         className
       )}
     >
-      <div className={cn('px-4 md:px-6', sticky ? 'py-3' : 'pt-1 pb-4')}>
+      <div className={cn('px-3 sm:px-4 md:px-6', sticky ? 'py-2 sm:py-3' : 'pt-1 pb-2 sm:pb-4')}>
         <div className={cn('mx-auto', containerClassName || 'max-w-6xl')}>
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                {backHref && (
-                  <Link href={backHref} className="text-sm text-muted-foreground hover:underline inline-flex items-center gap-1">
-                    <ArrowLeft className="h-4 w-4" /> {backLabel}
-                  </Link>
-                )}
+          <div className="flex items-start justify-between gap-2 sm:gap-3">
+            <div className="min-w-0 flex-1">
+              {backHref && (
+                <Link href={backHref} className="text-xs sm:text-sm text-muted-foreground hover:underline inline-flex items-center gap-1 mb-1">
+                  <ArrowLeft className="h-3 w-3 sm:h-4 sm:w-4" /> 
+                  <span className="hidden sm:inline">{backLabel}</span>
+                </Link>
+              )}
+              <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+                {icon && <span className="text-primary flex-shrink-0">{icon}</span>}
+                <H1 className="truncate text-lg sm:text-xl md:text-2xl lg:text-3xl font-semibold leading-tight">{title}</H1>
               </div>
-              <div className="flex items-center gap-2">
-                {icon && <span className="text-primary">{icon}</span>}
-                <H1 className="truncate text-2xl md:text-3xl">{title}</H1>
-              </div>
-              {subtitle && <Muted className="mt-1">{subtitle}</Muted>}
+              {subtitle && (
+                <Muted className="mt-0.5 sm:mt-1 text-xs sm:text-sm line-clamp-1 sm:line-clamp-none">
+                  {subtitle}
+                </Muted>
+              )}
+              {meta && (
+                <div className="md:hidden text-[10px] sm:text-xs text-muted-foreground mt-1.5 sm:mt-2">
+                  {meta}
+                </div>
+              )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
               {meta && <div className="hidden md:block text-xs text-muted-foreground mr-2">{meta}</div>}
               {actions}
             </div>
           </div>
-          {meta && <div className="md:hidden text-xs text-muted-foreground mt-2">{meta}</div>}
         </div>
       </div>
     </div>

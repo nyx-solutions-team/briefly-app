@@ -699,13 +699,22 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
     return <AccessDenied message="You don't have permission to access the upload page." />;
   }
 
-  // Auto-select first department for system admins when no department is selected
+  // Auto-select a department when none is selected
   React.useEffect(() => {
-    if (hasRoleAtLeast('systemAdmin') && !selectedDepartmentId && departments.length > 0) {
-      setSelectedDepartmentId(departments[0].id);
+    if (!selectedDepartmentId && departments.length > 0) {
+      // For non-admins, prefer a team where the user is a lead
+      let preferred: any = null;
+      if (!hasRoleAtLeast('systemAdmin')) {
+        preferred = departments.find((d: any) => d.is_lead);
+      }
+      // Otherwise, or if no lead team, prefer a team where the user is a member
+      if (!preferred) {
+        preferred = departments.find((d: any) => d.is_member);
+      }
+      setSelectedDepartmentId(preferred?.id || departments[0].id);
     }
-  }, [hasRoleAtLeast, selectedDepartmentId, departments, setSelectedDepartmentId]);
-  
+  }, [selectedDepartmentId, departments, hasRoleAtLeast, setSelectedDepartmentId]);
+
   useEffect(() => {
     const p = searchParams?.get('path');
     const v = searchParams?.get('version');
@@ -1573,11 +1582,11 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
 
   return (
     <AppLayout>
-      <div className="p-0 md:p-0 space-y-6">
+      <div className="px-3 pt-2 pb-24 md:px-0 md:pb-0 space-y-4 md:space-y-6">
         {planBlocked && (
-          <Alert variant="destructive">
-            <AlertTitle>{planExpired ? 'Plan expired' : 'Storage limit reached'}</AlertTitle>
-            <AlertDescription>
+          <Alert variant="destructive" className="mx-1 sm:mx-4 md:mx-6">
+            <AlertTitle className="text-sm sm:text-base">{planExpired ? 'Plan expired' : 'Storage limit reached'}</AlertTitle>
+            <AlertDescription className="text-xs sm:text-sm">
               {planBlockingMessage} <a className="underline" href={SUPPORT_CONTACT}>Contact support</a> to continue.
               {planLimitBytes > 0 && (
                 <div className="mt-3">
@@ -1591,43 +1600,43 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
           </Alert>
         )}
         {!planBlocked && planGraceMessage && (
-          <Alert className="border-yellow-400/70 bg-yellow-50 text-yellow-900">
-            <AlertTitle>Plan term reached</AlertTitle>
-            <AlertDescription>
+          <Alert className="border-yellow-400/70 bg-yellow-50 text-yellow-900 mx-1 sm:mx-4 md:mx-6">
+            <AlertTitle className="text-sm sm:text-base">Plan term reached</AlertTitle>
+            <AlertDescription className="text-xs sm:text-sm">
               {planGraceMessage} <a className="underline" href={SUPPORT_CONTACT}>Contact support</a>.
             </AlertDescription>
           </Alert>
         )}
         <div className="bg-card/50 border-b border-border/50 backdrop-blur-sm sticky top-0 z-10">
-          <div className="px-4 md:px-6 py-3">
+          <div className="px-3 sm:px-4 md:px-6 py-2 sm:py-3">
             <div className="max-w-6xl mx-auto">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-3">
+                <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
                   <Button
                     variant="ghost"
                     size="sm"
                     onClick={() => router.push('/documents')}
-                    className="hover-premium focus-premium p-2 h-8"
+                    className="hover-premium focus-premium p-1.5 sm:p-2 h-7 sm:h-8 flex-shrink-0"
                   >
-                    <ArrowLeft className="h-4 w-4" />
+                    <ArrowLeft className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                   </Button>
                   <div className="min-w-0 flex-1">
-                    <h1 className="text-lg font-semibold text-foreground truncate">
+                    <h1 className="text-base sm:text-lg font-semibold text-foreground truncate">
                       {folderPath.length ? `Upload to /${folderPath.join('/')}` : "Upload Documents"}
                     </h1>
-                    <p className="text-xs text-muted-foreground mt-0.5">
+                    <p className="text-[10px] sm:text-xs text-muted-foreground mt-0.5 line-clamp-1 sm:line-clamp-none">
                       {folderPath.length ?
-                        `Add files to the ${folderPath[folderPath.length - 1]} folder. We'll analyze, organize, and prepare smart metadata for you.` :
-                        "Add files and we'll analyze, organize, and prepare smart metadata for you."
+                        `Add files to the ${folderPath[folderPath.length - 1]} folder.` :
+                        "Add files and we'll analyze them for you."
                       }
                     </p>
                   </div>
                 </div>
-                {hasRoleAtLeast('systemAdmin') && folderPath.length === 0 && (
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className="text-xs text-muted-foreground font-medium">Department</span>
+                {departments.length > 0 && (
+                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 w-full sm:w-auto">
+                    <span className="text-[10px] sm:text-xs text-muted-foreground font-medium hidden sm:inline">Department</span>
                     <UiSelect value={selectedDepartmentId || undefined as any} onValueChange={(v) => setSelectedDepartmentId(v)}>
-                      <UiSelectTrigger className="w-[180px] h-8 text-xs">
+                      <UiSelectTrigger className="w-full sm:w-[180px] h-7 sm:h-8 text-[10px] sm:text-xs">
                         <UiSelectValue placeholder="Select department" />
                       </UiSelectTrigger>
                       <UiSelectContent>
@@ -1641,35 +1650,36 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
           </div>
         </div>
         {!hasRoleAtLeast('member') && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4">
-            <div className="font-semibold text-destructive">Uploading is restricted</div>
-            <p className="text-sm text-muted-foreground mt-1">Your role does not include upload permissions. Please contact an administrator to request <span className="font-medium">Content Manager</span> access or share files with someone who can upload on your behalf.</p>
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 sm:p-4 mx-1 sm:mx-4 md:mx-6">
+            <div className="font-semibold text-destructive text-sm sm:text-base">Uploading is restricted</div>
+            <p className="text-xs sm:text-sm text-muted-foreground mt-1">Your role does not include upload permissions. Please contact an administrator to request <span className="font-medium">Content Manager</span> access or share files with someone who can upload on your behalf.</p>
           </div>
         )}
 
         {hasRoleAtLeast('member') && queue.length === 0 && (
-          <Card className="rounded-xl border-2 border-dashed border-border/50 bg-card card-premium hover-premium">
-            <CardContent className="py-12">
-              <div
-                role="button"
-                tabIndex={0}
-                aria-describedby="upload-help"
-                className={`mx-auto max-w-2xl border-2 border-dashed rounded-xl bg-secondary/30 text-center p-12 transition-all duration-200 ${dragOver ? 'border-primary/50 bg-accent/20 scale-[1.01]' : 'hover:bg-accent/15 hover:border-primary/30 hover:shadow-lg'}`}
-                onClick={onBrowse}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onBrowse(); }}
-                onDragEnter={() => setDragOver(true)}
-                onDragLeave={() => setDragOver(false)}
-                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-                onDrop={(e) => { setDragOver(false); onDrop(e); }}
-              >
-                <div className="mb-6">
-                  <UploadCloud className="h-16 w-16 mx-auto text-primary mb-4 drop-shadow-sm" />
-                </div>
-                <div className="space-y-2 mb-6">
-                  <div className="text-xl font-semibold text-foreground">Drag & drop files here</div>
-                  <div className="text-sm text-muted-foreground">or click to browse your computer</div>
-                </div>
-                <div className="flex flex-wrap items-center justify-center gap-2">
+          <div className="px-1 sm:px-4 md:px-6">
+            <Card className="rounded-xl border-2 border-dashed border-border/50 bg-card card-premium hover-premium">
+              <CardContent className="py-6 sm:py-8 md:py-12">
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-describedby="upload-help"
+                  className={`mx-auto max-w-2xl border-2 border-dashed rounded-xl bg-secondary/30 text-center p-6 sm:p-8 md:p-12 transition-all duration-200 ${dragOver ? 'border-primary/50 bg-accent/20 scale-[1.01]' : 'hover:bg-accent/15 hover:border-primary/30 hover:shadow-lg'}`}
+                  onClick={onBrowse}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onBrowse(); }}
+                  onDragEnter={() => setDragOver(true)}
+                  onDragLeave={() => setDragOver(false)}
+                  onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                  onDrop={(e) => { setDragOver(false); onDrop(e); }}
+                >
+                  <div className="mb-4 sm:mb-6">
+                    <UploadCloud className="h-12 w-12 sm:h-16 sm:w-16 mx-auto text-primary mb-3 sm:mb-4 drop-shadow-sm" />
+                  </div>
+                  <div className="space-y-1 sm:space-y-2 mb-4 sm:mb-6">
+                    <div className="text-lg sm:text-xl font-semibold text-foreground">Drag & drop files here</div>
+                    <div className="text-xs sm:text-sm text-muted-foreground">or click to browse your computer</div>
+                  </div>
+                <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
                   {[
                     { type: 'PDF', color: 'bg-red-500/10 text-red-600 border-red-500/20' },
                     { type: 'TXT', color: 'bg-gray-500/10 text-gray-600 border-gray-500/20' },
@@ -1677,16 +1687,16 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                     { type: 'JPG', color: 'bg-green-500/10 text-green-600 border-green-500/20' },
                     { type: 'PNG', color: 'bg-cyan-500/10 text-cyan-600 border-cyan-500/20' }
                   ].map(({ type, color }) => (
-                    <span key={type} className={`rounded-full border px-3 py-1 text-xs font-medium ${color} transition-colors`}>
+                    <span key={type} className={`rounded-full border px-2 sm:px-3 py-0.5 sm:py-1 text-[10px] sm:text-xs font-medium ${color} transition-colors`}>
                       {type}
                     </span>
                   ))}
                 </div>
-                <div id="upload-help" className="mt-4 text-xs text-muted-foreground text-center space-y-1">
+                <div id="upload-help" className="mt-3 sm:mt-4 text-[10px] sm:text-xs text-muted-foreground text-center space-y-0.5 sm:space-y-1">
                   <div>We'll automatically extract metadata and generate a summary for you</div>
-                  <div>Need nested folders? Drop a .zip or use the buttons above to upload a folder.</div>
+                  <div className="hidden sm:block">Need nested folders? Drop a .zip or use the buttons below to upload a folder.</div>
                 </div>
-                <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+                <div className="mt-6 sm:mt-8 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
                   <input
                     ref={inputRef}
                     type="file"
@@ -1698,11 +1708,12 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                   />
                   <Button 
                     onClick={(e) => { e.stopPropagation(); onBrowse(); }} 
-                    className="gap-2 hover-premium focus-premium px-6 py-2"
+                    className="gap-1.5 sm:gap-2 hover-premium focus-premium px-4 sm:px-6 py-1.5 sm:py-2 text-xs sm:text-sm"
                     size="sm"
                   >
-                    <UploadCloud className="h-4 w-4" /> 
-                    Browse Files
+                    <UploadCloud className="h-3.5 w-3.5 sm:h-4 sm:w-4" /> 
+                    <span className="hidden sm:inline">Browse Files</span>
+                    <span className="sm:hidden">Browse</span>
                   </Button>
                   <input
                     ref={zipInputRef}
@@ -1715,11 +1726,12 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="gap-2"
+                    className="gap-1.5 sm:gap-2 text-xs sm:text-sm"
                     onClick={(e) => { e.stopPropagation(); zipInputRef.current?.click(); }}
                   >
-                    <UploadCloud className="h-4 w-4" />
-                    Upload ZIP
+                    <UploadCloud className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                    <span className="hidden sm:inline">Upload ZIP</span>
+                    <span className="sm:hidden">ZIP</span>
                   </Button>
                   <input
                     ref={(el) => {
@@ -1739,14 +1751,15 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="gap-2"
+                    className="gap-1.5 sm:gap-2 text-xs sm:text-sm"
                     onClick={(e) => { e.stopPropagation(); folderInputRef.current?.click(); }}
                   >
-                    <FolderOpen className="h-4 w-4" />
-                    Upload Folder
+                    <FolderOpen className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                    <span className="hidden sm:inline">Upload Folder</span>
+                    <span className="sm:hidden">Folder</span>
                   </Button>
                 </div>
-                <p className="mt-4 text-xs text-muted-foreground">
+                <p className="mt-3 sm:mt-4 text-[10px] sm:text-xs text-muted-foreground">
                   Supports up to {BULK_UPLOAD_LIMIT} files per bulk upload (PDF, TXT/MD, JPG, PNG). Individual files must be under {BULK_UPLOAD_MAX_FILE_MB}MB.
                 </p>
                 {(lastBulkSummary || skipDetails) && (
@@ -1827,35 +1840,39 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
               </div>
             </CardContent>
           </Card>
+          </div>
         )}
 
         {hasRoleAtLeast('member') && queue.length > 0 && (
           <>
+          <div className="px-1 sm:px-4 md:px-6">
             <Card className="rounded-xl card-premium">
-              <CardHeader className="flex flex-col gap-3 pb-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-primary/10 border border-primary/20">
-                      <UploadCloud className="h-5 w-5 text-primary" />
+              <CardHeader className="flex flex-col gap-2 sm:gap-3 pb-3 sm:pb-4">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
+                  <div className="flex items-center gap-2 sm:gap-3">
+                    <div className="p-1.5 sm:p-2 rounded-lg bg-primary/10 border border-primary/20">
+                      <UploadCloud className="h-4 w-4 sm:h-5 sm:w-5 text-primary" />
                     </div>
-                    <div>
-                      <CardTitle className="text-lg font-semibold">Upload Queue</CardTitle>
-                      <p className="text-xs text-muted-foreground mt-0.5">
+                    <div className="min-w-0 flex-1">
+                      <CardTitle className="text-base sm:text-lg font-semibold">Upload Queue</CardTitle>
+                      <p className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">
                         {queue.filter(item => item.status === 'ready').length} of {queue.length}/10 files ready to save
                       </p>
                     </div>
                   </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                     {queue.filter(item => item.status === 'ready' && !item.locked).length > 1 && (
                       <Button
                         variant="default"
                         size="sm"
                         onClick={saveAllReady}
                         disabled={planBlocked || isSavingAll}
-                        className="gap-2 hover-premium focus-premium"
+                        className="gap-1.5 sm:gap-2 hover-premium focus-premium text-xs sm:text-sm"
                       >
                         <Check className="h-3 w-3" />
-                        Save All ({queue.filter(item => item.status === 'ready' && !item.locked).length})
+                        <span className="hidden sm:inline">Save All</span>
+                        <span className="sm:hidden">All</span>
+                        <span className="ml-0.5">({queue.filter(item => item.status === 'ready' && !item.locked).length})</span>
                       </Button>
                     )}
                     {carouselMode && queue.length > 1 && (
@@ -1867,7 +1884,7 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                         const i = (prev ?? 0) - 1;
                         return i < 0 ? queue.length - 1 : i;
                           })}
-                          className="hover-premium focus-premium"
+                          className="hover-premium focus-premium text-xs sm:text-sm"
                         >
                           Prev
                         </Button>
@@ -1878,7 +1895,7 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                         const i = (prev ?? 0) + 1;
                         return i >= queue.length ? 0 : i;
                           })}
-                          className="hover-premium focus-premium"
+                          className="hover-premium focus-premium text-xs sm:text-sm"
                         >
                           Next
                         </Button>
@@ -1889,7 +1906,7 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                         variant="ghost"
                         size="sm"
                         onClick={() => setCarouselMode(m => !m)}
-                        className="hover-premium focus-premium"
+                        className="hover-premium focus-premium text-xs sm:text-sm"
                       >
                         {carouselMode ? 'List' : 'Carousel'}
                       </Button>
@@ -1897,10 +1914,10 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                   </div>
                 </div>
                 {typeof activeIndex === 'number' && queue[activeIndex] && (
-                  <div className="text-xs text-muted-foreground">Viewing {activeIndex + 1} of {queue.length}</div>
+                  <div className="text-[10px] sm:text-xs text-muted-foreground">Viewing {activeIndex + 1} of {queue.length}</div>
                 )}
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-3 sm:space-y-4">
                 {carouselMode && typeof activeIndex === 'number' && queue[activeIndex] ? (
                   (() => {
                     const item = queue[activeIndex]!;
@@ -1910,38 +1927,39 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                       : folderPath;
                     const shouldUseRemotePreview = Boolean(item.docId) && (!item.previewUrl || item.prefilledFromQueue);
                     return (
-                      <div className={`rounded-lg border p-6 ring-1 ring-primary`}>
+                      <div className={`rounded-lg border p-3 sm:p-4 md:p-6 ring-1 ring-primary`}>
                         {/* Header with file info and actions */}
-                        <div className="flex items-center justify-between gap-3 mb-6">
-                          <div className="min-w-0">
-                            <div className="truncate font-medium text-lg" title={item.file.name}>{item.file.name}</div>
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 mb-4 sm:mb-6">
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium text-sm sm:text-base md:text-lg" title={item.file.name}>{item.file.name}</div>
                             <div
-                              className="text-xs text-muted-foreground break-words whitespace-normal"
+                              className="text-[10px] sm:text-xs text-muted-foreground break-words whitespace-normal line-clamp-1"
                               title={`/${targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}`}
                             >
                               /{targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}
                             </div>
-                            <div className="text-sm text-muted-foreground capitalize">{item.status}</div>
+                            <div className="text-xs sm:text-sm text-muted-foreground capitalize">{item.status}</div>
                           </div>
-                          <div className="w-40 flex flex-col items-end gap-1">
+                          <div className="w-full sm:w-40 flex flex-col sm:items-end gap-1">
                             <Progress value={item.progress} />
                             {item.note && (
-                              <span className="text-xs text-muted-foreground text-right">{item.note}</span>
+                              <span className="text-[10px] sm:text-xs text-muted-foreground text-right">{item.note}</span>
                             )}
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                             {item.status === 'idle' && !isProcessingAll && (
                               <Button
                                 size="sm"
                                 onClick={() => processItem(i)}
                                 disabled={planBlocked || !!item.locked}
+                                className="text-xs sm:text-sm"
                               >
                                 Process
                               </Button>
                             )}
                             {item.status === 'ready' && (
                               <>
-                                <Button size="sm" onClick={() => handleSave(i)} disabled={planBlocked || item.locked}>
+                                <Button size="sm" onClick={() => handleSave(i)} disabled={planBlocked || item.locked} className="text-xs sm:text-sm">
                                   Save
                                 </Button>
                                 <Button
@@ -1949,31 +1967,32 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                                   variant="destructive"
                                   onClick={() => handleReject(i)}
                                   disabled={item.locked}
+                                  className="text-xs sm:text-sm"
                                 >
                                   Reject
                                 </Button>
                               </>
                             )}
                             {item.status === 'saving' && (
-                              <Button size="sm" variant="outline" disabled className="gap-2">
-                                <Loader2 className="h-4 w-4 animate-spin" />
+                              <Button size="sm" variant="outline" disabled className="gap-1.5 sm:gap-2 text-xs sm:text-sm">
+                                <Loader2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
                                 {item.note || 'Saving…'}
                               </Button>
                             )}
-                            {(item.status === 'success' || item.status === 'error') && <Button size="sm" variant="outline" onClick={() => void removeQueueItem(i)}>Remove</Button>}
+                            {(item.status === 'success' || item.status === 'error') && <Button size="sm" variant="outline" onClick={() => void removeQueueItem(i)} className="text-xs sm:text-sm">Remove</Button>}
                           </div>
                         </div>
 
                         {/* Enhanced layout: Left side - Form, Right side - Preview */}
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                           {/* Left side - Form data */}
-                          <div className="space-y-4">
+                          <div className="space-y-3 sm:space-y-4">
                       {item.status === 'ready' && item.form && (
-                        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="mt-2 sm:mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-3">
                             {/* Link as version vs new */}
                             <div className="md:col-span-2">
-                              <label className="text-sm">Save mode</label>
-                              <div className="mt-2 flex items-center gap-4">
+                              <label className="text-xs sm:text-sm font-medium">Save mode</label>
+                              <div className="mt-1.5 sm:mt-2 flex flex-wrap items-center gap-2 sm:gap-4">
                                 <label className="flex items-center gap-2 text-sm">
                                   <input type="radio" checked={item.linkMode === 'new'} onChange={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, linkMode: 'new' } : q))} /> New Document
                                 </label>
@@ -2000,61 +2019,61 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                               </div>
                             </div>
                             <div>
-                              <label className="text-xs text-muted-foreground flex items-center gap-1">
+                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
                                 <FileText className="h-3 w-3" />
                                 Title
                               </label>
-                              <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.title} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, title: e.target.value } } : q))} />
+                              <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.title} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, title: e.target.value } } : q))} />
                             </div>
                             <div>
-                              <label className="text-xs text-muted-foreground flex items-center gap-1">
+                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
                                 <FileText className="h-3 w-3" />
                                 Filename
                               </label>
-                              <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.filename} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, filename: e.target.value } } : q))} />
+                              <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.filename} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, filename: e.target.value } } : q))} />
                             </div>
                             <div>
-                              <label className="text-xs text-muted-foreground flex items-center gap-1">
+                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
                                 <User className="h-3 w-3" />
                                 Sender
                               </label>
-                              <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.sender} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, sender: e.target.value } } : q))} />
+                              <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.sender} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, sender: e.target.value } } : q))} />
                             </div>
                             <div>
-                              <label className="text-xs text-muted-foreground flex items-center gap-1">
+                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
                                 <UserCheck className="h-3 w-3" />
                                 Receiver
                               </label>
-                              <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.receiver} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, receiver: e.target.value } } : q))} />
+                              <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.receiver} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, receiver: e.target.value } } : q))} />
                             </div>
                             <div>
-                              <label className="text-xs text-muted-foreground flex items-center gap-1">
+                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
                                 <Calendar className="h-3 w-3" />
                                 Document Date
                               </label>
-                              <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.documentDate} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, documentDate: e.target.value } } : q))} />
+                              <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.documentDate} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, documentDate: e.target.value } } : q))} />
                             </div>
                             <div className="md:col-span-2">
-                              <label className="text-xs text-muted-foreground flex items-center gap-1">
+                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
                                 <MessageSquare className="h-3 w-3" />
                                 Subject
                               </label>
-                              <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.subject} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, subject: e.target.value } } : q))} />
+                              <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.subject} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, subject: e.target.value } } : q))} />
                             </div>
                             <div className="md:col-span-2">
-                              <label className="text-xs text-muted-foreground flex items-center gap-1.5 font-medium">
-                                <MessageSquare className="h-3.5 w-3.5" />
+                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
+                                <MessageSquare className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                                 Description
                               </label>
-                              <textarea rows={3} className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm resize-none" value={item.form.description} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, description: e.target.value } } : q))} />
+                              <textarea rows={3} className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm resize-none" value={item.form.description} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, description: e.target.value } } : q))} />
                             </div>
                             <div>
-                              <label className="text-xs text-muted-foreground flex items-center gap-1.5 font-medium">
-                                <Bookmark className="h-3.5 w-3.5" />
+                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
+                                <Bookmark className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                                 Category
                               </label>
                               <UiSelect value={item.form?.category || 'General'} onValueChange={(value) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, category: value } } : q))}>
-                                <UiSelectTrigger className="mt-1 w-full">
+                                <UiSelectTrigger className="mt-1 w-full h-8 sm:h-9 text-xs sm:text-sm">
                                   <UiSelectValue placeholder="Select category..." />
                                 </UiSelectTrigger>
                                 <UiSelectContent>
@@ -2067,55 +2086,56 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                               </UiSelect>
                             </div>
                             <div>
-                              <label className="text-xs text-muted-foreground flex items-center gap-1.5 font-medium">
-                                <Hash className="h-3.5 w-3.5" />
+                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
+                                <Hash className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                                 Keywords (comma)
                               </label>
-                              <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.keywords} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, keywords: e.target.value } } : q))} />
+                              <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.keywords} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, keywords: e.target.value } } : q))} />
                             </div>
                             <div>
-                              <label className="text-xs text-muted-foreground flex items-center gap-1.5 font-medium">
-                                <Tag className="h-3.5 w-3.5" />
+                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
+                                <Tag className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                                 Tags
                               </label>
                               <input 
-                                className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" 
-                                placeholder="Enter tags separated by commas (e.g., invoice, payment, 2024)"
+                                className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" 
+                                placeholder="Enter tags separated by commas"
                                 value={item.form.tags} 
                                 onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, tags: e.target.value } } : q))} 
                               />
                             </div>
                             <div className="md:col-span-2">
-                              <label className="text-xs text-muted-foreground flex items-center gap-1.5 font-medium">
-                                <FolderOpen className="h-3.5 w-3.5" />
+                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
+                                <FolderOpen className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                                 Upload Destination
                                 {folderPath.length > 0 && (
-                                  <span className="ml-2 text-primary font-medium">
+                                  <span className="ml-1 sm:ml-2 text-primary font-medium text-xs sm:text-sm">
                                     /{folderPath.join('/')}
                                   </span>
                                 )}
                               </label>
                               <div className="mt-1 grid grid-cols-1 md:grid-cols-2 gap-2">
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-1.5 sm:gap-2">
                                   <input
-                                    className="flex-1 rounded-md border bg-background p-2 text-sm"
+                                    className="flex-1 rounded-md border bg-background p-1.5 sm:p-2 text-xs sm:text-sm"
                                     value={`/${folderPath.join('/')}`}
                                     readOnly
                                   />
-                                  <Button variant="outline" size="sm" onClick={() => setFolderCommandOpen(true)}>
+                                  <Button variant="outline" size="sm" onClick={() => setFolderCommandOpen(true)} className="text-xs sm:text-sm h-8 sm:h-9">
                                     Browse…
                                   </Button>
                                 </div>
                                 <input 
-                                  className="rounded-md border bg-background p-2"
+                                  className="rounded-md border bg-background p-1.5 sm:p-2 text-xs sm:text-sm"
                                   placeholder="Or type path e.g., Finance/2025/Q1"
                                   value={folderPath.join('/')}
                                   onChange={(e) => setFolderPath(e.target.value.split('/').filter(Boolean))}
                                 />
                               </div>
-                              <p className="mt-1 text-xs text-muted-foreground">
+                              <p className="mt-1 text-[10px] sm:text-xs text-muted-foreground">
                                 Documents will be uploaded to: <span className="font-medium">/{folderPath.join('/') || 'Root'}</span>
-                                <br />
+                                <br className="hidden sm:block" />
+                                <span className="sm:hidden"> </span>
                                 New folders will be created automatically if they don't exist.
                               </p>
                             </div>
@@ -2124,9 +2144,9 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                           </div>
 
                           {/* Right side - Enhanced file preview */}
-                          <div className="space-y-4">
+                          <div className="space-y-3 sm:space-y-4">
                             <div>
-                              <h3 className="text-sm font-medium mb-3">Document Preview</h3>
+                              <h3 className="text-xs sm:text-sm font-medium mb-2 sm:mb-3">Document Preview</h3>
                               {shouldUseRemotePreview ? (
                                 <FilePreview
                                   documentId={item.docId as string}
@@ -2134,15 +2154,15 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                                   extractedContent={item.extracted?.ocrText}
                                 />
                               ) : (
-                                <UploadFilePreview file={item.file} previewUrl={item.previewUrl} height="75vh" />
+                                <UploadFilePreview file={item.file} previewUrl={item.previewUrl} height="50vh sm:75vh" />
                               )}
                             </div>
                             
                             {/* Image rotation controls */}
                             {!shouldUseRemotePreview && !item.file.name.toLowerCase().endsWith('.pdf') && (
-                              <div className="flex items-center gap-2">
-                                <Button size="sm" variant="outline" onClick={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, rotation: ((q.rotation || 0) - 90 + 360) % 360 } : q))}>Rotate Left</Button>
-                                <Button size="sm" variant="outline" onClick={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, rotation: ((q.rotation || 0) + 90) % 360 } : q))}>Rotate Right</Button>
+                              <div className="flex items-center gap-1.5 sm:gap-2">
+                                <Button size="sm" variant="outline" onClick={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, rotation: ((q.rotation || 0) - 90 + 360) % 360 } : q))} className="text-xs sm:text-sm">Rotate Left</Button>
+                                <Button size="sm" variant="outline" onClick={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, rotation: ((q.rotation || 0) + 90) % 360 } : q))} className="text-xs sm:text-sm">Rotate Right</Button>
                               </div>
                             )}
                           </div>
@@ -2156,33 +2176,33 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                       ? item.folderPathOverride
                       : folderPath;
                     return (
-                      <div key={i} className={`rounded-lg border p-3 ${activeIndex === i ? 'ring-1 ring-primary' : ''}`}>
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate font-medium" title={item.file.name}>{item.file.name}</div>
-                          <div className="text-xs text-muted-foreground capitalize">{item.status}</div>
+                      <div key={i} className={`rounded-lg border p-2.5 sm:p-3 ${activeIndex === i ? 'ring-1 ring-primary' : ''}`}>
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-medium text-sm sm:text-base" title={item.file.name}>{item.file.name}</div>
+                          <div className="text-[10px] sm:text-xs text-muted-foreground capitalize">{item.status}</div>
                           <div
-                            className="text-xs text-muted-foreground break-words whitespace-normal"
+                            className="text-[10px] sm:text-xs text-muted-foreground break-words whitespace-normal line-clamp-1"
                             title={`/${targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}`}
                           >
                             /{targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}
                           </div>
                         </div>
-                        <div className="w-40 flex flex-col items-end gap-1">
+                        <div className="w-full sm:w-40 flex flex-col sm:items-end gap-1">
                           <Progress value={item.progress} />
                           {item.note && (
-                            <span className="text-xs text-muted-foreground text-right">{item.note}</span>
+                            <span className="text-[10px] sm:text-xs text-muted-foreground text-right">{item.note}</span>
                           )}
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                           {item.status === 'idle' && !isProcessingAll && (
-                            <Button size="sm" onClick={() => processItem(i)} disabled={planBlocked || !!item.locked}>
+                            <Button size="sm" onClick={() => processItem(i)} disabled={planBlocked || !!item.locked} className="text-xs sm:text-sm">
                               Process
                             </Button>
                           )}
                           {item.status === 'ready' && (
                             <>
-                              <Button size="sm" onClick={() => handleSave(i)} disabled={planBlocked || item.locked}>
+                              <Button size="sm" onClick={() => handleSave(i)} disabled={planBlocked || item.locked} className="text-xs sm:text-sm">
                                 Save
                               </Button>
                               <Button
@@ -2190,22 +2210,23 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                                 variant="destructive"
                                 onClick={() => handleReject(i)}
                                 disabled={item.locked}
+                                className="text-xs sm:text-sm"
                               >
                                 Reject
                               </Button>
                             </>
                           )}
                           {item.status === 'saving' && (
-                            <Button size="sm" variant="outline" disabled className="gap-2">
-                              <Loader2 className="h-4 w-4 animate-spin" />
+                            <Button size="sm" variant="outline" disabled className="gap-1.5 sm:gap-2 text-xs sm:text-sm">
+                              <Loader2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
                               {item.note || 'Saving…'}
                             </Button>
                           )}
-                          {(item.status === 'success' || item.status === 'error') && <Button size="sm" variant="outline" onClick={() => setQueue(prev => prev.filter((_, idx) => idx !== i))}>Remove</Button>}
+                          {(item.status === 'success' || item.status === 'error') && <Button size="sm" variant="outline" onClick={() => setQueue(prev => prev.filter((_, idx) => idx !== i))} className="text-xs sm:text-sm">Remove</Button>}
                         </div>
                       </div>
                       {item.status === 'ready' && item.form && (
-                        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="mt-2 sm:mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-3">
                           <div>
                             <label className="text-xs text-muted-foreground flex items-center gap-1.5 font-medium">
                               <FileText className="h-3.5 w-3.5" />
@@ -2362,13 +2383,13 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                     );
                   })
                 )}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Button variant="outline" onClick={onReset}>Clear</Button>
-                    {hasSuccess && <span className="text-xs text-muted-foreground">Saved: {queue.filter(q => q.status === 'success').length}</span>}
-                    {readyCount > 0 && <span className="text-xs text-muted-foreground">Ready: {readyCount}</span>}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-3">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                    <Button variant="outline" onClick={onReset} className="text-xs sm:text-sm">Clear</Button>
+                    {hasSuccess && <span className="text-[10px] sm:text-xs text-muted-foreground">Saved: {queue.filter(q => q.status === 'success').length}</span>}
+                    {readyCount > 0 && <span className="text-[10px] sm:text-xs text-muted-foreground">Ready: {readyCount}</span>}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-1.5 sm:gap-2">
                     {hasProcessable && queue.length > 1 && (
                     <Button onClick={async () => {
                       setIsProcessingAll(true);
@@ -2402,26 +2423,34 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                       } finally {
                         setIsProcessingAll(false);
                       }
-                    }} disabled={isProcessingAll} className="gap-2">
+                    }} disabled={isProcessingAll} className="gap-1.5 sm:gap-2 text-xs sm:text-sm">
                       {isProcessingAll ? (
                         <>
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          Processing…
+                          <Loader2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
+                          <span className="hidden sm:inline">Processing…</span>
+                          <span className="sm:hidden">Processing</span>
                         </>
                       ) : (
-                        'Process All'
+                        <>
+                          <span className="hidden sm:inline">Process All</span>
+                          <span className="sm:hidden">Process</span>
+                        </>
                       )}
                     </Button>
                     )}
                     {readyCount > 0 && (
-                      <Button onClick={saveAllReady} disabled={isSavingAll} className="gap-2">
+                      <Button onClick={saveAllReady} disabled={isSavingAll} className="gap-1.5 sm:gap-2 text-xs sm:text-sm">
                         {isSavingAll ? (
                           <>
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                            Saving all…
+                            <Loader2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
+                            <span className="hidden sm:inline">Saving all…</span>
+                            <span className="sm:hidden">Saving</span>
                           </>
                         ) : (
-                          'Save All'
+                          <>
+                            <span className="hidden sm:inline">Save All</span>
+                            <span className="sm:hidden">Save</span>
+                          </>
                         )}
                       </Button>
                     )}
@@ -2429,6 +2458,7 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                 </div>
               </CardContent>
             </Card>
+          </div>
           </>
         )}
 
