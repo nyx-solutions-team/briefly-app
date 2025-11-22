@@ -101,7 +101,7 @@ const isZipFile = (file: File | ExtendedFile) => {
   return name.endsWith('.zip') || type === 'application/zip' || type === 'application/x-zip-compressed';
 };
 
-const SUPPORTED_EXTENSIONS = new Set(['.pdf', '.txt', '.md', '.markdown', '.jpg', '.jpeg', '.png']);
+const SUPPORTED_EXTENSIONS = new Set(['.pdf', '.txt', '.md', '.markdown', '.jpg', '.jpeg', '.png', '.csv']);
 const SYSTEM_FILE_PATTERNS = [/^__MACOSX\//i, /\.DS_Store$/i];
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -111,6 +111,7 @@ const MIME_MAP: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.png': 'image/png',
+  '.csv': 'text/csv',
 };
 
 const normalizeSegment = (segment: string) => {
@@ -1701,7 +1702,7 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                     ref={inputRef}
                     type="file"
                     multiple
-                    accept=".pdf,.txt,.md,.jpg,.jpeg,.png,application/pdf,text/plain,text/markdown,image/jpeg,image/png"
+                    accept=".pdf,.txt,.md,.jpg,.jpeg,.png,.csv,application/pdf,text/plain,text/markdown,image/jpeg,image/png,text/csv"
                     className="hidden"
                     onChange={(e) => e.target.files && onSelect(e.target.files)}
                     onClick={(e) => e.stopPropagation()}

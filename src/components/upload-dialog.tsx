@@ -362,8 +362,8 @@ export default function UploadDialog({ onNewDocument }: { onNewDocument: (doc: S
               <UploadCloud className="h-10 w-10 text-muted-foreground" />
               <span className="font-semibold text-primary">Click to upload</span>
               <span className="text-sm text-muted-foreground">or drag and drop</span>
-              <span className="text-xs text-muted-foreground">PDF, TXT, MD, JPG, PNG</span>
-              <input ref={fileInputRef} id="file-upload" type="file" className="sr-only" onChange={handleFileChange} accept=".pdf,.txt,.md,.jpg,.jpeg,.png,application/pdf,text/plain,text/markdown,image/jpeg,image/png" />
+              <span className="text-xs text-muted-foreground">PDF, TXT, MD, CSV, JPG, PNG</span>
+              <input ref={fileInputRef} id="file-upload" type="file" className="sr-only" onChange={handleFileChange} accept=".pdf,.txt,.md,.jpg,.jpeg,.png,.csv,application/pdf,text/plain,text/markdown,image/jpeg,image/png,text/csv" />
             </label>
             {fileName && (
               <div className="flex items-center justify-center rounded-md border bg-muted/50 p-2 text-sm mt-4">
