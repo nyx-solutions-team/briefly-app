@@ -730,6 +730,7 @@ export default function TestAgentEnhancedPage() {
   const [pendingWebSearchToggle, setPendingWebSearchToggle] = useState<boolean | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [previewDocId, setPreviewDocId] = useState<string | null>(null);
+  const [previewDocPage, setPreviewDocPage] = useState<number | null>(null);
   const { settings } = useSettings();
   const themeColors = getThemeColors(settings.accent_color);
   const hasUserMessage = messages.some(m => m.role === 'user');
@@ -786,6 +787,7 @@ export default function TestAgentEnhancedPage() {
 
   const handlePreviewDocument = useCallback((docId: string) => {
     setPreviewDocId(docId);
+    setPreviewDocPage(null);
     setActionCenterTab('preview');
     setIsActionCenterOpen(true);
   }, []);
@@ -794,6 +796,15 @@ export default function TestAgentEnhancedPage() {
     (citation: CitationMeta, contextCitations: CitationMeta[] = []) => {
       if (citation?.docId) {
         setPreviewDocId(citation.docId);
+        const citationPage =
+          typeof citation.page === 'number'
+            ? citation.page
+            : typeof citation.fields?.page === 'number'
+              ? citation.fields.page
+              : typeof citation.fields?.pageNumber === 'number'
+                ? citation.fields.pageNumber
+                : null;
+        setPreviewDocPage(citationPage);
       }
       const normalized = dedupeCitations(
         contextCitations && contextCitations.length > 0 ? contextCitations : [citation]
@@ -817,6 +828,7 @@ export default function TestAgentEnhancedPage() {
     setIsLoading(false);
     setInputValue('');
     setPreviewDocId(null);
+    setPreviewDocPage(null);
     setIsActionCenterOpen(false);
     setActionCenterTab('sources');
     setActionCenterCitationsMode('global');
@@ -1636,9 +1648,13 @@ export default function TestAgentEnhancedPage() {
         open={isSidebarOpen}
         onOpenChange={(open) => {
           setIsActionCenterOpen(open);
-          if (!open) setPreviewDocId(null);
+          if (!open) {
+            setPreviewDocId(null);
+            setPreviewDocPage(null);
+          }
         }}
         activeDocumentId={previewDocId}
+        activeDocumentPage={previewDocPage}
         onSelectDocument={handlePreviewDocument}
         memoryDocIds={teamMemory}
         citations={actionCenterCitations}

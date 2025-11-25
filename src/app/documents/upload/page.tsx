@@ -30,6 +30,7 @@ import { useCategories } from '@/hooks/use-categories';
 import { useUserDepartmentCategories } from '@/hooks/use-department-categories';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import UploadFilePreview from '@/components/upload-file-preview';
+ import CsvPreview from '@/components/csv-preview';
 import FilePreview from '@/components/file-preview';
 import JSZip from 'jszip';
 import {
@@ -89,6 +90,52 @@ type QueueDocumentPrefill = {
   failureReason?: string;
 };
 
+type IngestionStatus = 'idle' | 'uploading' | 'processing' | 'ready' | 'saving' | 'success' | 'error';
+
+type TabularPreviewState =
+  | {
+      type: 'csv';
+      loading: true;
+    }
+  | {
+      type: 'csv';
+      loading: false;
+      headers: string[];
+      rows: string[][];
+      truncated: boolean;
+    }
+  | {
+      type: 'csv';
+      loading: false;
+      error: string;
+    };
+
+type UploadQueueItem = {
+  file: File;
+  progress: number;
+  status: IngestionStatus;
+  note?: string;
+  hash?: string;
+  extracted?: Extracted;
+  form?: FormData;
+  locked?: boolean;
+  previewUrl?: string;
+  rotation?: number;
+  linkMode?: 'new' | 'version';
+  baseId?: string;
+  candidates?: { id: string; label: string }[];
+  senderOptions?: string[];
+  receiverOptions?: string[];
+  storageKey?: string;
+  geminiFile?: { fileId: string; fileUri: string; mimeType?: string };
+  docId?: string;
+  ingestionJob?: any;
+  ingestionStatus?: string;
+  folderPathOverride?: string[];
+  prefilledFromQueue?: boolean;
+  tabularPreview?: TabularPreviewState;
+};
+
 const BULK_UPLOAD_LIMIT = Number(process.env.NEXT_PUBLIC_BULK_UPLOAD_MAX_FILES || 10);
 const BULK_UPLOAD_MAX_FILE_MB = Number(process.env.NEXT_PUBLIC_BULK_UPLOAD_MAX_FILE_MB || 25);
 
@@ -101,7 +148,18 @@ const isZipFile = (file: File | ExtendedFile) => {
   return name.endsWith('.zip') || type === 'application/zip' || type === 'application/x-zip-compressed';
 };
 
-const SUPPORTED_EXTENSIONS = new Set(['.pdf', '.txt', '.md', '.markdown', '.jpg', '.jpeg', '.png', '.csv']);
+const SUPPORTED_EXTENSIONS = new Set([
+  '.pdf',
+  '.txt',
+  '.md',
+  '.markdown',
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.csv',
+  '.xls',
+  '.xlsx',
+]);
 const SYSTEM_FILE_PATTERNS = [/^__MACOSX\//i, /\.DS_Store$/i];
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -112,6 +170,8 @@ const MIME_MAP: Record<string, string> = {
   '.jpeg': 'image/jpeg',
   '.png': 'image/png',
   '.csv': 'text/csv',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
 
 const normalizeSegment = (segment: string) => {
@@ -152,11 +212,100 @@ const extractDirectorySegments = (relativePath: string) => {
   return sanitized.split('/').filter(Boolean).map(normalizeSegment);
 };
 
+const CSV_PREVIEW_MAX_BYTES = 250_000;
+const CSV_PREVIEW_MAX_ROWS = 30;
+const CSV_PREVIEW_MAX_COLUMNS = 12;
+
+const isCsvFile = (file: File) => {
+  const name = file.name?.toLowerCase() || '';
+  const mime = file.type?.toLowerCase() || '';
+  return name.endsWith('.csv') || mime === 'text/csv' || mime === 'application/csv';
+};
+
+type CsvParseResult = { rows: string[][]; truncated: boolean };
+
+const parseCsvText = (input: string, maxRows: number, maxColumns: number): CsvParseResult => {
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let currentCell = '';
+  let inQuotes = false;
+  let truncated = false;
+
+  const pushCell = () => {
+    if (currentRow.length < maxColumns) {
+      currentRow.push(currentCell);
+    }
+    currentCell = '';
+  };
+
+  const pushRow = () => {
+    rows.push(currentRow);
+    currentRow = [];
+  };
+
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i];
+    const nextChar = input[i + 1];
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        currentCell += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (!inQuotes && (char === ',' || char === ';' || char === '\t')) {
+      pushCell();
+      continue;
+    }
+
+    if (!inQuotes && (char === '\n' || char === '\r')) {
+      if (char === '\r' && nextChar === '\n') {
+        i += 1;
+      }
+      pushCell();
+      pushRow();
+      if (rows.length >= maxRows) {
+        truncated = true;
+        break;
+      }
+      continue;
+    }
+
+    currentCell += char;
+  }
+
+  if (!truncated) {
+    pushCell();
+    if (currentRow.length) {
+      pushRow();
+    }
+  }
+
+  return { rows, truncated };
+};
+
+const generateCsvPreview = async (file: File) => {
+  const slice = file.slice(0, CSV_PREVIEW_MAX_BYTES);
+  const text = await slice.text();
+  const { rows, truncated } = parseCsvText(text, CSV_PREVIEW_MAX_ROWS + 1, CSV_PREVIEW_MAX_COLUMNS);
+  const headers = rows[0] || [];
+  const dataRows = rows.slice(1);
+  return {
+    headers,
+    rows: dataRows,
+    truncated: truncated || file.size > CSV_PREVIEW_MAX_BYTES,
+  };
+};
+
 const GB_BYTES = 1024 ** 3;
 const SUPPORT_CONTACT = 'mailto:support@brieflydocs.com?subject=Plan%20upgrade';
 
 function UploadContent() {
-  const [queue, setQueue] = useState<{ file: File; progress: number; status: 'idle' | 'uploading' | 'processing' | 'ready' | 'saving' | 'success' | 'error'; note?: string; hash?: string; extracted?: Extracted; form?: FormData; locked?: boolean; previewUrl?: string; rotation?: number; linkMode?: 'new' | 'version'; baseId?: string; candidates?: { id: string; label: string }[]; senderOptions?: string[]; receiverOptions?: string[]; storageKey?: string; geminiFile?: { fileId: string; fileUri: string; mimeType?: string }; docId?: string; ingestionJob?: any; folderPathOverride?: string[]; prefilledFromQueue?: boolean }[]>([]);
+  const [queue, setQueue] = useState<UploadQueueItem[]>([]);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [carouselMode, setCarouselMode] = useState<boolean>(true);
   const [dragOver, setDragOver] = useState<boolean>(false);
@@ -361,16 +510,20 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
       });
     }
     const queueHashes = new Set(queue.map((q) => q.hash).filter(Boolean));
-    const entries = await Promise.all(limited.map(async ({ file, folderPathOverride }) => ({
-      file,
-      folderPathOverride,
-      progress: 0,
-      status: 'idle' as const,
-      hash: await computeContentHash(file),
-      previewUrl: URL.createObjectURL(file),
-      rotation: 0,
-      linkMode: 'new' as const,
-    })));
+    const entries = await Promise.all(limited.map(async ({ file, folderPathOverride }) => {
+      const wantsCsvPreview = isCsvFile(file);
+      return {
+        file,
+        folderPathOverride,
+        progress: 0,
+        status: 'idle' as const,
+        hash: await computeContentHash(file),
+        previewUrl: URL.createObjectURL(file),
+        rotation: 0,
+        linkMode: 'new' as const,
+        tabularPreview: wantsCsvPreview ? { type: 'csv', loading: true } : undefined,
+      } as UploadQueueItem;
+    }));
     const deduped: typeof entries = [];
     for (const entry of entries) {
       if (entry.hash && queueHashes.has(entry.hash)) {
@@ -382,6 +535,30 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
     }
     if (deduped.length) {
       setQueue((prev) => [...prev, ...deduped]);
+      deduped.forEach((entry) => {
+        if (entry.tabularPreview?.type === 'csv') {
+          const targetHash = entry.hash;
+          const matcher = (item: UploadQueueItem) =>
+            (targetHash ? item.hash === targetHash : item === entry);
+          generateCsvPreview(entry.file)
+            .then((preview) => {
+              setQueue((prev) =>
+                prev.map((item) =>
+                  matcher(item) ? { ...item, tabularPreview: { type: 'csv', loading: false, ...preview } } : item,
+                ),
+              );
+            })
+            .catch((error) => {
+              setQueue((prev) =>
+                prev.map((item) =>
+                  matcher(item)
+                    ? { ...item, tabularPreview: { type: 'csv', loading: false, error: error.message || 'Unable to build preview' } }
+                    : item,
+                ),
+              );
+            });
+        }
+      });
     }
     return { added: deduped.length, skipped };
   }, [queue, toast]);
@@ -952,10 +1129,69 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
     updatedAt?: number;
   };
 
-  const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<AnalyzeSuccessResponse> => {
+type IngestionJobRecord = {
+  doc_id?: string;
+  docId?: string;
+  status?: string;
+  failure_reason?: string;
+  extraction_key?: string;
+  extracted_metadata?: Record<string, any> | null;
+};
+
+const INGESTION_STATUS_FILTER = 'pending,processing,needs_review,failed';
+
+const fetchIngestionJobForDoc = async (orgId: string, docId: string): Promise<IngestionJobRecord | null> => {
+  try {
+    const jobs = await apiFetch<IngestionJobRecord[]>(`/orgs/${orgId}/ingestion-jobs?status=${INGESTION_STATUS_FILTER}`, { skipCache: true });
+    if (!Array.isArray(jobs)) return null;
+    return jobs.find((job) => job?.doc_id === docId || job?.docId === docId) || null;
+  } catch (error) {
+    console.warn('Failed to load ingestion jobs', error);
+    return null;
+  }
+};
+
+const waitForIngestionJobReady = async (orgId: string, docId: string, initialJob?: IngestionJobRecord | null) => {
+  const maxWaitMs = 6 * 60 * 1000;
+  const start = Date.now();
+  let attempt = 0;
+  let job: IngestionJobRecord | null | undefined = initialJob;
+
+  while (true) {
+    if (!job) {
+      job = await fetchIngestionJobForDoc(orgId, docId);
+      if (!job) return null; // Already accepted/cleaned up.
+    }
+
+    const status = String(job.status || '').toLowerCase();
+    if (status === 'needs_review') {
+      return job;
+    }
+    if (status === 'failed') {
+      const err: any = new Error(job.failure_reason || 'Ingestion job failed');
+      err.job = job;
+      throw err;
+    }
+
+    if (Date.now() - start > maxWaitMs) {
+      const timeoutErr: any = new Error('Timed out waiting for ingestion to finish');
+      timeoutErr.job = job;
+      throw timeoutErr;
+    }
+
+    attempt += 1;
+    const delayMs = Math.min(1500 * Math.pow(1.5, attempt), 8000);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    job = await fetchIngestionJobForDoc(orgId, docId);
+  }
+};
+
+const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<AnalyzeSuccessResponse> => {
     const maxWaitMs = 5 * 60 * 1000;
-    const pollIntervalMs = 1500;
+    const initialPollIntervalMs = 1500;
+    const maxPollIntervalMs = 10000; // Cap at 10 seconds
     const started = Date.now();
+    let pollCount = 0;
 
     while (true) {
       const job = await apiFetch<UploadAnalysisJobStatus>(`/orgs/${orgId}/uploads/analyze/${jobId}`, { skipCache: true });
@@ -979,7 +1215,12 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
         throw timeoutErr;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      // Exponential backoff: start at 1.5s, double every 5 polls, cap at 10s
+      pollCount++;
+      const backoffMultiplier = Math.min(Math.floor(pollCount / 5), 3); // Max 3x multiplier (8x total)
+      const currentInterval = Math.min(initialPollIntervalMs * Math.pow(2, backoffMultiplier), maxPollIntervalMs);
+      
+      await new Promise((resolve) => setTimeout(resolve, currentInterval));
     }
   };
 
@@ -1078,7 +1319,7 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
       });
       ingestionJob = finalizeResp?.ingestionJob || ingestionJob;
 
-      setQueue(prev => prev.map((q, i) => i === index ? { ...q, docId, ingestionJob, storageKey } : q));
+      setQueue(prev => prev.map((q, i) => i === index ? { ...q, docId, ingestionJob, ingestionStatus: ingestionJob?.status || 'pending', storageKey } : q));
       toast({
         title: 'Processing in background',
         description: 'Document queued for ingestion. You can leave this page while AI completes.',
@@ -1130,28 +1371,67 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
       const ocrResult = { extractedText: analyzeResp.ocrText } as any;
       const metadataResult = analyzeResp.metadata as any;
 
+      let ingestionReadyJob = ingestionJob;
+      if (docId) {
+        setQueue(prev => prev.map((q, i) => i === index ? { ...q, note: 'Finishing ingestion…', ingestionStatus: ingestionJob?.status || 'processing' } : q));
+        try {
+          ingestionReadyJob = await waitForIngestionJobReady(orgId, docId, ingestionJob);
+        } catch (ingestionError: any) {
+          const message = ingestionError?.message || 'Ingestion job failed';
+          console.error('Ingestion job wait error:', ingestionError);
+          setQueue(prev => prev.map((q, i) => i === index ? { ...q, status: 'error', note: message, locked: false } : q));
+          toast({
+            title: 'Ingestion failed',
+            description: message,
+            variant: 'destructive',
+          });
+          return;
+        }
+      }
+      ingestionJob = ingestionReadyJob || ingestionJob;
+
+      let extractionData: { metadata?: Record<string, any>; ocrText?: string } | null = null;
+      if (docId) {
+        try {
+          extractionData = await apiFetch<{ metadata?: Record<string, any>; ocrText?: string }>(
+            `/orgs/${orgId}/documents/${docId}/extraction`,
+            { skipCache: true }
+          );
+        } catch (extractionError) {
+          console.warn('Failed to load extraction payload:', extractionError);
+        }
+      }
+
+      const mergedMetadata = extractionData?.metadata
+        ? { ...metadataResult, ...extractionData.metadata }
+        : metadataResult;
+      const finalOcrText =
+        typeof extractionData?.ocrText === 'string' && extractionData.ocrText.length > 0
+          ? extractionData.ocrText
+          : (ocrResult.extractedText || '');
+
       // Use the original summary without padding extra content
       const summary = (metadataResult.summary || '').trim();
 
       // Prefill form for the active item
       const updatedForm = {
-        title: metadataResult.title || item.file.name,
-        filename: metadataResult.filename || item.file.name,
-        sender: metadataResult.sender || '',
-        receiver: metadataResult.receiver || '',
-        documentDate: metadataResult.documentDate || '',
-        documentType: metadataResult.documentType || 'General Document',
+        title: mergedMetadata.title || item.file.name,
+        filename: mergedMetadata.filename || item.file.name,
+        sender: mergedMetadata.sender || '',
+        receiver: mergedMetadata.receiver || '',
+        documentDate: mergedMetadata.documentDate || '',
+        documentType: mergedMetadata.documentType || 'General Document',
         folder: 'No folder (Root)',
-        subject: metadataResult.subject || '',
-        description: metadataResult.description || metadataResult.summary || '',
-        category: metadataResult.category || 'General',
-        keywords: (metadataResult.keywords || []).join(', '),
-        tags: (metadataResult.tags || []).join(', '),
+        subject: mergedMetadata.subject || '',
+        description: mergedMetadata.description || mergedMetadata.summary || '',
+        category: mergedMetadata.category || 'General',
+        keywords: (mergedMetadata.keywords || []).join(', '),
+        tags: (mergedMetadata.tags || []).join(', '),
       };
 
       // Store multiple options for UI selection
-      const senderOptions = metadataResult.senderOptions || [];
-      const receiverOptions = metadataResult.receiverOptions || [];
+      const senderOptions = mergedMetadata.senderOptions || metadataResult.senderOptions || [];
+      const receiverOptions = mergedMetadata.receiverOptions || metadataResult.receiverOptions || [];
       console.log('Extracted sender options:', senderOptions, 'receiver options:', receiverOptions);
 
       // Find version candidates (same hash or similar name)
@@ -1167,7 +1447,7 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
       setQueue(prev => prev.map((q, i) => i === index ? { 
         ...q, 
         status: 'ready', 
-        extracted: { ocrText: ocrResult.extractedText, metadata: metadataResult }, 
+        extracted: { ocrText: finalOcrText, metadata: mergedMetadata }, 
         form: updatedForm, 
         locked: false, 
         candidates,
@@ -1180,6 +1460,8 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
         geminiFile: analyzeResp.geminiFile,
         docId,
         ingestionJob,
+        ingestionStatus: ingestionJob?.status || 'needs_review',
+        note: undefined,
       } : q));
       toast({ title: 'Processed', description: `${item.file.name} analyzed by AI.` });
     } catch (e) {
@@ -1685,6 +1967,9 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                     { type: 'PDF', color: 'bg-red-500/10 text-red-600 border-red-500/20' },
                     { type: 'TXT', color: 'bg-gray-500/10 text-gray-600 border-gray-500/20' },
                     { type: 'MD', color: 'bg-purple-500/10 text-purple-600 border-purple-500/20' },
+                    { type: 'CSV', color: 'bg-amber-500/10 text-amber-600 border-amber-500/20' },
+                    { type: 'XLS', color: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
+                    { type: 'XLSX', color: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
                     { type: 'JPG', color: 'bg-green-500/10 text-green-600 border-green-500/20' },
                     { type: 'PNG', color: 'bg-cyan-500/10 text-cyan-600 border-cyan-500/20' }
                   ].map(({ type, color }) => (
@@ -1702,7 +1987,7 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                     ref={inputRef}
                     type="file"
                     multiple
-                    accept=".pdf,.txt,.md,.jpg,.jpeg,.png,.csv,application/pdf,text/plain,text/markdown,image/jpeg,image/png,text/csv"
+                    accept=".pdf,.txt,.md,.jpg,.jpeg,.png,.csv,.xls,.xlsx,application/pdf,text/plain,text/markdown,image/jpeg,image/png,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     className="hidden"
                     onChange={(e) => e.target.files && onSelect(e.target.files)}
                     onClick={(e) => e.stopPropagation()}
@@ -1761,7 +2046,7 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                   </Button>
                 </div>
                 <p className="mt-3 sm:mt-4 text-[10px] sm:text-xs text-muted-foreground">
-                  Supports up to {BULK_UPLOAD_LIMIT} files per bulk upload (PDF, TXT/MD, JPG, PNG). Individual files must be under {BULK_UPLOAD_MAX_FILE_MB}MB.
+                    Supports up to {BULK_UPLOAD_LIMIT} files per bulk upload (PDF, TXT/MD, CSV/XLS/XLSX, JPG, PNG). Individual files must be under {BULK_UPLOAD_MAX_FILE_MB}MB.
                 </p>
                 {(lastBulkSummary || skipDetails) && (
                   <div className="mt-4 w-full rounded-md border bg-muted/30 p-3 text-xs space-y-3">
@@ -1927,6 +2212,7 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                       ? item.folderPathOverride
                       : folderPath;
                     const shouldUseRemotePreview = Boolean(item.docId) && (!item.previewUrl || item.prefilledFromQueue);
+                    const isCsvPreview = !shouldUseRemotePreview && isCsvFile(item.file);
                     return (
                       <div className={`rounded-lg border p-3 sm:p-4 md:p-6 ring-1 ring-primary`}>
                         {/* Header with file info and actions */}
@@ -2154,6 +2440,12 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                                   mimeType={item.file.type || 'application/pdf'}
                                   extractedContent={item.extracted?.ocrText}
                                 />
+                              ) : isCsvPreview ? (
+                                <CsvPreview
+                                  fileName={item.file.name}
+                                  fileSize={item.file.size}
+                                  preview={item.tabularPreview}
+                                />
                               ) : (
                                 <UploadFilePreview
                                   file={item.file}
@@ -2162,14 +2454,6 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
                                 />
                               )}
                             </div>
-                            
-                            {/* Image rotation controls */}
-                            {!shouldUseRemotePreview && !item.file.name.toLowerCase().endsWith('.pdf') && (
-                              <div className="flex items-center gap-1.5 sm:gap-2">
-                                <Button size="sm" variant="outline" onClick={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, rotation: ((q.rotation || 0) - 90 + 360) % 360 } : q))} className="text-xs sm:text-sm">Rotate Left</Button>
-                                <Button size="sm" variant="outline" onClick={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, rotation: ((q.rotation || 0) + 90) % 360 } : q))} className="text-xs sm:text-sm">Rotate Right</Button>
-                              </div>
-                            )}
                           </div>
                         </div>
                       </div>

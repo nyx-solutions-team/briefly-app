@@ -25,6 +25,8 @@ export type CitationMeta = {
     sourceType?: 'document' | 'web' | string;
     fields?: Record<string, any>;
     folderPath?: string[];
+    page?: number | null;
+    chunkIndex?: number | null;
 };
 
 export type ActionCenterTab = 'sources' | 'preview' | 'context';
@@ -33,6 +35,7 @@ type ActionCenterProps = {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     activeDocumentId: string | null;
+    activeDocumentPage?: number | null;
     onSelectDocument: (docId: string) => void;
     memoryDocIds: string[];
     citations: CitationMeta[];
@@ -48,6 +51,7 @@ export function ActionCenter({
     open,
     onOpenChange,
     activeDocumentId,
+    activeDocumentPage = null,
     onSelectDocument,
     memoryDocIds,
     citations,
@@ -228,6 +232,12 @@ export function ActionCenter({
                 </section>
 
                 <section className="rounded-lg border border-border/50 bg-card/60 p-0 shadow-sm overflow-hidden">
+                    {typeof activeDocumentPage === 'number' && activeDocumentPage > 0 && (
+                        <div className="flex items-center justify-between px-3 py-2 text-[11px] uppercase tracking-wide text-muted-foreground border-b border-border/60 bg-muted/20">
+                            <span>Showing page {activeDocumentPage}</span>
+                            <span className="text-[10px] normal-case text-muted-foreground/70">From citation</span>
+                        </div>
+                    )}
                     <FilePreview
                         documentId={docRecord.id}
                         mimeType={(docRecord as any).mimeType}
@@ -235,6 +245,7 @@ export function ActionCenter({
                         className="border-0 shadow-none"
                         showTitle={false}
                         showMetaInfo={false}
+                        initialPage={activeDocumentPage}
                     />
                 </section>
 

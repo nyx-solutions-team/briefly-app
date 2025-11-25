@@ -15,6 +15,7 @@ interface FilePreviewProps {
   className?: string;
   showTitle?: boolean;
   showMetaInfo?: boolean;
+  initialPage?: number | null;
 }
 
 interface FileMetadata {
@@ -31,6 +32,7 @@ export default function FilePreview({
   className = "",
   showTitle = true,
   showMetaInfo = true,
+  initialPage = null,
 }: FilePreviewProps) {
   const [fileMetadata, setFileMetadata] = useState<FileMetadata | null>(null);
   const [loading, setLoading] = useState(false);
@@ -99,14 +101,19 @@ export default function FilePreview({
     }
   }, [canPreview, extractedContent]);
 
+  const normalizedPage = typeof initialPage === 'number' && initialPage > 0 ? Math.floor(initialPage) : null;
+
   const renderFilePreview = () => {
     if (!fileMetadata || previewError) return null;
 
     if (isPDF) {
+      const baseUrl = fileMetadata.url.split('#')[0];
+      const pdfUrl = normalizedPage ? `${baseUrl}#page=${normalizedPage}` : fileMetadata.url;
       return (
         <div className="w-full h-[70vh] border rounded-md overflow-hidden">
           <iframe
-            src={fileMetadata.url}
+            key={pdfUrl}
+            src={pdfUrl}
             className="w-full h-full"
             title="PDF Preview"
             onError={() => setPreviewError(true)}
