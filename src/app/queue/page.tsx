@@ -24,7 +24,7 @@ type IngestionJobResponse = {
   org_id: string;
   doc_id?: string; // May be at top level or nested
   id?: string; // Document id might be at top level
-  status?: "needs_review" | "failed";
+  status?: "pending" | "processing" | "needs_review" | "failed";
   submitted_by?: string;
   submitted_at?: string;
   processing_started_at?: string;
@@ -109,28 +109,26 @@ function mapIngestionJobToQueueDoc(job: IngestionJobResponse): QueueDoc {
   const metadata = job.extracted_metadata || {};
   const serverStatus = job.status || "pending";
   let mappedStatus: QueueDocStatus = "pending";
-  let note: string | undefined = job.failure_reason || undefined;
+  let note: string | undefined;
 
   switch (serverStatus) {
     case "needs_review":
       mappedStatus = "ready";
-      note = undefined;
       break;
     case "processing":
       mappedStatus = "processing";
-      note = note || "Analyzing document…";
+      note = "Analyzing document…";
       break;
     case "failed":
       mappedStatus = "error";
-      note = note || "Background processing failed.";
+      note = "Background processing failed.";
       break;
     case "pending":
       mappedStatus = "pending";
-      note = note || "Queued and waiting for worker.";
+      note = "Queued and waiting for worker.";
       break;
     default:
       mappedStatus = "pending";
-      note = note || undefined;
       break;
   }
   
@@ -246,7 +244,14 @@ export default function QueuePage() {
       storageKey: doc.storageKey,
       mimeType: doc.mimeType,
       extractedMetadata: doc.extractedMetadata,
-      failureReason: doc.failureReason,
+      failureReason:
+        doc.status === "error"
+          ? doc.note || "Background processing failed. Please review and resubmit."
+          : doc.status === "processing"
+          ? doc.note || "Analyzing document…"
+          : doc.status === "pending"
+          ? doc.note || "Queued and waiting for worker."
+          : undefined,
     };
     
     sessionStorage.setItem('queueDocumentState', JSON.stringify(documentState));

@@ -799,8 +799,15 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
           });
           rejected = true;
         } catch (err: any) {
-          if (err?.status !== 404 && err?.status !== 403) {
+          // Check status from error object or error data
+          const status = err?.status || err?.statusCode || err?.data?.statusCode;
+          // Handle cases where job is already processed (404), forbidden (403), or wrong status (409)
+          if (status !== 404 && status !== 403 && status !== 409) {
             throw err;
+          }
+          // If job is already in a different state (409), treat as success and remove from queue
+          if (status === 409) {
+            rejected = true;
           }
         }
         if (!rejected) {
@@ -1010,7 +1017,7 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
           file: placeholderFile,
           progress: 100,
           status: 'ready',
-          note: failureReason,
+          note: failureReason || undefined,
           hash: '',
           extracted: { ocrText: '', metadata: extractedMetadataPayload },
           form,
@@ -2246,9 +2253,11 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
                             )}
                             {item.status === 'ready' && (
                               <>
-                                <Button size="sm" onClick={() => handleSave(i)} disabled={planBlocked || item.locked} className="text-xs sm:text-sm">
-                                  Save
-                                </Button>
+                                {!(item.prefilledFromQueue && item.note) && (
+                                  <Button size="sm" onClick={() => handleSave(i)} disabled={planBlocked || item.locked} className="text-xs sm:text-sm">
+                                    Save
+                                  </Button>
+                                )}
                                 <Button
                                   size="sm"
                                   variant="destructive"
@@ -2401,7 +2410,7 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
                                   </span>
                                 )}
                               </label>
-                              <div className="mt-1 grid grid-cols-1 md:grid-cols-2 gap-2">
+                              <div className="mt-1">
                                 <div className="flex items-center gap-1.5 sm:gap-2">
                                   <input
                                     className="flex-1 rounded-md border bg-background p-1.5 sm:p-2 text-xs sm:text-sm"
@@ -2412,12 +2421,6 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
                                     Browse…
                                   </Button>
                                 </div>
-                                <input 
-                                  className="rounded-md border bg-background p-1.5 sm:p-2 text-xs sm:text-sm"
-                                  placeholder="Or type path e.g., Finance/2025/Q1"
-                                  value={folderPath.join('/')}
-                                  onChange={(e) => setFolderPath(e.target.value.split('/').filter(Boolean))}
-                                />
                               </div>
                               <p className="mt-1 text-[10px] sm:text-xs text-muted-foreground">
                                 Documents will be uploaded to: <span className="font-medium">/{folderPath.join('/') || 'Root'}</span>
@@ -2491,9 +2494,11 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
                           )}
                           {item.status === 'ready' && (
                             <>
-                              <Button size="sm" onClick={() => handleSave(i)} disabled={planBlocked || item.locked} className="text-xs sm:text-sm">
-                                Save
-                              </Button>
+                              {!(item.prefilledFromQueue && item.note) && (
+                                <Button size="sm" onClick={() => handleSave(i)} disabled={planBlocked || item.locked} className="text-xs sm:text-sm">
+                                  Save
+                                </Button>
+                              )}
                               <Button
                                 size="sm"
                                 variant="destructive"
