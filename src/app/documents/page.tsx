@@ -512,65 +512,6 @@ function DocumentsPageContent() {
     );
   }
 
-        {hasRoleAtLeast('member') && canCreateDocuments && (
-          <Dialog open={newFolderOpen} onOpenChange={setNewFolderOpen}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Create a new folder</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-2">
-                <label className="text-sm text-muted-foreground">Folder name</label>
-                <Input value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} placeholder="e.g., Q3 Reports" />
-                <p className="text-xs text-muted-foreground">It will be created under: /{path.join('/')}</p>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setNewFolderOpen(false)}>Cancel</Button>
-                <Button onClick={async () => {
-                  const name = newFolderName.trim();
-                  if (!name) { toast({ title: 'Please enter a folder name', variant: 'destructive' }); return; }
-                  if (name.includes('/')) { toast({ title: 'Folder name cannot contain /', variant: 'destructive' }); return; }
-                  if (name.length > 100) { toast({ title: 'Folder name too long (max 100 characters)', variant: 'destructive' }); return; }
-                  const existingFolders = listFolders(path);
-                  const normalizedName = name.toLowerCase().trim();
-                  const exists = existingFolders.some(p => (p[p.length - 1] || '').toLowerCase().trim() === normalizedName);
-                  if (exists) { 
-                    toast({ 
-                      title: 'Folder already exists', 
-                      description: `A folder named "${name}" already exists in this location.`,
-                      variant: 'destructive' 
-                    }); 
-                    return; 
-                  }
-                  try {
-                    await createFolder(path, name);
-                    setPath([...path, name]);
-                    setNewFolderName('');
-                    setNewFolderOpen(false);
-                    toast({ title: 'Folder created' });
-                  } catch (error: any) {
-                    let errorMessage = 'Unknown error occurred';
-                    if (error?.data?.message) {
-                      errorMessage = error.data.message;
-                    } else if (error?.data?.error) {
-                      errorMessage = error.data.error;
-                    } else if (error instanceof Error) {
-                      errorMessage = error.message;
-                    }
-                    if (error?.status === 409 || errorMessage.includes('already exists')) {
-                      errorMessage = `Folder "${name}" already exists in this location.`;
-                    }
-                    toast({ 
-                      title: 'Failed to create folder', 
-                      description: errorMessage,
-                      variant: 'destructive' 
-                    });
-                  }
-                }}>Create</Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        )}
-
   // Check if user has permission to read documents
   if (!canReadDocuments) {
     return (
@@ -1160,6 +1101,65 @@ function DocumentsPageContent() {
           )}
         </div>
       </div>
+      
+      {hasRoleAtLeast('member') && canCreateDocuments && (
+        <Dialog open={newFolderOpen} onOpenChange={setNewFolderOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Create a new folder</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-2">
+              <label className="text-sm text-muted-foreground">Folder name</label>
+              <Input value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} placeholder="e.g., Q3 Reports" />
+              <p className="text-xs text-muted-foreground">It will be created under: /{path.join('/')}</p>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setNewFolderOpen(false)}>Cancel</Button>
+              <Button onClick={async () => {
+                const name = newFolderName.trim();
+                if (!name) { toast({ title: 'Please enter a folder name', variant: 'destructive' }); return; }
+                if (name.includes('/')) { toast({ title: 'Folder name cannot contain /', variant: 'destructive' }); return; }
+                if (name.length > 100) { toast({ title: 'Folder name too long (max 100 characters)', variant: 'destructive' }); return; }
+                const existingFolders = listFolders(path);
+                const normalizedName = name.toLowerCase().trim();
+                const exists = existingFolders.some(p => (p[p.length - 1] || '').toLowerCase().trim() === normalizedName);
+                if (exists) { 
+                  toast({ 
+                    title: 'Folder already exists', 
+                    description: `A folder named "${name}" already exists in this location.`,
+                    variant: 'destructive' 
+                  }); 
+                  return; 
+                }
+                try {
+                  await createFolder(path, name);
+                  setPath([...path, name]);
+                  setNewFolderName('');
+                  setNewFolderOpen(false);
+                  toast({ title: 'Folder created' });
+                } catch (error: any) {
+                  let errorMessage = 'Unknown error occurred';
+                  if (error?.data?.message) {
+                    errorMessage = error.data.message;
+                  } else if (error?.data?.error) {
+                    errorMessage = error.data.error;
+                  } else if (error instanceof Error) {
+                    errorMessage = error.message;
+                  }
+                  if (error?.status === 409 || errorMessage.includes('already exists')) {
+                    errorMessage = `Folder "${name}" already exists in this location.`;
+                  }
+                  toast({ 
+                    title: 'Failed to create folder', 
+                    description: errorMessage,
+                    variant: 'destructive' 
+                  });
+                }
+              }}>Create</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
       
       {/* Folder Deletion Confirmation Dialog */}
       <UiDialog open={shareOpen} onOpenChange={setShareOpen}>
