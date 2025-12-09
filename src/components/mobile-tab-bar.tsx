@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -14,10 +14,15 @@ import {
   Trash2,
   Wrench,
   Settings,
+  Sun,
+  Moon,
+  LogOut,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useAuth, type Role } from "@/hooks/use-auth";
+import { useSettings } from "@/hooks/use-settings";
+import { Switch } from "@/components/ui/switch";
 import {
   Sheet,
   SheetContent,
@@ -68,11 +73,94 @@ function useFilteredLinks(links: NavLink[]) {
   }, [links, permissions, user?.role]);
 }
 
+import { getApiContext, apiFetch } from "@/lib/api";
+
 export function MobileTabBar() {
   const pathname = usePathname();
   const primaryLinks = useFilteredLinks(BASE_LINKS).slice(0, 4);
   const moreLinks = useFilteredLinks(MORE_LINKS).filter((link) => link.href !== "/ops");
   const [moreOpen, setMoreOpen] = useState(false);
+
+  const { user, signOut } = useAuth();
+  const { settings, updateSettings } = useSettings();
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [queueCount, setQueueCount] = useState(0);
+  const [recycleCount, setRecycleCount] = useState(0);
+
+  useEffect(() => {
+    const isDarkMode = document.documentElement.classList.contains("dark");
+    setTheme(isDarkMode ? "dark" : "light");
+  }, []);
+
+  useEffect(() => {
+    setTheme(settings.dark_mode ? "dark" : "light");
+  }, [settings.dark_mode]);
+
+  const toggleTheme = () => {
+    const nextTheme = theme === "light" ? "dark" : "light";
+    setTheme(nextTheme);
+    void updateSettings({ dark_mode: nextTheme === "dark" });
+  };
+
+  const handleSignOut = () => {
+    setMoreOpen(false);
+    signOut();
+  };
+
+  useEffect(() => {
+    const fetchCounts = async () => {
+      if (!user) return;
+      const { orgId } = getApiContext();
+      if (!orgId) return;
+
+      try {
+        // Fetch queue count
+        const queueRes = await apiFetch<any>(`/orgs/${orgId}/ingestion-jobs?limit=1`);
+        if (queueRes && queueRes.statusCounts) {
+          const counts = queueRes.statusCounts;
+          const count = (counts.pending || 0) + (counts.processing || 0) + (counts.needs_review || 0);
+          setQueueCount(count);
+        }
+
+        // Fetch recycle bin count
+        const recycleRes = await apiFetch<any>(`/orgs/${orgId}/recycle-bin?limit=1`);
+        if (recycleRes) {
+          if (typeof recycleRes.total === 'number') {
+            setRecycleCount(recycleRes.total);
+          } else if (Array.isArray(recycleRes)) {
+            setRecycleCount(recycleRes.length);
+          } else if (recycleRes.items && Array.isArray(recycleRes.items)) {
+            setRecycleCount(recycleRes.total || recycleRes.items.length);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to fetch mobile tab counts', e);
+      }
+    };
+
+    fetchCounts();
+
+    // Listen for updates
+    const handleUpdate = () => fetchCounts();
+    window.addEventListener('documentDeleted', handleUpdate);
+    window.addEventListener('documentRestored', handleUpdate);
+    window.addEventListener('documentPurged', handleUpdate);
+    window.addEventListener('ingestionJobUpdated', handleUpdate);
+
+    return () => {
+      window.removeEventListener('documentDeleted', handleUpdate);
+      window.removeEventListener('documentRestored', handleUpdate);
+      window.removeEventListener('documentPurged', handleUpdate);
+      window.removeEventListener('ingestionJobUpdated', handleUpdate);
+    };
+  }, [user]);
+
+  // Check if we have any notifications in the "More" section
+  const hasMoreNotifications = moreLinks.some(link => {
+    if (link.href === '/queue') return queueCount > 0;
+    if (link.href === '/recycle-bin') return recycleCount > 0;
+    return false;
+  });
 
   if (primaryLinks.length === 0 && moreLinks.length === 0) {
     return null;
@@ -112,10 +200,15 @@ export function MobileTabBar() {
           <button
             type="button"
             onClick={() => setMoreOpen(true)}
-            className="flex flex-col items-center justify-center rounded-2xl text-[11px] font-medium text-muted-foreground transition-all hover:text-foreground"
+            className="flex flex-col items-center justify-center rounded-2xl text-[11px] font-medium text-muted-foreground transition-all hover:text-foreground relative"
             aria-label="More options"
           >
-            <MoreHorizontal className="h-5 w-5" />
+            <div className="relative">
+              <MoreHorizontal className="h-5 w-5" />
+              {hasMoreNotifications && (
+                <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-primary animate-pulse" />
+              )}
+            </div>
             <span className="mt-0.5">More</span>
           </button>
         </nav>
@@ -128,26 +221,51 @@ export function MobileTabBar() {
         >
           <SheetHeader className="px-6">
             <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-muted" />
-            <SheetTitle className="text-center text-base font-semibold">
-              Quick actions
-            </SheetTitle>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3 rounded-2xl border bg-muted/40 px-3 py-2 shadow-sm">
+                {theme === "light" ? (
+                  <Sun className="h-4 w-4 text-amber-500" />
+                ) : (
+                  <Moon className="h-4 w-4 text-sky-400" />
+                )}
+                <Switch
+                  checked={theme === "dark"}
+                  onCheckedChange={toggleTheme}
+                  aria-label="Toggle dark mode"
+                />
+              </div>
+              <SheetTitle className="text-base font-semibold">Quick actions</SheetTitle>
+            </div>
           </SheetHeader>
           <div className="mt-6 grid max-h-[60vh] grid-cols-2 gap-3 overflow-y-auto px-6 pb-4">
             {moreLinks.map(({ href, label, Icon }) => {
               const isActive =
                 pathname === href || pathname?.startsWith(`${href}/`);
+
+              let badgeCount = 0;
+              if (href === '/queue') badgeCount = queueCount;
+              if (href === '/recycle-bin') badgeCount = recycleCount;
+              const badgeText = badgeCount > 99 ? '99+' : badgeCount > 0 ? badgeCount.toString() : null;
+
               return (
                 <Link
                   key={href}
                   href={href}
                   onClick={() => setMoreOpen(false)}
                   className={cn(
-                    "flex items-center gap-3 rounded-2xl border bg-muted/30 px-4 py-3 text-sm font-medium transition hover:border-primary/40 hover:bg-primary/5",
+                    "flex items-center gap-3 rounded-2xl border bg-muted/30 px-4 py-3 text-sm font-medium transition hover:border-primary/40 hover:bg-primary/5 relative overflow-hidden",
                     isActive && "border-primary/60 bg-primary/5 text-primary"
                   )}
                 >
                   <Icon className="h-5 w-5" />
-                  <span>{label}</span>
+                  <div className="flex-1 flex items-center justify-between min-w-0">
+                    <span className="truncate">{label}</span>
+                    {badgeText && (
+                      <span className="ml-2 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-primary/10 px-1.5 text-[10px] font-bold text-primary">
+                        {badgeText}
+                      </span>
+                    )}
+                  </div>
                 </Link>
               );
             })}
@@ -156,6 +274,16 @@ export function MobileTabBar() {
                 Nothing extra to show yet.
               </div>
             )}
+          </div>
+          <div className="px-6 pb-2">
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-destructive px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-destructive/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            >
+              <LogOut className="h-5 w-5" />
+              <span className="text-center">Sign out</span>
+            </button>
           </div>
         </SheetContent>
       </Sheet>

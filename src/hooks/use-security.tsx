@@ -44,20 +44,20 @@ const isValidIP = (ip: string): boolean => {
   if (ip.includes('/')) {
     const [network, prefix] = ip.split('/');
     const prefixNum = parseInt(prefix, 10);
-    
+
     // Validate network part is a valid IP
     if (!isValidIPv4(network) && !isValidIPv6(network)) {
       return false;
     }
-    
+
     // Validate prefix length
     if (isNaN(prefixNum) || prefixNum < 0 || prefixNum > 32) {
       return false;
     }
-    
+
     return true;
   }
-  
+
   // Standard IP validation
   return isValidIPv4(ip) || isValidIPv6(ip);
 };
@@ -70,6 +70,7 @@ export function SecurityProvider({
   bootstrapData?: { orgSettings: { ip_allowlist_enabled: boolean; ip_allowlist_ips: string[] } }
 }) {
   const [policy, setPolicy] = useState<NetworkPolicy>({ enabled: false, ips: [] });
+  const initializedRef = React.useRef(false);
 
   const loadFromServer = useCallback(async () => {
     try {
@@ -83,14 +84,39 @@ export function SecurityProvider({
         const s = await apiFetch<any>(`/orgs/${orgId}/settings`);
         setPolicy({ enabled: !!s.ip_allowlist_enabled, ips: Array.isArray(s.ip_allowlist_ips) ? s.ip_allowlist_ips : [] });
       }
-    } catch {}
+    } catch { }
   }, [bootstrapData]);
 
-  useEffect(() => { void loadFromServer(); }, [loadFromServer]);
+  // Initialize with bootstrap data or fetch if needed
   useEffect(() => {
+    if (initializedRef.current) return;
+
+    // If we have bootstrap data, use it immediately
+    if (bootstrapData?.orgSettings) {
+      initializedRef.current = true;
+      const s = bootstrapData.orgSettings;
+      setPolicy({ enabled: !!s.ip_allowlist_enabled, ips: Array.isArray(s.ip_allowlist_ips) ? s.ip_allowlist_ips : [] });
+      return;
+    }
+
+    // If bootstrapData is undefined, wait for it (auth still loading)
+    if (bootstrapData === undefined) {
+      return;
+    }
+
+    // bootstrapData is null or has no settings - need to fetch
+    initializedRef.current = true;
+    void loadFromServer();
+  }, [loadFromServer, bootstrapData]);
+
+  // Only listen for org context changes if we don't have bootstrap data
+  useEffect(() => {
+    if (bootstrapData?.orgSettings) {
+      return; // Bootstrap data available, no need to listen
+    }
     const off = onApiContextChange(() => { void loadFromServer(); });
     return () => { off(); };
-  }, [loadFromServer]);
+  }, [loadFromServer, bootstrapData]);
 
   // No localStorage persistence; rely on backend settings only
 
@@ -105,7 +131,7 @@ export function SecurityProvider({
           ip_allowlist_ips: next.ips,
         },
       });
-    } catch {}
+    } catch { }
   }, []);
 
   const setEnabled = useCallback((v: boolean) => setPolicy(prev => { const next = { ...prev, enabled: v }; void persist(next); return next; }), [persist]);

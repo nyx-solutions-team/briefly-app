@@ -29,13 +29,16 @@ const adminLinks = [
   { href: '/chat', label: 'Chat Bot', Icon: Wrench },
 ];
 
+import { getApiContext, apiFetch } from '@/lib/api';
+import { useState, useEffect } from 'react';
+
 export default function SidebarNav() {
   const pathname = usePathname();
   const { user, bootstrapData } = useAuth();
   const isManager = user?.role === 'systemAdmin' || user?.role === 'teamLead';
   const isAdmin = user?.role === 'systemAdmin';
   const isOps = pathname?.startsWith('/ops');
-  
+
   // Get page permissions from bootstrap data
   const permissions = bootstrapData?.permissions || {};
   const canUpload = permissions['pages.upload'] !== false; // Default to true if not explicitly false
@@ -44,6 +47,57 @@ export default function SidebarNav() {
   const canViewQueue = permissions['pages.queue'] !== false; // Default to true
   const canViewRecycleBin = permissions['pages.recycle_bin'] === true;
   const canChat = permissions['pages.chat'] !== false; // Default to true
+
+  const [queueCount, setQueueCount] = useState(0);
+  const [recycleCount, setRecycleCount] = useState(0);
+
+  useEffect(() => {
+    const fetchCounts = async () => {
+      if (!user) return;
+      const { orgId } = getApiContext();
+      if (!orgId) return;
+
+      try {
+        // Fetch queue count (pending + processing + needs_review)
+        const queueRes = await apiFetch<any>(`/orgs/${orgId}/ingestion-jobs?limit=1`);
+        if (queueRes && queueRes.statusCounts) {
+          const counts = queueRes.statusCounts;
+          const count = (counts.pending || 0) + (counts.processing || 0) + (counts.needs_review || 0);
+          setQueueCount(count);
+        }
+
+        // Fetch recycle bin count
+        const recycleRes = await apiFetch<any>(`/orgs/${orgId}/recycle-bin?limit=1`);
+        if (recycleRes) {
+          if (typeof recycleRes.total === 'number') {
+            setRecycleCount(recycleRes.total);
+          } else if (Array.isArray(recycleRes)) {
+            setRecycleCount(recycleRes.length);
+          } else if (recycleRes.items && Array.isArray(recycleRes.items)) {
+            setRecycleCount(recycleRes.total || recycleRes.items.length);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to fetch sidebar counts', e);
+      }
+    };
+
+    fetchCounts();
+
+    // Listen for updates
+    const handleUpdate = () => fetchCounts();
+    window.addEventListener('documentDeleted', handleUpdate);
+    window.addEventListener('documentRestored', handleUpdate);
+    window.addEventListener('documentPurged', handleUpdate);
+    window.addEventListener('ingestionJobUpdated', handleUpdate); // Assuming this event exists or we should rely on intervals
+
+    return () => {
+      window.removeEventListener('documentDeleted', handleUpdate);
+      window.removeEventListener('documentRestored', handleUpdate);
+      window.removeEventListener('documentPurged', handleUpdate);
+      window.removeEventListener('ingestionJobUpdated', handleUpdate);
+    };
+  }, [user, pathname]); // Re-fetch on navigation too to be safe
 
   if (isOps) {
     const opsLinks = [
@@ -127,24 +181,36 @@ export default function SidebarNav() {
                   if (!isAdmin && href === '/audit') return false;
                   // Filter based on page permissions
                   if (href === '/queue' && !canViewQueue) return false;
-                  if (href === '/recycle-bin' && !canViewRecycleBin) return false;  
+                  if (href === '/recycle-bin' && !canViewRecycleBin) return false;
                   if (href === '/chat' && !canChat) return false;
                   return true;
-                }).map(({ href, label, Icon }) => (
-                  <SidebarMenuItem key={href}>
-                    <SidebarMenuButton
-                      asChild
-                      isActive={pathname === href}
-                      tooltip={label}
-                      className="hover-premium focus-premium data-[active=true]:bg-sidebar-accent data-[active=true]:shadow-sm"
-                    >
-                      <Link href={href}>
-                        <Icon />
-                        <span>{label}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
+                }).map(({ href, label, Icon }) => {
+                  let badgeCount = 0;
+                  if (href === '/queue') badgeCount = queueCount;
+                  if (href === '/recycle-bin') badgeCount = recycleCount;
+                  const badgeText = badgeCount > 99 ? '99+' : badgeCount > 0 ? badgeCount.toString() : null;
+
+                  return (
+                    <SidebarMenuItem key={href}>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={pathname === href}
+                        tooltip={label}
+                        className="hover-premium focus-premium data-[active=true]:bg-sidebar-accent data-[active=true]:shadow-sm"
+                      >
+                        <Link href={href}>
+                          <Icon />
+                          <span>{label}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                      {badgeText && (
+                        <SidebarMenuBadge aria-hidden className="bg-primary/20 text-primary dark:bg-primary/30 dark:text-primary-foreground shadow-sm">
+                          {badgeText}
+                        </SidebarMenuBadge>
+                      )}
+                    </SidebarMenuItem>
+                  );
+                })}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

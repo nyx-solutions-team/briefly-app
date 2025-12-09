@@ -78,22 +78,26 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
   const refresh = useCallback(async () => {
     const orgId = getOrgId();
 
-    if (!orgId || loadingRef.current) {
+    if (!orgId) {
       return;
     }
 
+    // Abort any previous pending request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
+    // Clear caches
     fetchedFolderPathsRef.current.clear();
     pendingFolderFetchesRef.current.clear();
     setFolderMetadata(new Map());
 
-    // Cancel any previous request
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-
     // Create new abort controller for this request
-    abortControllerRef.current = new AbortController();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
+    // Set loading state
     loadingRef.current = true;
     setIsLoading(true);
 
@@ -111,23 +115,19 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Ensure we have an array to work with
-      const list = Array.isArray(response) ? response : [];
-      console.log('DocumentsProvider processing', list.length, 'documents');
+      const list = Array.isArray(response) ? response : (response && typeof response === 'object' && Array.isArray((response as any).items) ? (response as any).items : []);
 
-      const revived = list.map((d) => ({
+
+      const revived = list.map((d: any) => ({
         ...d,
         uploadedAt: new Date(d.uploadedAt || d.uploaded_at),
         // Ensure both departmentId and department_id are available for lookup
         departmentId: d.departmentId || d.department_id,
         department_id: d.department_id || d.departmentId,
       })) as StoredDocument[];
-      
-      console.log('Documents loaded with department info:', revived.slice(0, 3).map(d => ({
-        name: d.name,
-        departmentId: d.departmentId,
-        department_id: (d as any).department_id
-      })));
-      
+
+
+
       // Extra safety: ensure no folder documents are included
       const filteredRevived = revived.filter(d => d.type !== 'folder');
       setDocuments(filteredRevived);
@@ -191,26 +191,29 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
 
   const loadAllDocuments = useCallback(async () => {
     const orgId = getOrgId();
-    if (!orgId || loadingRef.current || hasLoadedAll) return;
+    if (!orgId || hasLoadedAll) return;
 
-    // Cancel any previous request
+    // Abort any previous pending request
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
+      abortControllerRef.current = null;
     }
 
     // Create new abort controller for this request
-    abortControllerRef.current = new AbortController();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     loadingRef.current = true;
 
     try {
       // Include department filter when loading all documents
       const deptParam = selectedDepartmentId ? `?departmentId=${selectedDepartmentId}` : '';
-      const list = await apiFetch<any[]>(`/orgs/${orgId}/documents${deptParam}`, {
+      const response = await apiFetch<any>(`/orgs/${orgId}/documents${deptParam}`, {
         signal: abortControllerRef.current.signal
       });
-      const revived = (list || []).map((d) => ({ 
-        ...d, 
+      const list = Array.isArray(response) ? response : (response && typeof response === 'object' && Array.isArray((response as any).items) ? (response as any).items : []);
+      const revived = list.map((d: any) => ({
+        ...d,
         uploadedAt: new Date(d.uploadedAt || d.uploaded_at),
       })) as StoredDocument[];
       // Extra safety: ensure no folder documents are included
@@ -305,13 +308,13 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
     console.log('addDocument called with doc:', doc);
     console.log('doc.folderPath:', doc.folderPath, 'Type:', typeof doc.folderPath, 'Is Array:', Array.isArray(doc.folderPath));
     const created: any = await apiFetch(`/orgs/${orgId}/documents`, { method: 'POST', body: doc });
-    const revived = { 
-      ...created, 
+    const revived = {
+      ...created,
       uploadedAt: new Date(created.uploadedAt || created.uploaded_at || Date.now()),
     } as StoredDocument;
     setDocuments(prev => [revived, ...prev]);
     setFolders(prev => deriveFolders([revived], prev));
-    try { log({ actor: user?.username || 'system', type: 'create', docId: created.id, title: created.title || created.name, note: 'uploaded' }); } catch {}
+    try { log({ actor: user?.username || 'system', type: 'create', docId: created.id, title: created.title || created.name, note: 'uploaded' }); } catch { }
     return revived;
   }, [user, log, deriveFolders]);
 
@@ -333,15 +336,15 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
       await removeDocument(ids[0]);
       return { deleted: 1, storage_cleaned: 0 }; // Single deletion doesn't return storage info
     }
-    
+
     const orgId = getOrgId();
     if (!orgId) throw new Error('No organization selected');
-    
-    const result = await apiFetch(`/orgs/${orgId}/documents`, { 
+
+    const result = await apiFetch(`/orgs/${orgId}/documents`, {
       method: 'DELETE',
       body: { ids }
     });
-    
+
     setDocuments(prev => prev.filter(d => !ids.includes(d.id)));
     return result;
   }, [removeDocument]);
@@ -392,9 +395,9 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
 
   const getDocumentById = useCallback((id: string) => documents.find(d => d.id === id), [documents]);
 
-  const clearAll = useCallback(() => { 
-    setDocuments([]); 
-    setFolders([]); 
+  const clearAll = useCallback(() => {
+    setDocuments([]);
+    setFolders([]);
     setFolderMetadata(new Map());
     fetchedFolderPathsRef.current.clear();
     pendingFolderFetchesRef.current.clear();
@@ -477,13 +480,13 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
 
   const deleteFolder = useCallback(async (path: string[], mode: 'move_to_root' | 'delete_all' = 'move_to_root') => {
     const orgId = getOrgId(); if (!orgId) throw new Error('No organization selected');
-    
+
     try {
-      const result = await apiFetch(`/orgs/${orgId}/folders`, { 
-        method: 'DELETE', 
-        body: { path, mode } 
+      const result = await apiFetch(`/orgs/${orgId}/folders`, {
+        method: 'DELETE',
+        body: { path, mode }
       });
-      
+
       // Update local state - remove the folder and any subfolders
       setFolders(prev => prev.filter(p => {
         // Remove the exact path and any paths that start with it
@@ -497,22 +500,22 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
       const parentKey = parentPath.length > 0 ? parentPath.join('/') : '__root__';
       fetchedFolderPathsRef.current.delete(parentKey);
       pendingFolderFetchesRef.current.delete(parentKey);
-      
+
       // If documents were moved to root, refresh to update their paths
       if (mode === 'move_to_root' && result.documentsHandled > 0) {
         void refresh();
       } else if (mode === 'delete_all') {
         // Remove deleted documents from local state
-        const docsInFolder = documents.filter(d => 
+        const docsInFolder = documents.filter(d =>
           JSON.stringify(d.folderPath || []) === JSON.stringify(path)
         );
-        setDocuments(prev => prev.filter(d => 
+        setDocuments(prev => prev.filter(d =>
           JSON.stringify(d.folderPath || []) !== JSON.stringify(path)
         ));
       }
 
       await ensureFolderMetadata(parentPath);
-      
+
       return result;
     } catch (error) {
       console.error('Failed to delete folder:', error);
@@ -520,7 +523,7 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
     }
   }, [getOrgId, refresh, documents, ensureFolderMetadata]);
 
-  const getDocumentsInPath = useCallback((path: string[]) => documents.filter(d => 
+  const getDocumentsInPath = useCallback((path: string[]) => documents.filter(d =>
     JSON.stringify(d.folderPath || []) === JSON.stringify(path) && d.type !== 'folder'
   ), [documents]);
 

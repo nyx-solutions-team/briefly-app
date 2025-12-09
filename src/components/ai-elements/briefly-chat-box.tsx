@@ -185,21 +185,23 @@ function ModePopover({
   mode: ChatScope;
   setMode: (m: ChatScope) => void;
 }) {
+  const [open, setOpen] = useState(false);
+
   const items: Array<{
     value: ChatScope;
     label: string;
     desc: string;
     icon: any;
   }> = [
-    { value: "all", label: "All (Global)", desc: "Search across everything", icon: Globe },
-    { value: "folder", label: "Folder specific", desc: "Limit to one folder", icon: Folder },
-    { value: "document", label: "Document specific", desc: "Limit to one document", icon: FileText },
-  ];
+      { value: "all", label: "All (Global)", desc: "Search across everything", icon: Globe },
+      { value: "folder", label: "Folder specific", desc: "Limit to one folder", icon: Folder },
+      { value: "document", label: "Document specific", desc: "Limit to one document", icon: FileText },
+    ];
 
   const current = items.find((i) => i.value === mode) ?? items[0];
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="outline" className="h-9 rounded-xl px-2 sm:px-3">
           <span className="flex items-center gap-1.5 sm:gap-2">
@@ -221,11 +223,17 @@ function ModePopover({
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[300px] p-3" align="start">
-         <div className="space-y-3">
+        <div className="space-y-3">
           {/* Scope radio group */}
           <div className="space-y-2">
             <Label className="text-xs text-muted-foreground">Scope</Label>
-            <RadioGroup value={mode} onValueChange={(v) => setMode(v as ChatScope)}>
+            <RadioGroup
+              value={mode}
+              onValueChange={(v) => {
+                setMode(v as ChatScope);
+                setOpen(false);
+              }}
+            >
               {items.map((i) => (
                 <label
                   key={i.value}
@@ -333,7 +341,7 @@ export function BrieflyChatBox({
     >
       {/* Controls Row */}
       <div className="flex flex-wrap items-center justify-between gap-3 min-w-0">
-         <div className="flex flex-wrap items-center gap-2 min-w-0">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           <ModePopover mode={mode} setMode={setMode} />
 
           {mode === "folder" && (
@@ -362,21 +370,7 @@ export function BrieflyChatBox({
             />
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => handleWebSearchToggle(!effectiveWebSearch)}
-          aria-pressed={effectiveWebSearch}
-          className={cn(
-            "ml-auto flex h-9 w-9 items-center justify-center rounded-xl border",
-            "transition-colors",
-            effectiveWebSearch
-              ? "bg-primary/10 text-primary border-primary/40"
-              : "text-muted-foreground hover:text-foreground"
-          )}
-        >
-          <Globe className="h-4 w-4" />
-          <span className="sr-only">{effectiveWebSearch ? "Disable web search" : "Enable web search"}</span>
-        </button>
+
       </div>
 
       {/* Input Row */}
@@ -413,5 +407,5 @@ export function BrieflyChatBox({
     </div>
   );
 }
- 
+
 export default BrieflyChatBox;

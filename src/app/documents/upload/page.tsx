@@ -1,4 +1,4 @@
- "use client";
+"use client";
 
 import React, { useEffect, useMemo, useRef, useState, Suspense, useCallback } from 'react';
 import AppLayout from '@/components/layout/app-layout';
@@ -8,7 +8,7 @@ import { ArrowLeft, Check, UploadCloud, X, FileText, User, UserCheck, Calendar, 
 import { AccessDenied } from '@/components/access-denied';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
- 
+
 import type { Document, StoredDocument } from '@/lib/types';
 import type { ExtractDocumentMetadataOutput } from '@/ai/flows/extract-document-metadata';
 import { useToast } from '@/hooks/use-toast';
@@ -30,7 +30,7 @@ import { useCategories } from '@/hooks/use-categories';
 import { useUserDepartmentCategories } from '@/hooks/use-department-categories';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import UploadFilePreview from '@/components/upload-file-preview';
- import CsvPreview from '@/components/csv-preview';
+import CsvPreview from '@/components/csv-preview';
 import FilePreview from '@/components/file-preview';
 import JSZip from 'jszip';
 import {
@@ -94,21 +94,21 @@ type IngestionStatus = 'idle' | 'uploading' | 'processing' | 'ready' | 'saving' 
 
 type TabularPreviewState =
   | {
-      type: 'csv';
-      loading: true;
-    }
+    type: 'csv';
+    loading: true;
+  }
   | {
-      type: 'csv';
-      loading: false;
-      headers: string[];
-      rows: string[][];
-      truncated: boolean;
-    }
+    type: 'csv';
+    loading: false;
+    headers: string[];
+    rows: string[][];
+    truncated: boolean;
+  }
   | {
-      type: 'csv';
-      loading: false;
-      error: string;
-    };
+    type: 'csv';
+    loading: false;
+    error: string;
+  };
 
 type UploadQueueItem = {
   file: File;
@@ -366,6 +366,7 @@ function UploadContent() {
   const [folderPath, setFolderPath] = useState<string[]>([]);
   const [folderCommandOpen, setFolderCommandOpen] = useState(false);
   const [folderOptions, setFolderOptions] = useState<{ id: string; path: string[]; label: string }[]>([]);
+  const [cameFromQueue, setCameFromQueue] = useState(false);
 
   useEffect(() => {
     const dedup = new Map<string, { id: string; path: string[]; label: string }>();
@@ -425,11 +426,11 @@ function UploadContent() {
     };
   }, [folderCommandOpen, loadFolderChildren, documentFolders]);
   const searchParams = useSearchParams();
-const ensureBulkPrereqs = useCallback(() => {
-  if (hasRoleAtLeast('systemAdmin') && folderPath.length === 0 && !selectedDepartmentId) {
-    toast({
-      title: 'Department required',
-      description: 'Please select a department or target folder before running a bulk upload.',
+  const ensureBulkPrereqs = useCallback(() => {
+    if (hasRoleAtLeast('systemAdmin') && folderPath.length === 0 && !selectedDepartmentId) {
+      toast({
+        title: 'Department required',
+        description: 'Please select a department or target folder before running a bulk upload.',
         variant: 'destructive',
       });
       return false;
@@ -441,34 +442,34 @@ const ensureBulkPrereqs = useCallback(() => {
         variant: 'destructive',
       });
       return false;
-  }
-  return true;
-}, [folderPath, hasRoleAtLeast, selectedDepartmentId, toast]);
-const handleClearBulkSummary = useCallback(() => {
-  setLastBulkSummary(null);
-  setSkipDetails(null);
-  setShowAllSkipped(false);
-}, []);
-const ensureFolderStructure = useCallback(async (paths: string[][]) => {
-  if (!paths || paths.length === 0) return;
-  const dedup = new Map<string, string[]>();
-  for (const segments of paths) {
-    const clean = segments.filter(Boolean);
-    if (!clean.length) continue;
-    dedup.set(clean.join('\u0000'), clean);
-  }
-  const ordered = Array.from(dedup.values()).sort((a, b) => a.length - b.length);
-  for (const segs of ordered) {
-    if (!segs.length) continue;
-    const parent = segs.slice(0, -1);
-    const name = segs[segs.length - 1];
-    try {
-      await createFolder(parent, name);
-    } catch {
-      // Folder likely exists; ignore errors
     }
-  }
-}, [createFolder]);
+    return true;
+  }, [folderPath, hasRoleAtLeast, selectedDepartmentId, toast]);
+  const handleClearBulkSummary = useCallback(() => {
+    setLastBulkSummary(null);
+    setSkipDetails(null);
+    setShowAllSkipped(false);
+  }, []);
+  const ensureFolderStructure = useCallback(async (paths: string[][]) => {
+    if (!paths || paths.length === 0) return;
+    const dedup = new Map<string, string[]>();
+    for (const segments of paths) {
+      const clean = segments.filter(Boolean);
+      if (!clean.length) continue;
+      dedup.set(clean.join('\u0000'), clean);
+    }
+    const ordered = Array.from(dedup.values()).sort((a, b) => a.length - b.length);
+    for (const segs of ordered) {
+      if (!segs.length) continue;
+      const parent = segs.slice(0, -1);
+      const name = segs[segs.length - 1];
+      try {
+        await createFolder(parent, name);
+      } catch {
+        // Folder likely exists; ignore errors
+      }
+    }
+  }, [createFolder]);
   const enqueueFiles = useCallback(async (items: { file: File; folderPathOverride?: string[] }[]) => {
     if (items.length === 0) return { added: 0, skipped: [] as { path: string; reason: string }[] };
     const MAX_FILES = 10;
@@ -701,13 +702,13 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
     }
     if (folderInputRef.current) folderInputRef.current.value = '';
   }, [enqueueFiles, ensureBulkPrereqs, folderPath, toast]);
-  
+
   const navigateToFolder = (segments?: string[] | null) => {
     const cleaned = Array.isArray(segments) ? segments.map((s) => String(s).trim()).filter(Boolean) : [];
     const dest = cleaned.length ? `?path=${encodeURIComponent(cleaned.join('/'))}` : '';
     router.push(`/documents${dest}`);
   };
-  
+
   // Get categories for the selected department, fallback to org categories
   const availableCategories = useMemo(() => {
     if (selectedDepartmentId) {
@@ -715,7 +716,7 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
     }
     return categories;
   }, [selectedDepartmentId, getCategoriesForDepartment, categories]);
-  
+
   const saveAllReady = async () => {
     if (planBlocked) {
       toast({
@@ -866,20 +867,20 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
   const [docType, setDocType] = useState<Document['type']>('PDF');
   const [extracted, setExtracted] = useState<Extracted | null>(null);
   const [preferredBaseId, setPreferredBaseId] = useState<string | null>(null);
-  
+
   // Check page permission with fallback to functional permission for backward compatibility
   const permissions = bootstrapData?.permissions || {};
   const canAccessUploadPage = permissions['pages.upload'] !== false; // Default true if not set
   const hasCreatePermission = hasPermission('documents.create');
   const hasAccess = canAccessUploadPage || hasCreatePermission;
-  
+
   // Redirect if no access
   useEffect(() => {
     if (bootstrapData && !hasAccess) {
       router.push('/documents');
     }
   }, [hasAccess, bootstrapData, router]);
-  
+
   if (bootstrapData && !hasAccess) {
     return <AccessDenied message="You don't have permission to access the upload page." />;
   }
@@ -923,6 +924,9 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
     const fromQueue = searchParams?.get('fromQueue');
     if (fromQueue !== 'true') return;
 
+    // Track that we came from the queue for back navigation
+    setCameFromQueue(true);
+
     const storedStateRaw = window.sessionStorage?.getItem('queueDocumentState');
     if (!storedStateRaw) return;
 
@@ -959,17 +963,17 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
       const placeholderMime = mimeType || 'application/pdf';
       const placeholderFile = new File([], placeholderName, { type: placeholderMime });
       const metadata = (extractedMetadata ||
-        {
-          title,
-          subject,
-          description,
-          category,
-          keywords,
-          tags,
-          sender,
-          receiver,
-          documentDate,
-        }) as Partial<ExtractDocumentMetadataOutput> & {
+      {
+        title,
+        subject,
+        description,
+        category,
+        keywords,
+        tags,
+        sender,
+        receiver,
+        documentDate,
+      }) as Partial<ExtractDocumentMetadataOutput> & {
         summary?: string;
         senderOptions?: string[];
         receiverOptions?: string[];
@@ -978,13 +982,13 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
       const keywordsString = Array.isArray(keywords)
         ? keywords.join(', ')
         : typeof keywords === 'string'
-        ? keywords
-        : '';
+          ? keywords
+          : '';
       const tagsString = Array.isArray(tags)
         ? tags.join(', ')
         : typeof tags === 'string'
-        ? tags
-        : '';
+          ? tags
+          : '';
 
       const resolvedKeywords = Array.isArray(metadata.keywords)
         ? metadata.keywords.map((kw) => String(kw)).join(', ')
@@ -1136,64 +1140,64 @@ const ensureFolderStructure = useCallback(async (paths: string[][]) => {
     updatedAt?: number;
   };
 
-type IngestionJobRecord = {
-  doc_id?: string;
-  docId?: string;
-  status?: string;
-  failure_reason?: string;
-  extraction_key?: string;
-  extracted_metadata?: Record<string, any> | null;
-};
+  type IngestionJobRecord = {
+    doc_id?: string;
+    docId?: string;
+    status?: string;
+    failure_reason?: string;
+    extraction_key?: string;
+    extracted_metadata?: Record<string, any> | null;
+  };
 
-const INGESTION_STATUS_FILTER = 'pending,processing,needs_review,failed';
+  const INGESTION_STATUS_FILTER = 'pending,processing,needs_review,failed';
 
-const fetchIngestionJobForDoc = async (orgId: string, docId: string): Promise<IngestionJobRecord | null> => {
-  try {
-    const jobs = await apiFetch<IngestionJobRecord[]>(`/orgs/${orgId}/ingestion-jobs?status=${INGESTION_STATUS_FILTER}`, { skipCache: true });
-    if (!Array.isArray(jobs)) return null;
-    return jobs.find((job) => job?.doc_id === docId || job?.docId === docId) || null;
-  } catch (error) {
-    console.warn('Failed to load ingestion jobs', error);
-    return null;
-  }
-};
+  const fetchIngestionJobForDoc = async (orgId: string, docId: string): Promise<IngestionJobRecord | null> => {
+    try {
+      const jobs = await apiFetch<IngestionJobRecord[]>(`/orgs/${orgId}/ingestion-jobs?status=${INGESTION_STATUS_FILTER}`, { skipCache: true });
+      if (!Array.isArray(jobs)) return null;
+      return jobs.find((job) => job?.doc_id === docId || job?.docId === docId) || null;
+    } catch (error) {
+      console.warn('Failed to load ingestion jobs', error);
+      return null;
+    }
+  };
 
-const waitForIngestionJobReady = async (orgId: string, docId: string, initialJob?: IngestionJobRecord | null) => {
-  const maxWaitMs = 6 * 60 * 1000;
-  const start = Date.now();
-  let attempt = 0;
-  let job: IngestionJobRecord | null | undefined = initialJob;
+  const waitForIngestionJobReady = async (orgId: string, docId: string, initialJob?: IngestionJobRecord | null) => {
+    const maxWaitMs = 6 * 60 * 1000;
+    const start = Date.now();
+    let attempt = 0;
+    let job: IngestionJobRecord | null | undefined = initialJob;
 
-  while (true) {
-    if (!job) {
+    while (true) {
+      if (!job) {
+        job = await fetchIngestionJobForDoc(orgId, docId);
+        if (!job) return null; // Already accepted/cleaned up.
+      }
+
+      const status = String(job.status || '').toLowerCase();
+      if (status === 'needs_review') {
+        return job;
+      }
+      if (status === 'failed') {
+        const err: any = new Error(job.failure_reason || 'Ingestion job failed');
+        err.job = job;
+        throw err;
+      }
+
+      if (Date.now() - start > maxWaitMs) {
+        const timeoutErr: any = new Error('Timed out waiting for ingestion to finish');
+        timeoutErr.job = job;
+        throw timeoutErr;
+      }
+
+      attempt += 1;
+      const delayMs = Math.min(1500 * Math.pow(1.5, attempt), 8000);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
       job = await fetchIngestionJobForDoc(orgId, docId);
-      if (!job) return null; // Already accepted/cleaned up.
     }
+  };
 
-    const status = String(job.status || '').toLowerCase();
-    if (status === 'needs_review') {
-      return job;
-    }
-    if (status === 'failed') {
-      const err: any = new Error(job.failure_reason || 'Ingestion job failed');
-      err.job = job;
-      throw err;
-    }
-
-    if (Date.now() - start > maxWaitMs) {
-      const timeoutErr: any = new Error('Timed out waiting for ingestion to finish');
-      timeoutErr.job = job;
-      throw timeoutErr;
-    }
-
-    attempt += 1;
-    const delayMs = Math.min(1500 * Math.pow(1.5, attempt), 8000);
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-    job = await fetchIngestionJobForDoc(orgId, docId);
-  }
-};
-
-const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<AnalyzeSuccessResponse> => {
+  const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<AnalyzeSuccessResponse> => {
     const maxWaitMs = 5 * 60 * 1000;
     const initialPollIntervalMs = 1500;
     const maxPollIntervalMs = 10000; // Cap at 10 seconds
@@ -1226,7 +1230,7 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
       pollCount++;
       const backoffMultiplier = Math.min(Math.floor(pollCount / 5), 3); // Max 3x multiplier (8x total)
       const currentInterval = Math.min(initialPollIntervalMs * Math.pow(2, backoffMultiplier), maxPollIntervalMs);
-      
+
       await new Promise((resolve) => setTimeout(resolve, currentInterval));
     }
   };
@@ -1268,7 +1272,7 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
     const timer = setInterval(() => setQueue(prev => prev.map((q, i) => i === index ? { ...q, progress: Math.min(q.progress + 8, 90) } : q)), 150);
     try {
       let dataUri: string;
-      const isImage = ['png','jpg','jpeg'].includes(ext || '');
+      const isImage = ['png', 'jpg', 'jpeg'].includes(ext || '');
       if (isImage && (item.rotation || 0) % 360 !== 0) {
         dataUri = await rotateImageFileToDataUri(item.file, item.rotation || 0);
       } else {
@@ -1443,26 +1447,26 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
 
       // Find version candidates (same hash or similar name)
       const candidates = findVersionCandidates(item.hash, item.file.name, documents, folderPath)
-        .map(d => ({ 
-          id: d.id, 
-          label: `${d.title || d.name || 'Untitled'} (v${d.versionNumber || d.version || 1})` 
+        .map(d => ({
+          id: d.id,
+          label: `${d.title || d.name || 'Untitled'} (v${d.versionNumber || d.version || 1})`
         }));
-      
+
       console.log('Found version candidates:', candidates.length, 'for file:', item.file.name, 'in folder:', folderPath);
-      
+
       console.log(`Setting item ${index} status to 'ready'`);
-      setQueue(prev => prev.map((q, i) => i === index ? { 
-        ...q, 
-        status: 'ready', 
-        extracted: { ocrText: finalOcrText, metadata: mergedMetadata }, 
-        form: updatedForm, 
-        locked: false, 
+      setQueue(prev => prev.map((q, i) => i === index ? {
+        ...q,
+        status: 'ready',
+        extracted: { ocrText: finalOcrText, metadata: mergedMetadata },
+        form: updatedForm,
+        locked: false,
         candidates,
         progress: 100,
         senderOptions,
         receiverOptions,
-        linkMode: preferredBaseId ? 'version' : (candidates.length > 0 ? 'version' : 'new'), 
-        baseId: preferredBaseId || candidates[0]?.id, 
+        linkMode: preferredBaseId ? 'version' : (candidates.length > 0 ? 'version' : 'new'),
+        baseId: preferredBaseId || candidates[0]?.id,
         storageKey: storageKey,
         geminiFile: analyzeResp.geminiFile,
         docId,
@@ -1474,7 +1478,7 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
     } catch (e) {
       clearInterval(timer);
       console.error('Upload processing error:', e);
-      
+
       // Provide specific error messages based on the type of failure
       let errorMessage = 'Processing failed';
       if (e instanceof Error) {
@@ -1497,12 +1501,12 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
           variant: 'destructive',
         });
       }
-      
+
       setQueue(prev => prev.map((q, i) => i === index ? { ...q, status: 'error', note: errorMessage, locked: false } : q));
-      toast({ 
-        title: 'Processing failed', 
-        description: `${item.file.name}: ${errorMessage}`, 
-        variant: 'destructive' 
+      toast({
+        title: 'Processing failed',
+        description: `${item.file.name}: ${errorMessage}`,
+        variant: 'destructive'
       });
     }
   };
@@ -1535,7 +1539,7 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
     const byHash = hash ? all.filter(d => d.contentHash === hash) : [];
     if (byHash.length) return byHash;
     // Fallback heuristic: same base name (strip timestamps) and same folder
-    const base = filename.toLowerCase().replace(/\s+/g, ' ').replace(/\d{4}-\d{2}-\d{2}.*/,'').trim();
+    const base = filename.toLowerCase().replace(/\s+/g, ' ').replace(/\d{4}-\d{2}-\d{2}.*/, '').trim();
     return all.filter(d => {
       const docPath = (d.folderPath || []).join('/');
       const currentPathStr = currentPath.join('/');
@@ -1550,7 +1554,7 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
         // ✅ OPTIMIZED: Use XMLHttpRequest for progress tracking
         const response = await new Promise((resolve, reject) => {
           const xhr = new XMLHttpRequest();
-          
+
           // Track upload progress
           xhr.upload.addEventListener('progress', (event) => {
             if (event.lengthComputable && onProgress) {
@@ -1558,7 +1562,7 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
               onProgress(percentComplete);
             }
           });
-          
+
           xhr.addEventListener('load', () => {
             if (xhr.status >= 200 && xhr.status < 300) {
               resolve({ ok: true, status: xhr.status, statusText: xhr.statusText });
@@ -1566,24 +1570,24 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
               reject(new Error(`Upload failed with status: ${xhr.status} ${xhr.statusText}`));
             }
           });
-          
+
           xhr.addEventListener('error', () => {
             reject(new Error('Upload failed'));
           });
-          
+
           xhr.open('PUT', signedUrl);
           xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
           xhr.send(file);
         });
-        
+
         return; // Success
       } catch (error) {
         console.error(`Upload attempt ${attempt} failed:`, error);
-        
+
         if (attempt === retries) {
           throw new Error(`Upload failed after ${retries} attempts: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
-        
+
         // Wait before retry (exponential backoff)
         const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
         await new Promise(resolve => setTimeout(resolve, delay));
@@ -1704,7 +1708,7 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
 
           console.log(`🔍 Level ${i + 1}: Creating folder "${folderName}" with parent path:`, parentPath);
 
-        const existing = documentFolders.find(f => JSON.stringify(f) === JSON.stringify(slice));
+          const existing = documentFolders.find(f => JSON.stringify(f) === JSON.stringify(slice));
           if (!existing) {
             console.log(`🔍 Folder "${folderName}" doesn't exist, creating...`);
             const result = await createFolder(parentPath, folderName);
@@ -1854,7 +1858,7 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
 
   // Check if user has permission to create documents
   // Use the hasAccess check from above (which includes page permission and functional permission)
-  
+
   // Show access restricted message if user doesn't have upload permission
   if (!hasAccess) {
     return (
@@ -1905,19 +1909,25 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => router.push('/documents')}
+                    onClick={() => router.push(cameFromQueue ? '/queue' : '/documents')}
                     className="hover-premium focus-premium p-1.5 sm:p-2 h-7 sm:h-8 flex-shrink-0"
                   >
                     <ArrowLeft className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                   </Button>
                   <div className="min-w-0 flex-1">
                     <h1 className="text-base sm:text-lg font-semibold text-foreground truncate">
-                      {folderPath.length ? `Upload to /${folderPath.join('/')}` : "Upload Documents"}
+                      {cameFromQueue
+                        ? "Review Document"
+                        : folderPath.length
+                          ? `Upload to /${folderPath.join('/')}`
+                          : "Upload Documents"}
                     </h1>
                     <p className="text-[10px] sm:text-xs text-muted-foreground mt-0.5 line-clamp-1 sm:line-clamp-none">
-                      {folderPath.length ?
-                        `Add files to the ${folderPath[folderPath.length - 1]} folder.` :
-                        "Add files and we'll analyze them for you."
+                      {cameFromQueue
+                        ? "Review and save this document from the ingestion queue."
+                        : folderPath.length
+                          ? `Add files to the ${folderPath[folderPath.length - 1]} folder.`
+                          : "Add files and we'll analyze them for you."
                       }
                     </p>
                   </div>
@@ -1969,792 +1979,800 @@ const waitForAnalysisJob = async (orgId: string, jobId: string): Promise<Analyze
                     <div className="text-lg sm:text-xl font-semibold text-foreground">Drag & drop files here</div>
                     <div className="text-xs sm:text-sm text-muted-foreground">or click to browse your computer</div>
                   </div>
-                <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
-                  {[
-                    { type: 'PDF', color: 'bg-red-500/10 text-red-600 border-red-500/20' },
-                    { type: 'TXT', color: 'bg-gray-500/10 text-gray-600 border-gray-500/20' },
-                    { type: 'MD', color: 'bg-purple-500/10 text-purple-600 border-purple-500/20' },
-                    { type: 'CSV', color: 'bg-amber-500/10 text-amber-600 border-amber-500/20' },
-                    { type: 'XLS', color: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
-                    { type: 'XLSX', color: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
-                    { type: 'JPG', color: 'bg-green-500/10 text-green-600 border-green-500/20' },
-                    { type: 'PNG', color: 'bg-cyan-500/10 text-cyan-600 border-cyan-500/20' }
-                  ].map(({ type, color }) => (
-                    <span key={type} className={`rounded-full border px-2 sm:px-3 py-0.5 sm:py-1 text-[10px] sm:text-xs font-medium ${color} transition-colors`}>
-                      {type}
-                    </span>
-                  ))}
-                </div>
-                <div id="upload-help" className="mt-3 sm:mt-4 text-[10px] sm:text-xs text-muted-foreground text-center space-y-0.5 sm:space-y-1">
-                  <div>We'll automatically extract metadata and generate a summary for you</div>
-                  <div className="hidden sm:block">Need nested folders? Drop a .zip or use the buttons below to upload a folder.</div>
-                </div>
-                <div className="mt-6 sm:mt-8 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
-                  <input
-                    ref={inputRef}
-                    type="file"
-                    multiple
-                    accept=".pdf,.txt,.md,.jpg,.jpeg,.png,.csv,.xls,.xlsx,application/pdf,text/plain,text/markdown,image/jpeg,image/png,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    className="hidden"
-                    onChange={(e) => e.target.files && onSelect(e.target.files)}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                  <Button 
-                    onClick={(e) => { e.stopPropagation(); onBrowse(); }} 
-                    className="gap-1.5 sm:gap-2 hover-premium focus-premium px-4 sm:px-6 py-1.5 sm:py-2 text-xs sm:text-sm"
-                    size="sm"
-                  >
-                    <UploadCloud className="h-3.5 w-3.5 sm:h-4 sm:w-4" /> 
-                    <span className="hidden sm:inline">Browse Files</span>
-                    <span className="sm:hidden">Browse</span>
-                  </Button>
-                  <input
-                    ref={zipInputRef}
-                    type="file"
-                    accept=".zip,application/zip"
-                    className="hidden"
-                    onChange={handleZipInputChange}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5 sm:gap-2 text-xs sm:text-sm"
-                    onClick={(e) => { e.stopPropagation(); zipInputRef.current?.click(); }}
-                  >
-                    <UploadCloud className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                    <span className="hidden sm:inline">Upload ZIP</span>
-                    <span className="sm:hidden">ZIP</span>
-                  </Button>
-                  <input
-                    ref={(el) => {
-                      folderInputRef.current = el;
-                      if (el) {
-                        el.setAttribute('webkitdirectory', 'true');
-                        el.setAttribute('directory', 'true');
-                        el.multiple = true;
-                      }
-                    }}
-                    type="file"
-                    multiple
-                    className="hidden"
-                    onChange={handleFolderInputChange}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5 sm:gap-2 text-xs sm:text-sm"
-                    onClick={(e) => { e.stopPropagation(); folderInputRef.current?.click(); }}
-                  >
-                    <FolderOpen className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                    <span className="hidden sm:inline">Upload Folder</span>
-                    <span className="sm:hidden">Folder</span>
-                  </Button>
-                </div>
-                <p className="mt-3 sm:mt-4 text-[10px] sm:text-xs text-muted-foreground">
+                  <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
+                    {[
+                      { type: 'PDF', color: 'bg-red-500/10 text-red-600 border-red-500/20' },
+                      { type: 'TXT', color: 'bg-gray-500/10 text-gray-600 border-gray-500/20' },
+                      { type: 'MD', color: 'bg-purple-500/10 text-purple-600 border-purple-500/20' },
+                      { type: 'CSV', color: 'bg-amber-500/10 text-amber-600 border-amber-500/20' },
+                      { type: 'XLS', color: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
+                      { type: 'XLSX', color: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
+                      { type: 'JPG', color: 'bg-green-500/10 text-green-600 border-green-500/20' },
+                      { type: 'PNG', color: 'bg-cyan-500/10 text-cyan-600 border-cyan-500/20' }
+                    ].map(({ type, color }) => (
+                      <span key={type} className={`rounded-full border px-2 sm:px-3 py-0.5 sm:py-1 text-[10px] sm:text-xs font-medium ${color} transition-colors`}>
+                        {type}
+                      </span>
+                    ))}
+                  </div>
+                  <div id="upload-help" className="mt-3 sm:mt-4 text-[10px] sm:text-xs text-muted-foreground text-center space-y-0.5 sm:space-y-1">
+                    <div>We'll automatically extract metadata and generate a summary for you</div>
+                    <div className="hidden sm:block">Need nested folders? Drop a .zip or use the buttons below to upload a folder.</div>
+                  </div>
+                  <div className="mt-6 sm:mt-8 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
+                    <input
+                      ref={inputRef}
+                      type="file"
+                      multiple
+                      accept=".pdf,.txt,.md,.jpg,.jpeg,.png,.csv,.xls,.xlsx,application/pdf,text/plain,text/markdown,image/jpeg,image/png,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                      className="hidden"
+                      onChange={(e) => e.target.files && onSelect(e.target.files)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                    <Button
+                      onClick={(e) => { e.stopPropagation(); onBrowse(); }}
+                      className="gap-1.5 sm:gap-2 hover-premium focus-premium px-4 sm:px-6 py-1.5 sm:py-2 text-xs sm:text-sm"
+                      size="sm"
+                    >
+                      <UploadCloud className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                      <span className="hidden sm:inline">Browse Files</span>
+                      <span className="sm:hidden">Browse</span>
+                    </Button>
+                    <input
+                      ref={zipInputRef}
+                      type="file"
+                      accept=".zip,application/zip"
+                      className="hidden"
+                      onChange={handleZipInputChange}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 sm:gap-2 text-xs sm:text-sm"
+                      onClick={(e) => { e.stopPropagation(); zipInputRef.current?.click(); }}
+                    >
+                      <UploadCloud className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                      <span className="hidden sm:inline">Upload ZIP</span>
+                      <span className="sm:hidden">ZIP</span>
+                    </Button>
+                    <input
+                      ref={(el) => {
+                        folderInputRef.current = el;
+                        if (el) {
+                          el.setAttribute('webkitdirectory', 'true');
+                          el.setAttribute('directory', 'true');
+                          el.multiple = true;
+                        }
+                      }}
+                      type="file"
+                      multiple
+                      className="hidden"
+                      onChange={handleFolderInputChange}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 sm:gap-2 text-xs sm:text-sm"
+                      onClick={(e) => { e.stopPropagation(); folderInputRef.current?.click(); }}
+                    >
+                      <FolderOpen className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                      <span className="hidden sm:inline">Upload Folder</span>
+                      <span className="sm:hidden">Folder</span>
+                    </Button>
+                  </div>
+                  <p className="mt-3 sm:mt-4 text-[10px] sm:text-xs text-muted-foreground">
                     Supports up to {BULK_UPLOAD_LIMIT} files per bulk upload (PDF, TXT/MD, CSV/XLS/XLSX, JPG, PNG). Individual files must be under {BULK_UPLOAD_MAX_FILE_MB}MB.
-                </p>
-                {(lastBulkSummary || skipDetails) && (
-                  <div className="mt-4 w-full rounded-md border bg-muted/30 p-3 text-xs space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="font-medium text-foreground">
-                        {lastBulkSummary
-                          ? `Queued ${lastBulkSummary.count} file${lastBulkSummary.count === 1 ? '' : 's'} to /${lastBulkSummary.path.length ? lastBulkSummary.path.join('/') : 'Root'}`
-                          : 'Upload summary'}
+                  </p>
+                  {(lastBulkSummary || skipDetails) && (
+                    <div className="mt-4 w-full rounded-md border bg-muted/30 p-3 text-xs space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-medium text-foreground">
+                          {lastBulkSummary
+                            ? `Queued ${lastBulkSummary.count} file${lastBulkSummary.count === 1 ? '' : 's'} to /${lastBulkSummary.path.length ? lastBulkSummary.path.join('/') : 'Root'}`
+                            : 'Upload summary'}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {lastBulkSummary && (
+                            <Button size="sm" variant="outline" onClick={() => navigateToFolder(lastBulkSummary.path)}>
+                              View folder
+                            </Button>
+                          )}
+                          <Button size="sm" variant="ghost" onClick={handleClearBulkSummary}>
+                            Dismiss
+                          </Button>
+                        </div>
+                      </div>
+                      {skipDetails && skipDetails.length > 0 && (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <div className="font-medium text-destructive">Skipped {skipDetails.length} file{skipDetails.length === 1 ? '' : 's'}</div>
+                            {skipDetails.length > 5 && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setShowAllSkipped((prev) => !prev)}
+                              >
+                                {showAllSkipped ? 'Show less' : 'Show all'}
+                              </Button>
+                            )}
+                          </div>
+                          <ul className="list-disc pl-5 space-y-1 text-destructive/90">
+                            {(showAllSkipped ? skipDetails : skipDetails.slice(0, 5)).map((item, idx) => (
+                              <li key={`${item.path}-${idx}`}>{item.path}: {item.reason}</li>
+                            ))}
+                            {!showAllSkipped && skipDetails.length > 5 && (
+                              <li className="text-muted-foreground">…and {skipDetails.length - 5} more</li>
+                            )}
+                          </ul>
+                        </div>
+                      )}
+                      {!skipDetails && lastBulkSummary && (
+                        <div className="text-muted-foreground">
+                          Review each file below to add metadata before saving.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {recentSavePath && (
+                    <div className="mt-4 w-full rounded-md border bg-muted/30 p-3 text-xs flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-foreground">
+                        Recently saved to{' '}
+                        <span className="font-medium">
+                          /{recentSavePath.length ? recentSavePath.join('/') : 'Root'}
+                        </span>
                       </div>
                       <div className="flex items-center gap-2">
-                        {lastBulkSummary && (
-                          <Button size="sm" variant="outline" onClick={() => navigateToFolder(lastBulkSummary.path)}>
-                            View folder
-                          </Button>
-                        )}
-                        <Button size="sm" variant="ghost" onClick={handleClearBulkSummary}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            navigateToFolder(recentSavePath);
+                            setRecentSavePath(null);
+                          }}
+                        >
+                          View folder
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setRecentSavePath(null)}>
                           Dismiss
                         </Button>
                       </div>
                     </div>
-                    {skipDetails && skipDetails.length > 0 && (
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <div className="font-medium text-destructive">Skipped {skipDetails.length} file{skipDetails.length === 1 ? '' : 's'}</div>
-                          {skipDetails.length > 5 && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setShowAllSkipped((prev) => !prev)}
-                            >
-                              {showAllSkipped ? 'Show less' : 'Show all'}
-                            </Button>
-                          )}
-                        </div>
-                        <ul className="list-disc pl-5 space-y-1 text-destructive/90">
-                          {(showAllSkipped ? skipDetails : skipDetails.slice(0, 5)).map((item, idx) => (
-                            <li key={`${item.path}-${idx}`}>{item.path}: {item.reason}</li>
-                          ))}
-                          {!showAllSkipped && skipDetails.length > 5 && (
-                            <li className="text-muted-foreground">…and {skipDetails.length - 5} more</li>
-                          )}
-                        </ul>
-                      </div>
-                    )}
-                    {!skipDetails && lastBulkSummary && (
-                      <div className="text-muted-foreground">
-                        Review each file below to add metadata before saving.
-                      </div>
-                    )}
-                  </div>
-                )}
-                {recentSavePath && (
-                  <div className="mt-4 w-full rounded-md border bg-muted/30 p-3 text-xs flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-foreground">
-                      Recently saved to{' '}
-                      <span className="font-medium">
-                        /{recentSavePath.length ? recentSavePath.join('/') : 'Root'}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          navigateToFolder(recentSavePath);
-                          setRecentSavePath(null);
-                        }}
-                      >
-                        View folder
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setRecentSavePath(null)}>
-                        Dismiss
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-          </div>
-        )}
-
-        {hasRoleAtLeast('member') && queue.length > 0 && (
-          <>
-          <div className="px-1 sm:px-4 md:px-6">
-            <Card className="rounded-xl card-premium">
-              <CardHeader className="flex flex-col gap-2 sm:gap-3 pb-3 sm:pb-4">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
-                  <div className="flex items-center gap-2 sm:gap-3">
-                    <div className="p-1.5 sm:p-2 rounded-lg bg-primary/10 border border-primary/20">
-                      <UploadCloud className="h-4 w-4 sm:h-5 sm:w-5 text-primary" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <CardTitle className="text-base sm:text-lg font-semibold">Upload Queue</CardTitle>
-                      <p className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">
-                        {queue.filter(item => item.status === 'ready').length} of {queue.length}/10 files ready to save
-                      </p>
-                    </div>
-                  </div>
-                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                    {queue.filter(item => item.status === 'ready' && !item.locked).length > 1 && (
-                      <Button
-                        variant="default"
-                        size="sm"
-                        onClick={saveAllReady}
-                        disabled={planBlocked || isSavingAll}
-                        className="gap-1.5 sm:gap-2 hover-premium focus-premium text-xs sm:text-sm"
-                      >
-                        <Check className="h-3 w-3" />
-                        <span className="hidden sm:inline">Save All</span>
-                        <span className="sm:hidden">All</span>
-                        <span className="ml-0.5">({queue.filter(item => item.status === 'ready' && !item.locked).length})</span>
-                      </Button>
-                    )}
-                    {carouselMode && queue.length > 1 && (
-                      <>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setActiveIndex((prev) => {
-                        const i = (prev ?? 0) - 1;
-                        return i < 0 ? queue.length - 1 : i;
-                          })}
-                          className="hover-premium focus-premium text-xs sm:text-sm"
-                        >
-                          Prev
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setActiveIndex((prev) => {
-                        const i = (prev ?? 0) + 1;
-                        return i >= queue.length ? 0 : i;
-                          })}
-                          className="hover-premium focus-premium text-xs sm:text-sm"
-                        >
-                          Next
-                        </Button>
-                      </>
-                    )}
-                    {queue.length > 1 && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setCarouselMode(m => !m)}
-                        className="hover-premium focus-premium text-xs sm:text-sm"
-                      >
-                        {carouselMode ? 'List' : 'Carousel'}
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                {typeof activeIndex === 'number' && queue[activeIndex] && (
-                  <div className="text-[10px] sm:text-xs text-muted-foreground">Viewing {activeIndex + 1} of {queue.length}</div>
-                )}
-              </CardHeader>
-              <CardContent className="space-y-3 sm:space-y-4">
-                {carouselMode && typeof activeIndex === 'number' && queue[activeIndex] ? (
-                  (() => {
-                    const item = queue[activeIndex]!;
-                    const i = activeIndex!;
-                    const targetFolderPath = item.folderPathOverride && item.folderPathOverride.length > 0
-                      ? item.folderPathOverride
-                      : folderPath;
-                    const shouldUseRemotePreview = Boolean(item.docId) && (!item.previewUrl || item.prefilledFromQueue);
-                    const isCsvPreview = !shouldUseRemotePreview && isCsvFile(item.file);
-                    return (
-                      <div className={`rounded-lg border p-3 sm:p-4 md:p-6 ring-1 ring-primary`}>
-                        {/* Header with file info and actions */}
-                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 mb-4 sm:mb-6">
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate font-medium text-sm sm:text-base md:text-lg" title={item.file.name}>{item.file.name}</div>
-                            <div
-                              className="text-[10px] sm:text-xs text-muted-foreground break-words whitespace-normal line-clamp-1"
-                              title={`/${targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}`}
-                            >
-                              /{targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}
-                            </div>
-                            <div className="text-xs sm:text-sm text-muted-foreground capitalize">{item.status}</div>
-                          </div>
-                          <div className="w-full sm:w-40 flex flex-col sm:items-end gap-1">
-                            <Progress value={item.progress} />
-                            {item.note && (
-                              <span className="text-[10px] sm:text-xs text-muted-foreground text-right">{item.note}</span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                            {item.status === 'idle' && !isProcessingAll && (
-                              <Button
-                                size="sm"
-                                onClick={() => processItem(i)}
-                                disabled={planBlocked || !!item.locked}
-                                className="text-xs sm:text-sm"
-                              >
-                                Process
-                              </Button>
-                            )}
-                            {item.status === 'ready' && (
-                              <>
-                                {!(item.prefilledFromQueue && item.note) && (
-                                  <Button size="sm" onClick={() => handleSave(i)} disabled={planBlocked || item.locked} className="text-xs sm:text-sm">
-                                    Save
-                                  </Button>
-                                )}
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => handleReject(i)}
-                                  disabled={item.locked}
-                                  className="text-xs sm:text-sm"
-                                >
-                                  Reject
-                                </Button>
-                              </>
-                            )}
-                            {item.status === 'saving' && (
-                              <Button size="sm" variant="outline" disabled className="gap-1.5 sm:gap-2 text-xs sm:text-sm">
-                                <Loader2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
-                                {item.note || 'Saving…'}
-                              </Button>
-                            )}
-                            {(item.status === 'success' || item.status === 'error') && <Button size="sm" variant="outline" onClick={() => void removeQueueItem(i)} className="text-xs sm:text-sm">Remove</Button>}
-                          </div>
-                        </div>
-
-                        {/* Enhanced layout: Left side - Form, Right side - Preview */}
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-                          {/* Left side - Form data */}
-                          <div className="space-y-3 sm:space-y-4">
-                      {item.status === 'ready' && item.form && (
-                        <div className="mt-2 sm:mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-3">
-                            {/* Link as version vs new */}
-                            <div className="md:col-span-2">
-                              <label className="text-xs sm:text-sm font-medium">Save mode</label>
-                              <div className="mt-1.5 sm:mt-2 flex flex-wrap items-center gap-2 sm:gap-4">
-                                <label className="flex items-center gap-2 text-sm">
-                                  <input type="radio" checked={item.linkMode === 'new'} onChange={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, linkMode: 'new' } : q))} /> New Document
-                                </label>
-                                <label className={"flex items-center gap-2 text-sm " + (!hasExistingDocs ? 'opacity-60' : '')}>
-                                  <input type="radio" disabled={!hasExistingDocs} checked={item.linkMode === 'version'} onChange={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, linkMode: 'version' } : q))} /> Link as New Version
-                              </label>
-                                {item.linkMode === 'version' && hasExistingDocs && item.candidates && item.candidates.length > 0 && (
-                                  <select
-                                    className="border rounded-md p-1 text-sm"
-                                    value={item.baseId}
-                                    onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, baseId: e.target.value } : q))}
-                                  >
-                                    {item.candidates.map(c => (
-                                      <option key={c.id} value={c.id}>{c.label}</option>
-                                    ))}
-                                  </select>
-                                )}
-                                {item.linkMode === 'version' && hasExistingDocs && (
-                                  <Button size="sm" variant="outline" onClick={() => setPickerOpenIndex(i)}>Choose…</Button>
-                                )}
-                                {!hasExistingDocs && (
-                                  <span className="text-xs text-muted-foreground">No documents yet to link.</span>
-                                )}
-                              </div>
-                            </div>
-                            <div>
-                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
-                                <FileText className="h-3 w-3" />
-                                Title
-                              </label>
-                              <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.title} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, title: e.target.value } } : q))} />
-                            </div>
-                            <div>
-                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
-                                <FileText className="h-3 w-3" />
-                                Filename
-                              </label>
-                              <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.filename} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, filename: e.target.value } } : q))} />
-                            </div>
-                            <div>
-                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
-                                <User className="h-3 w-3" />
-                                Sender
-                              </label>
-                              <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.sender} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, sender: e.target.value } } : q))} />
-                            </div>
-                            <div>
-                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
-                                <UserCheck className="h-3 w-3" />
-                                Receiver
-                              </label>
-                              <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.receiver} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, receiver: e.target.value } } : q))} />
-                            </div>
-                            <div>
-                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
-                                <Calendar className="h-3 w-3" />
-                                Document Date
-                              </label>
-                              <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.documentDate} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, documentDate: e.target.value } } : q))} />
-                            </div>
-                            <div className="md:col-span-2">
-                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
-                                <MessageSquare className="h-3 w-3" />
-                                Subject
-                              </label>
-                              <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.subject} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, subject: e.target.value } } : q))} />
-                            </div>
-                            <div className="md:col-span-2">
-                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
-                                <MessageSquare className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
-                                Description
-                              </label>
-                              <textarea rows={3} className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm resize-none" value={item.form.description} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, description: e.target.value } } : q))} />
-                            </div>
-                            <div>
-                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
-                                <Bookmark className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
-                                Category
-                              </label>
-                              <UiSelect value={item.form?.category || 'General'} onValueChange={(value) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, category: value } } : q))}>
-                                <UiSelectTrigger className="mt-1 w-full h-8 sm:h-9 text-xs sm:text-sm">
-                                  <UiSelectValue placeholder="Select category..." />
-                                </UiSelectTrigger>
-                                <UiSelectContent>
-                                  {availableCategories.map((category) => (
-                                    <UiSelectItem key={category} value={category}>
-                                      {category}
-                                    </UiSelectItem>
-                                  ))}
-                                </UiSelectContent>
-                              </UiSelect>
-                            </div>
-                            <div>
-                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
-                                <Hash className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
-                                Keywords (comma)
-                              </label>
-                              <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.keywords} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, keywords: e.target.value } } : q))} />
-                            </div>
-                            <div>
-                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
-                                <Tag className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
-                                Tags
-                              </label>
-                              <input 
-                                className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" 
-                                placeholder="Enter tags separated by commas"
-                                value={item.form.tags} 
-                                onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, tags: e.target.value } } : q))} 
-                              />
-                            </div>
-                            <div className="md:col-span-2">
-                              <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
-                                <FolderOpen className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
-                                Upload Destination
-                                {folderPath.length > 0 && (
-                                  <span className="ml-1 sm:ml-2 text-primary font-medium text-xs sm:text-sm">
-                                    /{folderPath.join('/')}
-                                  </span>
-                                )}
-                              </label>
-                              <div className="mt-1">
-                                <div className="flex items-center gap-1.5 sm:gap-2">
-                                  <input
-                                    className="flex-1 rounded-md border bg-background p-1.5 sm:p-2 text-xs sm:text-sm"
-                                    value={`/${folderPath.join('/')}`}
-                                    readOnly
-                                  />
-                                  <Button variant="outline" size="sm" onClick={() => setFolderCommandOpen(true)} className="text-xs sm:text-sm h-8 sm:h-9">
-                                    Browse…
-                                  </Button>
-                                </div>
-                              </div>
-                              <p className="mt-1 text-[10px] sm:text-xs text-muted-foreground">
-                                Documents will be uploaded to: <span className="font-medium">/{folderPath.join('/') || 'Root'}</span>
-                                <br className="hidden sm:block" />
-                                <span className="sm:hidden"> </span>
-                                New folders will be created automatically if they don't exist.
-                              </p>
-                            </div>
-                          </div>
-                        )}
-                          </div>
-
-                          {/* Right side - Enhanced file preview */}
-                          <div className="space-y-3 sm:space-y-4">
-                            <div>
-                              <h3 className="text-xs sm:text-sm font-medium mb-2 sm:mb-3">Document Preview</h3>
-                              {shouldUseRemotePreview ? (
-                                <FilePreview
-                                  documentId={item.docId as string}
-                                  mimeType={item.file.type || 'application/pdf'}
-                                  extractedContent={item.extracted?.ocrText}
-                                />
-                              ) : isCsvPreview ? (
-                                <CsvPreview
-                                  fileName={item.file.name}
-                                  fileSize={item.file.size}
-                                  preview={item.tabularPreview}
-                                />
-                              ) : (
-                                <UploadFilePreview
-                                  file={item.file}
-                                  previewUrl={item.previewUrl}
-                                  height="70vh"
-                                />
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()
-                ) : (
-                  queue.map((item, i) => {
-                    const targetFolderPath = item.folderPathOverride && item.folderPathOverride.length > 0
-                      ? item.folderPathOverride
-                      : folderPath;
-                    return (
-                      <div key={i} className={`rounded-lg border p-2.5 sm:p-3 ${activeIndex === i ? 'ring-1 ring-primary' : ''}`}>
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate font-medium text-sm sm:text-base" title={item.file.name}>{item.file.name}</div>
-                          <div className="text-[10px] sm:text-xs text-muted-foreground capitalize">{item.status}</div>
-                          <div
-                            className="text-[10px] sm:text-xs text-muted-foreground break-words whitespace-normal line-clamp-1"
-                            title={`/${targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}`}
-                          >
-                            /{targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}
-                          </div>
-                        </div>
-                        <div className="w-full sm:w-40 flex flex-col sm:items-end gap-1">
-                          <Progress value={item.progress} />
-                          {item.note && (
-                            <span className="text-[10px] sm:text-xs text-muted-foreground text-right">{item.note}</span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                          {item.status === 'idle' && !isProcessingAll && (
-                            <Button size="sm" onClick={() => processItem(i)} disabled={planBlocked || !!item.locked} className="text-xs sm:text-sm">
-                              Process
-                            </Button>
-                          )}
-                          {item.status === 'ready' && (
-                            <>
-                              {!(item.prefilledFromQueue && item.note) && (
-                                <Button size="sm" onClick={() => handleSave(i)} disabled={planBlocked || item.locked} className="text-xs sm:text-sm">
-                                  Save
-                                </Button>
-                              )}
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={() => handleReject(i)}
-                                disabled={item.locked}
-                                className="text-xs sm:text-sm"
-                              >
-                                Reject
-                              </Button>
-                            </>
-                          )}
-                          {item.status === 'saving' && (
-                            <Button size="sm" variant="outline" disabled className="gap-1.5 sm:gap-2 text-xs sm:text-sm">
-                              <Loader2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
-                              {item.note || 'Saving…'}
-                            </Button>
-                          )}
-                          {(item.status === 'success' || item.status === 'error') && <Button size="sm" variant="outline" onClick={() => setQueue(prev => prev.filter((_, idx) => idx !== i))} className="text-xs sm:text-sm">Remove</Button>}
-                        </div>
-                      </div>
-                      {item.status === 'ready' && item.form && (
-                        <div className="mt-2 sm:mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-3">
-                          <div>
-                            <label className="text-xs text-muted-foreground flex items-center gap-1.5 font-medium">
-                              <FileText className="h-3.5 w-3.5" />
-                              Title
-                            </label>
-                            <input
-                              className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm"
-                              value={item.form.title}
-                              onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, title: e.target.value } } : q))}
-                              placeholder="Enter document title..."
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs text-muted-foreground flex items-center gap-1.5 font-medium">
-                              <FileText className="h-3.5 w-3.5" />
-                              Filename
-                            </label>
-                            <input
-                              className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm"
-                              value={item.form.filename}
-                              onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, filename: e.target.value } } : q))}
-                              placeholder="Enter filename..."
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs text-muted-foreground flex items-center gap-1.5 font-medium">
-                              <User className="h-3.5 w-3.5" />
-                              Sender
-                            </label>
-                            <input
-                              className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm"
-                              value={item.form.sender}
-                              onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, sender: e.target.value } } : q))}
-                              placeholder="Who sent this document?"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs text-muted-foreground flex items-center gap-1">
-                              <UserCheck className="h-3 w-3" />
-                              Receiver
-                            </label>
-                            <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.receiver} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, receiver: e.target.value } } : q))} />
-                          </div>
-                          <div>
-                            <label className="text-xs text-muted-foreground flex items-center gap-1">
-                              <Calendar className="h-3 w-3" />
-                              Document Date
-                            </label>
-                            <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.documentDate} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, documentDate: e.target.value } } : q))} />
-                        </div>
-                        <div className="md:col-span-2">
-                            <label className="text-xs text-muted-foreground flex items-center gap-1">
-                              <MessageSquare className="h-3 w-3" />
-                            Subject
-                          </label>
-                            <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.subject} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, subject: e.target.value } } : q))} />
-                        </div>
-                        <div className="md:col-span-2">
-                            <label className="text-xs text-muted-foreground flex items-center gap-1">
-                              <MessageSquare className="h-3 w-3" />
-                            Description
-                          </label>
-                            <textarea rows={3} className="mt-1 rounded-md border bg-background p-2 w-full" value={item.form.description} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, description: e.target.value } } : q))} />
-                        </div>
-                        <div>
-                            <label className="text-xs text-muted-foreground flex items-center gap-1">
-                              <Bookmark className="h-3 w-3" />
-                            Category
-                          </label>
-                          <UiSelect value={item.form?.category || 'General'} onValueChange={(value) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, category: value } } : q))}>
-                              <UiSelectTrigger className="mt-1 w-full">
-                              <UiSelectValue placeholder="Select category..." />
-                            </UiSelectTrigger>
-                            <UiSelectContent>
-                              {availableCategories.map((category) => (
-                                <UiSelectItem key={category} value={category}>
-                                  {category}
-                                </UiSelectItem>
-                              ))}
-                            </UiSelectContent>
-                          </UiSelect>
-                        </div>
-                        <div>
-                            <label className="text-xs text-muted-foreground">Keywords (comma)</label>
-                            <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.keywords} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, keywords: e.target.value } } : q))} />
-                        </div>
-                        <div className="md:col-span-2">
-                            <label className="text-xs text-muted-foreground">Tags (comma)</label>
-                            <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.tags} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, tags: e.target.value } } : q))} />
-                        </div>
-
-                        {/* Linking Options */}
-                        <div className="md:col-span-2">
-                            <label className="text-xs text-muted-foreground flex items-center gap-1">
-                              <LinkIcon className="h-3 w-3" />
-                            Document Relationship
-                          </label>
-                            <div className="mt-2 flex items-center gap-4">
-                              <label className="flex items-center gap-2 text-sm">
-                              <input
-                                type="radio"
-                                checked={item.linkMode === 'new'}
-                                onChange={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, linkMode: 'new' } : q))}
-                              />
-                              New Document
-                            </label>
-                              <label className={`flex items-center gap-2 text-sm ${documents.length === 0 ? 'opacity-50' : ''}`}>
-                              <input
-                                type="radio"
-                                disabled={documents.length === 0}
-                                checked={item.linkMode === 'version'}
-                                onChange={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, linkMode: 'version' } : q))}
-                              />
-                              Link as New Version
-                            </label>
-                            {item.linkMode === 'version' && documents.length > 0 && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => setPickerOpenIndex(i)}
-                                  className="text-xs h-7"
-                              >
-                                {item.baseId ?
-                                  `Selected: ${documents.find(d => d.id === item.baseId)?.title || documents.find(d => d.id === item.baseId)?.name || 'Unknown'}` :
-                                  'Select Document'
-                                }
-                              </Button>
-                            )}
-                          </div>
-                          {item.linkMode === 'version' && !item.baseId && (
-                            <div className="mt-1 text-xs text-destructive">
-                              Please select a document to link this as a new version.
-                            </div>
-                          )}
-                        </div>
-                        <div className="md:col-span-2">
-                            <label className="text-xs text-muted-foreground">
-                            Upload Destination
-                            {folderPath.length > 0 && (
-                              <span className="ml-2 text-primary font-medium">
-                                /{folderPath.join('/')}
-                              </span>
-                            )}
-                          </label>
-                            <div className="mt-1 text-xs text-muted-foreground">
-                              Documents will be uploaded to: <span className="font-medium">/{folderPath.join('/') || 'Root'}</span>
-                            <br />
-                              Folder path is set from the main form above.
-                          </div>
-                        </div>
-                      </div>
-                      )}
-                      </div>
-                    );
-                  })
-                )}
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-3">
-                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-                    <Button variant="outline" onClick={onReset} className="text-xs sm:text-sm">Clear</Button>
-                    {hasSuccess && <span className="text-[10px] sm:text-xs text-muted-foreground">Saved: {queue.filter(q => q.status === 'success').length}</span>}
-                    {readyCount > 0 && <span className="text-[10px] sm:text-xs text-muted-foreground">Ready: {readyCount}</span>}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 sm:gap-2">
-                    {hasProcessable && queue.length > 1 && (
-                    <Button onClick={async () => {
-                      setIsProcessingAll(true);
-                      try {
-                        const indicesToProcess = queue.map((q, i) => (q.status === 'idle' || q.status === 'error') ? i : -1).filter(i => i >= 0);
-                        
-                        // Process files in parallel batches for better performance
-                        const BATCH_SIZE = 10; // Process 10 files simultaneously (max allowed)
-                        const batches = [];
-                        for (let i = 0; i < indicesToProcess.length; i += BATCH_SIZE) {
-                          batches.push(indicesToProcess.slice(i, i + BATCH_SIZE));
-                        }
-                        
-                        for (const batch of batches) {
-                          // Process each batch in parallel
-                          await Promise.allSettled(
-                            batch.map(i => processItem(i).catch(error => {
-                              console.error(`Failed to process item ${i}:`, error);
-                              // Update queue to show error status
-                              setQueue(prev => prev.map((q, idx) => 
-                                idx === i ? { ...q, status: 'error', note: error.message } : q
-                              ));
-                            }))
-                          );
-                          
-                          // Small delay between batches to prevent overwhelming the system
-                          if (batches.indexOf(batch) < batches.length - 1) {
-                            await new Promise(resolve => setTimeout(resolve, 1000));
-                          }
-                        }
-                      } finally {
-                        setIsProcessingAll(false);
-                      }
-                    }} disabled={isProcessingAll} className="gap-1.5 sm:gap-2 text-xs sm:text-sm">
-                      {isProcessingAll ? (
-                        <>
-                          <Loader2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
-                          <span className="hidden sm:inline">Processing…</span>
-                          <span className="sm:hidden">Processing</span>
-                        </>
-                      ) : (
-                        <>
-                          <span className="hidden sm:inline">Process All</span>
-                          <span className="sm:hidden">Process</span>
-                        </>
-                      )}
-                    </Button>
-                    )}
-                    {readyCount > 0 && (
-                      <Button onClick={saveAllReady} disabled={isSavingAll} className="gap-1.5 sm:gap-2 text-xs sm:text-sm">
-                        {isSavingAll ? (
-                          <>
-                            <Loader2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
-                            <span className="hidden sm:inline">Saving all…</span>
-                            <span className="sm:hidden">Saving</span>
-                          </>
-                        ) : (
-                          <>
-                            <span className="hidden sm:inline">Save All</span>
-                            <span className="sm:hidden">Save</span>
-                          </>
-                        )}
-                      </Button>
-                    )}
-                  </div>
+                  )}
                 </div>
               </CardContent>
             </Card>
           </div>
-          </>
         )}
+
+        {hasRoleAtLeast('member') && queue.length > 0 && (() => {
+          // Check if this is a single document review from the queue
+          const isSingleDocFromQueue = queue.length === 1 && queue[0]?.prefilledFromQueue;
+          return (
+            <>
+              <div className="px-1 sm:px-4 md:px-6">
+                <Card className="rounded-xl card-premium">
+                  <CardHeader className="flex flex-col gap-2 sm:gap-3 pb-3 sm:pb-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
+                      <div className="flex items-center gap-2 sm:gap-3">
+                        <div className="p-1.5 sm:p-2 rounded-lg bg-primary/10 border border-primary/20">
+                          <UploadCloud className="h-4 w-4 sm:h-5 sm:w-5 text-primary" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <CardTitle className="text-base sm:text-lg font-semibold">
+                            {isSingleDocFromQueue ? 'Document Review' : 'Upload Queue'}
+                          </CardTitle>
+                          {!isSingleDocFromQueue && (
+                            <p className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">
+                              {queue.filter(item => item.status === 'ready').length} of {queue.length}/10 files ready to save
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                        {queue.filter(item => item.status === 'ready' && !item.locked).length > 1 && (
+                          <Button
+                            variant="default"
+                            size="sm"
+                            onClick={saveAllReady}
+                            disabled={planBlocked || isSavingAll}
+                            className="gap-1.5 sm:gap-2 hover-premium focus-premium text-xs sm:text-sm"
+                          >
+                            <Check className="h-3 w-3" />
+                            <span className="hidden sm:inline">Save All</span>
+                            <span className="sm:hidden">All</span>
+                            <span className="ml-0.5">({queue.filter(item => item.status === 'ready' && !item.locked).length})</span>
+                          </Button>
+                        )}
+                        {carouselMode && queue.length > 1 && (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setActiveIndex((prev) => {
+                                const i = (prev ?? 0) - 1;
+                                return i < 0 ? queue.length - 1 : i;
+                              })}
+                              className="hover-premium focus-premium text-xs sm:text-sm"
+                            >
+                              Prev
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setActiveIndex((prev) => {
+                                const i = (prev ?? 0) + 1;
+                                return i >= queue.length ? 0 : i;
+                              })}
+                              className="hover-premium focus-premium text-xs sm:text-sm"
+                            >
+                              Next
+                            </Button>
+                          </>
+                        )}
+                        {queue.length > 1 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setCarouselMode(m => !m)}
+                            className="hover-premium focus-premium text-xs sm:text-sm"
+                          >
+                            {carouselMode ? 'List' : 'Carousel'}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    {!isSingleDocFromQueue && typeof activeIndex === 'number' && queue[activeIndex] && (
+                      <div className="text-[10px] sm:text-xs text-muted-foreground">Viewing {activeIndex + 1} of {queue.length}</div>
+                    )}
+                  </CardHeader>
+                  <CardContent className="space-y-3 sm:space-y-4">
+                    {carouselMode && typeof activeIndex === 'number' && queue[activeIndex] ? (
+                      (() => {
+                        const item = queue[activeIndex]!;
+                        const i = activeIndex!;
+                        const targetFolderPath = item.folderPathOverride && item.folderPathOverride.length > 0
+                          ? item.folderPathOverride
+                          : folderPath;
+                        const shouldUseRemotePreview = Boolean(item.docId) && (!item.previewUrl || item.prefilledFromQueue);
+                        const isCsvPreview = !shouldUseRemotePreview && isCsvFile(item.file);
+                        return (
+                          <div className={`rounded-lg border p-3 sm:p-4 md:p-6 ring-1 ring-primary`}>
+                            {/* Header with file info and actions */}
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 mb-4 sm:mb-6">
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate font-medium text-sm sm:text-base md:text-lg" title={item.file.name}>{item.file.name}</div>
+                                <div
+                                  className="text-[10px] sm:text-xs text-muted-foreground break-words whitespace-normal line-clamp-1"
+                                  title={`/${targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}`}
+                                >
+                                  /{targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}
+                                </div>
+                                <div className="text-xs sm:text-sm text-muted-foreground capitalize">{item.status}</div>
+                              </div>
+                              <div className="w-full sm:w-40 flex flex-col sm:items-end gap-1">
+                                <Progress value={item.progress} />
+                                {item.note && (
+                                  <span className="text-[10px] sm:text-xs text-muted-foreground text-right">{item.note}</span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                                {item.status === 'idle' && !isProcessingAll && (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => processItem(i)}
+                                    disabled={planBlocked || !!item.locked}
+                                    className="text-xs sm:text-sm"
+                                  >
+                                    Process
+                                  </Button>
+                                )}
+                                {item.status === 'ready' && (
+                                  <>
+                                    {!(item.prefilledFromQueue && item.note) && (
+                                      <Button size="sm" onClick={() => handleSave(i)} disabled={planBlocked || item.locked} className="text-xs sm:text-sm">
+                                        Save
+                                      </Button>
+                                    )}
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      onClick={() => handleReject(i)}
+                                      disabled={item.locked}
+                                      className="text-xs sm:text-sm"
+                                    >
+                                      Reject
+                                    </Button>
+                                  </>
+                                )}
+                                {item.status === 'saving' && (
+                                  <Button size="sm" variant="outline" disabled className="gap-1.5 sm:gap-2 text-xs sm:text-sm">
+                                    <Loader2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
+                                    {item.note || 'Saving…'}
+                                  </Button>
+                                )}
+                                {(item.status === 'success' || item.status === 'error') && <Button size="sm" variant="outline" onClick={() => void removeQueueItem(i)} className="text-xs sm:text-sm">Remove</Button>}
+                              </div>
+                            </div>
+
+                            {/* Enhanced layout: Left side - Form, Right side - Preview */}
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                              {/* Left side - Form data */}
+                              <div className="space-y-3 sm:space-y-4">
+                                {item.status === 'ready' && item.form && (
+                                  <div className="mt-2 sm:mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-3">
+                                    {/* Link as version vs new */}
+                                    <div className="md:col-span-2">
+                                      <label className="text-xs sm:text-sm font-medium">Save mode</label>
+                                      <div className="mt-1.5 sm:mt-2 flex flex-wrap items-center gap-2 sm:gap-4">
+                                        <label className="flex items-center gap-2 text-sm">
+                                          <input type="radio" checked={item.linkMode === 'new'} onChange={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, linkMode: 'new' } : q))} /> New Document
+                                        </label>
+                                        <label className={"flex items-center gap-2 text-sm " + (!hasExistingDocs ? 'opacity-60' : '')}>
+                                          <input type="radio" disabled={!hasExistingDocs} checked={item.linkMode === 'version'} onChange={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, linkMode: 'version' } : q))} /> Link as New Version
+                                        </label>
+                                        {item.linkMode === 'version' && hasExistingDocs && item.candidates && item.candidates.length > 0 && (
+                                          <select
+                                            className="border rounded-md p-1 text-sm"
+                                            value={item.baseId}
+                                            onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, baseId: e.target.value } : q))}
+                                          >
+                                            {item.candidates.map(c => (
+                                              <option key={c.id} value={c.id}>{c.label}</option>
+                                            ))}
+                                          </select>
+                                        )}
+                                        {item.linkMode === 'version' && hasExistingDocs && (
+                                          <Button size="sm" variant="outline" onClick={() => setPickerOpenIndex(i)}>Choose…</Button>
+                                        )}
+                                        {!hasExistingDocs && (
+                                          <span className="text-xs text-muted-foreground">No documents yet to link.</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
+                                        <FileText className="h-3 w-3" />
+                                        Title
+                                      </label>
+                                      <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.title} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, title: e.target.value } } : q))} />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
+                                        <FileText className="h-3 w-3" />
+                                        Filename
+                                      </label>
+                                      <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.filename} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, filename: e.target.value } } : q))} />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
+                                        <User className="h-3 w-3" />
+                                        Sender
+                                      </label>
+                                      <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.sender} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, sender: e.target.value } } : q))} />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
+                                        <UserCheck className="h-3 w-3" />
+                                        Receiver
+                                      </label>
+                                      <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.receiver} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, receiver: e.target.value } } : q))} />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
+                                        <Calendar className="h-3 w-3" />
+                                        Document Date
+                                      </label>
+                                      <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.documentDate} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, documentDate: e.target.value } } : q))} />
+                                    </div>
+                                    <div className="md:col-span-2">
+                                      <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1">
+                                        <MessageSquare className="h-3 w-3" />
+                                        Subject
+                                      </label>
+                                      <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.subject} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, subject: e.target.value } } : q))} />
+                                    </div>
+                                    <div className="md:col-span-2">
+                                      <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
+                                        <MessageSquare className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                                        AI Summary
+                                      </label>
+                                      <textarea rows={15} className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm resize-none" value={item.form.description} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, description: e.target.value } } : q))} />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
+                                        <Bookmark className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                                        Category
+                                      </label>
+                                      <UiSelect value={item.form?.category || 'General'} onValueChange={(value) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, category: value } } : q))}>
+                                        <UiSelectTrigger className="mt-1 w-full h-8 sm:h-9 text-xs sm:text-sm">
+                                          <UiSelectValue placeholder="Select category..." />
+                                        </UiSelectTrigger>
+                                        <UiSelectContent>
+                                          {availableCategories.map((category) => (
+                                            <UiSelectItem key={category} value={category}>
+                                              {category}
+                                            </UiSelectItem>
+                                          ))}
+                                        </UiSelectContent>
+                                      </UiSelect>
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
+                                        <Hash className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                                        Keywords (comma)
+                                      </label>
+                                      <input className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm" value={item.form.keywords} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, keywords: e.target.value } } : q))} />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
+                                        <Tag className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                                        Tags
+                                      </label>
+                                      <input
+                                        className="mt-1 sm:mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2 sm:p-2.5 w-full text-xs sm:text-sm"
+                                        placeholder="Enter tags separated by commas"
+                                        value={item.form.tags}
+                                        onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, tags: e.target.value } } : q))}
+                                      />
+                                    </div>
+                                    <div className="md:col-span-2">
+                                      <label className="text-[10px] sm:text-xs text-muted-foreground flex items-center gap-1 font-medium">
+                                        <FolderOpen className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                                        Upload Destination
+                                        {folderPath.length > 0 && (
+                                          <span className="ml-1 sm:ml-2 text-primary font-medium text-xs sm:text-sm">
+                                            /{folderPath.join('/')}
+                                          </span>
+                                        )}
+                                      </label>
+                                      <div className="mt-1">
+                                        <div className="flex items-center gap-1.5 sm:gap-2">
+                                          <input
+                                            className="flex-1 rounded-md border bg-background p-1.5 sm:p-2 text-xs sm:text-sm"
+                                            value={`/${folderPath.join('/')}`}
+                                            readOnly
+                                          />
+                                          <Button variant="outline" size="sm" onClick={() => setFolderCommandOpen(true)} className="text-xs sm:text-sm h-8 sm:h-9">
+                                            Browse…
+                                          </Button>
+                                        </div>
+                                      </div>
+                                      <p className="mt-1 text-[10px] sm:text-xs text-muted-foreground">
+                                        Documents will be uploaded to: <span className="font-medium">/{folderPath.join('/') || 'Root'}</span>
+                                        <br className="hidden sm:block" />
+                                        <span className="sm:hidden"> </span>
+                                        New folders will be created automatically if they don't exist.
+                                      </p>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Right side - Enhanced file preview */}
+                              <div className="space-y-3 sm:space-y-4">
+                                <div>
+                                  <h3 className="text-xs sm:text-sm font-medium mb-2 sm:mb-3">Document Preview</h3>
+                                  {shouldUseRemotePreview ? (
+                                    <FilePreview
+                                      documentId={item.docId as string}
+                                      mimeType={item.file.type || 'application/pdf'}
+                                      extractedContent={item.extracted?.ocrText}
+                                    />
+                                  ) : isCsvPreview ? (
+                                    <CsvPreview
+                                      fileName={item.file.name}
+                                      fileSize={item.file.size}
+                                      preview={item.tabularPreview}
+                                    />
+                                  ) : (
+                                    <UploadFilePreview
+                                      file={item.file}
+                                      previewUrl={item.previewUrl}
+                                      height="70vh"
+                                    />
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()
+                    ) : (
+                      queue.map((item, i) => {
+                        const targetFolderPath = item.folderPathOverride && item.folderPathOverride.length > 0
+                          ? item.folderPathOverride
+                          : folderPath;
+                        return (
+                          <div key={i} className={`rounded-lg border p-2.5 sm:p-3 ${activeIndex === i ? 'ring-1 ring-primary' : ''}`}>
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate font-medium text-sm sm:text-base" title={item.file.name}>{item.file.name}</div>
+                                <div className="text-[10px] sm:text-xs text-muted-foreground capitalize">{item.status}</div>
+                                <div
+                                  className="text-[10px] sm:text-xs text-muted-foreground break-words whitespace-normal line-clamp-1"
+                                  title={`/${targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}`}
+                                >
+                                  /{targetFolderPath.length ? targetFolderPath.join('/') : 'Root'}
+                                </div>
+                              </div>
+                              <div className="w-full sm:w-40 flex flex-col sm:items-end gap-1">
+                                <Progress value={item.progress} />
+                                {item.note && (
+                                  <span className="text-[10px] sm:text-xs text-muted-foreground text-right">{item.note}</span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                                {item.status === 'idle' && !isProcessingAll && (
+                                  <Button size="sm" onClick={() => processItem(i)} disabled={planBlocked || !!item.locked} className="text-xs sm:text-sm">
+                                    Process
+                                  </Button>
+                                )}
+                                {item.status === 'ready' && (
+                                  <>
+                                    {!(item.prefilledFromQueue && item.note) && (
+                                      <Button size="sm" onClick={() => handleSave(i)} disabled={planBlocked || item.locked} className="text-xs sm:text-sm">
+                                        Save
+                                      </Button>
+                                    )}
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      onClick={() => handleReject(i)}
+                                      disabled={item.locked}
+                                      className="text-xs sm:text-sm"
+                                    >
+                                      Reject
+                                    </Button>
+                                  </>
+                                )}
+                                {item.status === 'saving' && (
+                                  <Button size="sm" variant="outline" disabled className="gap-1.5 sm:gap-2 text-xs sm:text-sm">
+                                    <Loader2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
+                                    {item.note || 'Saving…'}
+                                  </Button>
+                                )}
+                                {(item.status === 'success' || item.status === 'error') && <Button size="sm" variant="outline" onClick={() => setQueue(prev => prev.filter((_, idx) => idx !== i))} className="text-xs sm:text-sm">Remove</Button>}
+                              </div>
+                            </div>
+                            {item.status === 'ready' && item.form && (
+                              <div className="mt-2 sm:mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-3">
+                                <div>
+                                  <label className="text-xs text-muted-foreground flex items-center gap-1.5 font-medium">
+                                    <FileText className="h-3.5 w-3.5" />
+                                    Title
+                                  </label>
+                                  <input
+                                    className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm"
+                                    value={item.form.title}
+                                    onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, title: e.target.value } } : q))}
+                                    placeholder="Enter document title..."
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs text-muted-foreground flex items-center gap-1.5 font-medium">
+                                    <FileText className="h-3.5 w-3.5" />
+                                    Filename
+                                  </label>
+                                  <input
+                                    className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm"
+                                    value={item.form.filename}
+                                    onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, filename: e.target.value } } : q))}
+                                    placeholder="Enter filename..."
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs text-muted-foreground flex items-center gap-1.5 font-medium">
+                                    <User className="h-3.5 w-3.5" />
+                                    Sender
+                                  </label>
+                                  <input
+                                    className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm"
+                                    value={item.form.sender}
+                                    onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, sender: e.target.value } } : q))}
+                                    placeholder="Who sent this document?"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs text-muted-foreground flex items-center gap-1">
+                                    <UserCheck className="h-3 w-3" />
+                                    Receiver
+                                  </label>
+                                  <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.receiver} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, receiver: e.target.value } } : q))} />
+                                </div>
+                                <div>
+                                  <label className="text-xs text-muted-foreground flex items-center gap-1">
+                                    <Calendar className="h-3 w-3" />
+                                    Document Date
+                                  </label>
+                                  <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.documentDate} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, documentDate: e.target.value } } : q))} />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <label className="text-xs text-muted-foreground flex items-center gap-1">
+                                    <MessageSquare className="h-3 w-3" />
+                                    Subject
+                                  </label>
+                                  <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.subject} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, subject: e.target.value } } : q))} />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <label className="text-xs text-muted-foreground flex items-center gap-1">
+                                    <MessageSquare className="h-3 w-3" />
+                                    AI Summary
+                                  </label>
+                                  <textarea rows={15} className="mt-1 rounded-md border bg-background p-2 w-full" value={item.form.description} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, description: e.target.value } } : q))} />
+                                </div>
+                                <div>
+                                  <label className="text-xs text-muted-foreground flex items-center gap-1">
+                                    <Bookmark className="h-3 w-3" />
+                                    Category
+                                  </label>
+                                  <UiSelect value={item.form?.category || 'General'} onValueChange={(value) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, category: value } } : q))}>
+                                    <UiSelectTrigger className="mt-1 w-full">
+                                      <UiSelectValue placeholder="Select category..." />
+                                    </UiSelectTrigger>
+                                    <UiSelectContent>
+                                      {availableCategories.map((category) => (
+                                        <UiSelectItem key={category} value={category}>
+                                          {category}
+                                        </UiSelectItem>
+                                      ))}
+                                    </UiSelectContent>
+                                  </UiSelect>
+                                </div>
+                                <div>
+                                  <label className="text-xs text-muted-foreground">Keywords (comma)</label>
+                                  <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.keywords} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, keywords: e.target.value } } : q))} />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <label className="text-xs text-muted-foreground">Tags (comma)</label>
+                                  <input className="mt-1.5 rounded-lg border border-border/60 bg-background hover:border-border focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all p-2.5 w-full text-sm" value={item.form.tags} onChange={(e) => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, form: { ...q.form!, tags: e.target.value } } : q))} />
+                                </div>
+
+                                {/* Linking Options */}
+                                <div className="md:col-span-2">
+                                  <label className="text-xs text-muted-foreground flex items-center gap-1">
+                                    <LinkIcon className="h-3 w-3" />
+                                    Document Relationship
+                                  </label>
+                                  <div className="mt-2 flex items-center gap-4">
+                                    <label className="flex items-center gap-2 text-sm">
+                                      <input
+                                        type="radio"
+                                        checked={item.linkMode === 'new'}
+                                        onChange={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, linkMode: 'new' } : q))}
+                                      />
+                                      New Document
+                                    </label>
+                                    <label className={`flex items-center gap-2 text-sm ${documents.length === 0 ? 'opacity-50' : ''}`}>
+                                      <input
+                                        type="radio"
+                                        disabled={documents.length === 0}
+                                        checked={item.linkMode === 'version'}
+                                        onChange={() => setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, linkMode: 'version' } : q))}
+                                      />
+                                      Link as New Version
+                                    </label>
+                                    {item.linkMode === 'version' && documents.length > 0 && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => setPickerOpenIndex(i)}
+                                        className="text-xs h-7"
+                                      >
+                                        {item.baseId ?
+                                          `Selected: ${documents.find(d => d.id === item.baseId)?.title || documents.find(d => d.id === item.baseId)?.name || 'Unknown'}` :
+                                          'Select Document'
+                                        }
+                                      </Button>
+                                    )}
+                                  </div>
+                                  {item.linkMode === 'version' && !item.baseId && (
+                                    <div className="mt-1 text-xs text-destructive">
+                                      Please select a document to link this as a new version.
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="md:col-span-2">
+                                  <label className="text-xs text-muted-foreground">
+                                    Upload Destination
+                                    {folderPath.length > 0 && (
+                                      <span className="ml-2 text-primary font-medium">
+                                        /{folderPath.join('/')}
+                                      </span>
+                                    )}
+                                  </label>
+                                  <div className="mt-1 text-xs text-muted-foreground">
+                                    Documents will be uploaded to: <span className="font-medium">/{folderPath.join('/') || 'Root'}</span>
+                                    <br />
+                                    Folder path is set from the main form above.
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-3">
+                      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                        <Button variant="outline" onClick={onReset} className="text-xs sm:text-sm">Clear</Button>
+                        {hasSuccess && <span className="text-[10px] sm:text-xs text-muted-foreground">Saved: {queue.filter(q => q.status === 'success').length}</span>}
+                        {readyCount > 0 && <span className="text-[10px] sm:text-xs text-muted-foreground">Ready: {readyCount}</span>}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 sm:gap-2">
+                        {hasProcessable && queue.length > 1 && (
+                          <Button onClick={async () => {
+                            setIsProcessingAll(true);
+                            try {
+                              const indicesToProcess = queue.map((q, i) => (q.status === 'idle' || q.status === 'error') ? i : -1).filter(i => i >= 0);
+
+                              // Process files in parallel batches for better performance
+                              const BATCH_SIZE = 10; // Process 10 files simultaneously (max allowed)
+                              const batches = [];
+                              for (let i = 0; i < indicesToProcess.length; i += BATCH_SIZE) {
+                                batches.push(indicesToProcess.slice(i, i + BATCH_SIZE));
+                              }
+
+                              for (const batch of batches) {
+                                // Process each batch in parallel
+                                await Promise.allSettled(
+                                  batch.map(i => processItem(i).catch(error => {
+                                    console.error(`Failed to process item ${i}:`, error);
+                                    // Update queue to show error status
+                                    setQueue(prev => prev.map((q, idx) =>
+                                      idx === i ? { ...q, status: 'error', note: error.message } : q
+                                    ));
+                                  }))
+                                );
+
+                                // Small delay between batches to prevent overwhelming the system
+                                if (batches.indexOf(batch) < batches.length - 1) {
+                                  await new Promise(resolve => setTimeout(resolve, 1000));
+                                }
+                              }
+                            } finally {
+                              setIsProcessingAll(false);
+                            }
+                          }} disabled={isProcessingAll} className="gap-1.5 sm:gap-2 text-xs sm:text-sm">
+                            {isProcessingAll ? (
+                              <>
+                                <Loader2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
+                                <span className="hidden sm:inline">Processing…</span>
+                                <span className="sm:hidden">Processing</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="hidden sm:inline">Process All</span>
+                                <span className="sm:hidden">Process</span>
+                              </>
+                            )}
+                          </Button>
+                        )}
+                        {readyCount > 0 && (
+                          <Button onClick={saveAllReady} disabled={isSavingAll} className="gap-1.5 sm:gap-2 text-xs sm:text-sm">
+                            {isSavingAll ? (
+                              <>
+                                <Loader2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 animate-spin" />
+                                <span className="hidden sm:inline">Saving all…</span>
+                                <span className="sm:hidden">Saving</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="hidden sm:inline">Save All</span>
+                                <span className="sm:hidden">Save</span>
+                              </>
+                            )}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </>
+          );
+        })()}
 
         {/* Version picker dialog */}
         {typeof pickerOpenIndex === 'number' && queue[pickerOpenIndex] && (

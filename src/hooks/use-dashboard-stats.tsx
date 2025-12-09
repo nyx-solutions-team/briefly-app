@@ -48,7 +48,7 @@ export function DashboardStatsProvider({ children }: { children: React.ReactNode
       if (!orgId) return;
 
       const now = Date.now();
-      const cacheDuration = 5 * 60 * 1000; // 5 minutes cache
+      const cacheDuration = 10 * 60 * 1000; // 10 minutes cache (increased from 5)
 
       // Skip if recently fetched and not forced
       if (!force && now - lastFetched < cacheDuration && stats) {
@@ -71,9 +71,8 @@ export function DashboardStatsProvider({ children }: { children: React.ReactNode
   const refetch = useCallback(() => fetchStats(true), [fetchStats]);
 
   useEffect(() => {
-    // Initial load with slight delay to not block page render
-    const timer = setTimeout(() => void fetchStats(), 100);
-    return () => clearTimeout(timer);
+    // Initial load immediately (request deduplication will handle duplicates)
+    void fetchStats();
   }, [fetchStats]);
 
   useEffect(() => {

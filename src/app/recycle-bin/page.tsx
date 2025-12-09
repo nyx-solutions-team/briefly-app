@@ -9,9 +9,20 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Trash2, RotateCcw, RefreshCw, FileText, Clock, AlertTriangle } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Trash2, RotateCcw, RefreshCw, FileText, Clock, AlertTriangle, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { formatAppDateTime } from '@/lib/utils';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 function getThemeColors(accentColor: string) {
   const colorMap: Record<string, {
@@ -107,12 +118,47 @@ type BinDoc = {
   department_id?: string | null;
 };
 
+type PaginatedResponse = {
+  items: BinDoc[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+
+function AccessDenied({ message }: { message: string }) {
+  return (
+    <div className="p-4 md:p-6 space-y-6">
+      <Card className="rounded-xl border border-border bg-card shadow-sm">
+        <CardContent className="p-12 text-center">
+          <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-900/40 flex items-center justify-center mx-auto mb-4">
+            <AlertTriangle className="h-8 w-8 text-red-600 dark:text-red-400" />
+          </div>
+          <h3 className="text-lg font-semibold text-foreground mb-2">Access Denied</h3>
+          <p className="text-muted-foreground">{message}</p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+const PAGE_SIZE = 20;
+
 export default function RecycleBinPage() {
   const { isAuthenticated, hasPermission, bootstrapData } = useAuth();
   const [items, setItems] = useState<BinDoc[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+
+  // Delete confirmation dialog state
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ type: 'single' | 'bulk'; id?: string; count?: number } | null>(null);
+
   // Check page permission with fallback to functional permissions for backward compatibility
   const permissions = bootstrapData?.permissions || {};
   const canAccessRecycleBin = permissions['pages.recycle_bin'] === true;
@@ -120,14 +166,38 @@ export default function RecycleBinPage() {
   const canDeleteDocuments = hasPermission('documents.delete');
   const hasAccess = canAccessRecycleBin || canManageMembers || canDeleteDocuments;
 
-  const refresh = useCallback(async () => {
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+      setCurrentPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const refresh = useCallback(async (page = 1, search = "") => {
     setLoading(true);
     try {
       const { orgId } = getApiContext();
-      const res = await apiFetch<BinDoc[]>(`/orgs/${orgId}/recycle-bin`);
-      setItems(res || []);
+      const searchParam = search ? `&q=${encodeURIComponent(search)}` : "";
+      const res = await apiFetch<PaginatedResponse | BinDoc[]>(
+        `/orgs/${orgId}/recycle-bin?page=${page}&limit=${PAGE_SIZE}${searchParam}`
+      );
+
+      // Handle both old array and new paginated response
+      if (Array.isArray(res)) {
+        setItems(res || []);
+        setTotalItems(res.length);
+        setTotalPages(1);
+      } else {
+        setItems(res.items || []);
+        setTotalItems(res.total || 0);
+        setTotalPages(res.totalPages || 1);
+      }
+
       setSelectedIds((prev) => {
-        const valid = new Set((res || []).map((d) => d.id));
+        const validItems = Array.isArray(res) ? res : res.items || [];
+        const valid = new Set(validItems.map((d) => d.id));
         return prev.filter((id) => valid.has(id));
       });
     } catch (e) {
@@ -138,9 +208,11 @@ export default function RecycleBinPage() {
   }, []);
 
   useEffect(() => {
-    if (isAuthenticated && hasAccess) refresh();
-  }, [isAuthenticated, hasAccess, refresh]);
-  
+    if (isAuthenticated && hasAccess) {
+      refresh(currentPage, debouncedSearch);
+    }
+  }, [isAuthenticated, hasAccess, currentPage, debouncedSearch, refresh]);
+
   // Show access denied if no permission
   if (!hasAccess && bootstrapData) {
     return (
@@ -151,7 +223,7 @@ export default function RecycleBinPage() {
   }
 
   useEffect(() => {
-    const handleUpdate = () => refresh();
+    const handleUpdate = () => refresh(currentPage, debouncedSearch);
     window.addEventListener('documentDeleted', handleUpdate);
     window.addEventListener('documentRestored', handleUpdate);
     window.addEventListener('documentPurged', handleUpdate);
@@ -160,7 +232,7 @@ export default function RecycleBinPage() {
       window.removeEventListener('documentRestored', handleUpdate);
       window.removeEventListener('documentPurged', handleUpdate);
     };
-  }, [refresh]);
+  }, [refresh, currentPage, debouncedSearch]);
 
   const restore = async (id: string) => {
     setLoading(true);
@@ -170,45 +242,58 @@ export default function RecycleBinPage() {
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('documentRestored', { detail: { id } }));
       }
-      await refresh();
+      await refresh(currentPage, debouncedSearch);
     } catch (e) { console.error('restore failed', e); } finally { setLoading(false); }
   };
 
-  const del = async (id: string) => {
-    if (!confirm('Permanently delete this document? This cannot be undone.')) return;
-    setLoading(true);
-    try {
-      const { orgId } = getApiContext();
-      await apiFetch(`/orgs/${orgId}/documents/${id}/permanent`, { method: 'DELETE' });
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('documentPurged', { detail: { id } }));
-      }
-      await refresh();
-    } catch (e) { console.error('permanent delete failed', e); } finally { setLoading(false); }
+  // Open delete confirmation dialog for single document
+  const confirmDelete = (id: string) => {
+    setDeleteTarget({ type: 'single', id });
+    setDeleteDialogOpen(true);
   };
 
-  const bulkDelete = async () => {
+  // Open delete confirmation dialog for bulk delete
+  const confirmBulkDelete = () => {
     if (!selectedIds.length) return;
-    if (!confirm(`Permanently delete ${selectedIds.length} document${selectedIds.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    setDeleteTarget({ type: 'bulk', count: selectedIds.length });
+    setDeleteDialogOpen(true);
+  };
+
+  // Execute the delete action
+  const executeDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteDialogOpen(false);
     setLoading(true);
+
     try {
       const { orgId } = getApiContext();
-      await Promise.all(
-        selectedIds.map((id) =>
-          apiFetch(`/orgs/${orgId}/documents/${id}/permanent`, { method: 'DELETE' }).catch((err) => {
-            console.error('bulk delete failed for', id, err);
-          })
-        )
-      );
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('documentPurged', { detail: { ids: selectedIds } }));
+
+      if (deleteTarget.type === 'single' && deleteTarget.id) {
+        await apiFetch(`/orgs/${orgId}/documents/${deleteTarget.id}/permanent`, { method: 'DELETE' });
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('documentPurged', { detail: { id: deleteTarget.id } }));
+        }
+      } else if (deleteTarget.type === 'bulk') {
+        const result = await apiFetch<{ deleted: number; totalBytes: number }>(
+          `/orgs/${orgId}/documents/bulk-delete`,
+          {
+            method: 'POST',
+            body: { ids: selectedIds }
+          }
+        );
+        console.log(`Bulk deleted ${result.deleted} documents`);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('documentPurged', { detail: { ids: selectedIds } }));
+        }
+        setSelectedIds([]);
       }
-      setSelectedIds([]);
-      await refresh();
+
+      await refresh(currentPage, debouncedSearch);
     } catch (e) {
-      console.error('bulk delete failed', e);
+      console.error('delete failed', e);
     } finally {
       setLoading(false);
+      setDeleteTarget(null);
     }
   };
 
@@ -240,7 +325,7 @@ export default function RecycleBinPage() {
   const { settings } = useSettings();
   const themeColors = getThemeColors(settings.accent_color);
 
-  if (loading) {
+  if (loading && items.length === 0) {
     return (
       <AppLayout>
         <div className="p-4 md:p-6 space-y-6">
@@ -274,6 +359,41 @@ export default function RecycleBinPage() {
   return (
     <AppLayout>
       <div className="p-4 md:p-6 space-y-6">
+        {/* Delete Confirmation Dialog */}
+        <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+                <Trash2 className="h-5 w-5" />
+                Permanently Delete {deleteTarget?.type === 'bulk' ? 'Documents' : 'Document'}
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-base">
+                {deleteTarget?.type === 'bulk' ? (
+                  <>
+                    Are you sure you want to permanently delete <strong>{deleteTarget.count} document{(deleteTarget.count || 0) === 1 ? '' : 's'}</strong>?
+                  </>
+                ) : (
+                  <>Are you sure you want to permanently delete this document?</>
+                )}
+                <br />
+                <span className="text-destructive font-medium mt-2 block">
+                  This action cannot be undone.
+                </span>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={executeDelete}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete Permanently
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
         {/* Header with stats */}
         <Card className="rounded-xl border border-border bg-card shadow-sm card-premium">
           <CardHeader>
@@ -284,12 +404,12 @@ export default function RecycleBinPage() {
                   Trashed Documents
                 </CardTitle>
                 <p className="text-sm text-muted-foreground mt-1">
-                  {items.length === 0 ? 'No documents in recycle bin' : `${items.length} document${items.length === 1 ? '' : 's'} scheduled for purge`}
+                  {totalItems === 0 ? 'No documents in recycle bin' : `${totalItems} document${totalItems === 1 ? '' : 's'} scheduled for purge`}
                 </p>
               </div>
-              <Button 
-                variant="outline" 
-                onClick={refresh} 
+              <Button
+                variant="outline"
+                onClick={() => refresh(currentPage, debouncedSearch)}
                 disabled={loading}
                 className="gap-2 hover-premium focus-premium"
               >
@@ -299,6 +419,19 @@ export default function RecycleBinPage() {
             </div>
           </CardHeader>
         </Card>
+
+        {/* Search */}
+        <div className="flex items-center gap-3">
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search by title or filename..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+        </div>
 
         {/* Bulk actions */}
         {items.length > 0 && (
@@ -320,7 +453,7 @@ export default function RecycleBinPage() {
                 variant="destructive"
                 size="sm"
                 disabled={!selectedIds.length || loading}
-                onClick={bulkDelete}
+                onClick={confirmBulkDelete}
                 className="gap-2"
               >
                 <Trash2 className="h-4 w-4" />
@@ -337,8 +470,14 @@ export default function RecycleBinPage() {
               <div className={`w-16 h-16 rounded-full ${themeColors.iconBg} flex items-center justify-center mx-auto mb-4`}>
                 <Trash2 className={`h-8 w-8 ${themeColors.primary}`} />
               </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">Recycle Bin is Empty</h3>
-              <p className="text-muted-foreground">Deleted documents will appear here before being permanently removed.</p>
+              <h3 className="text-lg font-semibold text-foreground mb-2">
+                {debouncedSearch ? 'No Results' : 'Recycle Bin is Empty'}
+              </h3>
+              <p className="text-muted-foreground">
+                {debouncedSearch
+                  ? `No documents matching "${debouncedSearch}"`
+                  : 'Deleted documents will appear here before being permanently removed.'}
+              </p>
             </CardContent>
           </Card>
         ) : (
@@ -348,21 +487,21 @@ export default function RecycleBinPage() {
               const purgeDate = purgeDateString ? new Date(purgeDateString) : null;
               const daysUntilPurge = purgeDate ? Math.ceil((purgeDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : null;
               const isUrgent = daysUntilPurge !== null && daysUntilPurge <= 2;
-              
+
               return (
                 <Card key={d.id} className="rounded-xl border border-border bg-card shadow-sm card-premium hover-premium">
                   <CardContent className="p-6">
                     <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4 min-w-0 flex-1">
-                      <Checkbox
-                        checked={selectedIds.includes(d.id)}
-                        onCheckedChange={(val) => toggleSelect(d.id, Boolean(val))}
-                        aria-label={`Select ${d.title || d.filename || d.name || d.id}`}
-                        className="mt-1"
-                      />
-                      <div className={`w-12 h-12 rounded-lg ${themeColors.iconBg} flex items-center justify-center border border-border/30 shadow-sm`}>
-                        <FileText className={`h-6 w-6 ${themeColors.primary}`} />
-                      </div>
+                      <div className="flex items-center gap-4 min-w-0 flex-1">
+                        <Checkbox
+                          checked={selectedIds.includes(d.id)}
+                          onCheckedChange={(val) => toggleSelect(d.id, Boolean(val))}
+                          aria-label={`Select ${d.title || d.filename || d.name || d.id}`}
+                          className="mt-1"
+                        />
+                        <div className={`w-12 h-12 rounded-lg ${themeColors.iconBg} flex items-center justify-center border border-border/30 shadow-sm`}>
+                          <FileText className={`h-6 w-6 ${themeColors.primary}`} />
+                        </div>
                         <div className="min-w-0 flex-1">
                           <div className="font-semibold text-foreground truncate" title={d.title || d.filename || d.name || d.id}>
                             {d.title || d.filename || d.name || d.id}
@@ -373,13 +512,12 @@ export default function RecycleBinPage() {
                               <span>Purge {purgeDate ? formatAppDateTime(purgeDate) : '—'}</span>
                             </div>
                             {daysUntilPurge !== null && (
-                              <Badge 
-                                variant="outline" 
-                                className={`text-xs ${
-                                  isUrgent 
-                                    ? 'text-red-600 border-red-200 bg-red-50 dark:text-red-400 dark:border-red-800 dark:bg-red-900/20' 
+                              <Badge
+                                variant="outline"
+                                className={`text-xs ${isUrgent
+                                    ? 'text-red-600 border-red-200 bg-red-50 dark:text-red-400 dark:border-red-800 dark:bg-red-900/20'
                                     : 'text-orange-600 border-orange-200 bg-orange-50 dark:text-orange-400 dark:border-orange-800 dark:bg-orange-900/20'
-                                }`}
+                                  }`}
                               >
                                 {daysUntilPurge <= 0 ? 'Expired' : `${daysUntilPurge} day${daysUntilPurge === 1 ? '' : 's'} left`}
                               </Badge>
@@ -394,10 +532,10 @@ export default function RecycleBinPage() {
                         </div>
                       </div>
                       <div className="flex gap-2 ml-4">
-                        <Button 
-                          size="sm" 
-                          variant="outline" 
-                          onClick={() => restore(d.id)} 
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => restore(d.id)}
                           disabled={loading}
                           className="gap-2 hover-premium focus-premium"
                         >
@@ -405,10 +543,10 @@ export default function RecycleBinPage() {
                           Restore
                         </Button>
                         {hasPermission('documents.delete') && (
-                          <Button 
-                            size="sm" 
-                            variant="destructive" 
-                            onClick={() => del(d.id)} 
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => confirmDelete(d.id)}
                             disabled={loading}
                             className="gap-2"
                           >
@@ -422,6 +560,35 @@ export default function RecycleBinPage() {
                 </Card>
               );
             })}
+          </div>
+        )}
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between pt-4 border-t">
+            <div className="text-sm text-muted-foreground">
+              Page {currentPage} of {totalPages}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1 || loading}
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" />
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages || loading}
+              >
+                Next
+                <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            </div>
           </div>
         )}
       </div>

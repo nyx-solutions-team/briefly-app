@@ -32,34 +32,14 @@ export default function DashboardPage() {
 
 function HeaderCTA() { return null; }
 
-// Admin Team Cards Component
+// Admin Team Cards Component - Uses bootstrap data instead of separate API call
 function AdminTeamCards() {
-  const [teams, setTeams] = React.useState<any[]>([]);
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
+  const { bootstrapData } = useAuth();
 
-  React.useEffect(() => {
-    const fetchTeams = async () => {
-      try {
-        setLoading(true);
-        const orgId = getApiContext().orgId;
-        if (!orgId) return;
-
-        const response = await apiFetch<any>(`/orgs/${orgId}/dashboard/teams`);
-        if (response.error) {
-          setError(response.error);
-        } else {
-          setTeams(response.teams || []);
-        }
-      } catch (err) {
-        setError('Failed to load team statistics');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchTeams();
-  }, []);
+  // Use dashboard summary from bootstrap data
+  const teams = bootstrapData?.dashboardSummary?.teams || [];
+  const loading = !bootstrapData;
+  const error = null; // No API call, no error
 
   if (loading) {
     return (
@@ -130,10 +110,6 @@ function AdminTeamCards() {
                     <span className="text-sm font-medium text-green-600 sm:text-base">{team.docsToday}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-xs text-muted-foreground sm:text-sm">Yesterday</span>
-                    <span className="text-sm font-medium text-blue-600 sm:text-base">{team.docsYesterday}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
                     <span className="text-xs text-muted-foreground sm:text-sm">This Week</span>
                     <span className="text-sm font-medium text-purple-600 sm:text-base">{team.docsThisWeek}</span>
                   </div>
@@ -152,11 +128,14 @@ function TeamLeadMemberCards() {
   const [members, setMembers] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
-
+  const fetchedRef = React.useRef(false);
 
   React.useEffect(() => {
+    if (fetchedRef.current) return; // Prevent duplicate fetches
+
     const fetchMembers = async () => {
       try {
+        fetchedRef.current = true;
         setLoading(true);
         const orgId = getApiContext().orgId;
         if (!orgId) return;
@@ -165,8 +144,6 @@ function TeamLeadMemberCards() {
         if (response.error) {
           setError(response.error);
         } else {
-          console.log('📊 [TEAM_LEAD_DASHBOARD] Members received from backend:', response.members?.length || 0);
-          console.log('👥 Member details:', response.members?.map((m: any) => `${m.userId} -> ${m.displayName}`));
           setMembers(response.members || []);
         }
       } catch (err) {
@@ -245,27 +222,24 @@ function TeamLeadMemberCards() {
             return (
               <Card
                 key={member.userId}
-                className={`p-4 sm:p-5 hover:shadow-md transition-shadow ${
-                  !hasRecentActivity ? 'opacity-75' : ''
-                }`}
+                className={`p-4 sm:p-5 hover:shadow-md transition-shadow ${!hasRecentActivity ? 'opacity-75' : ''
+                  }`}
               >
-              <div className="space-y-2.5 sm:space-y-3">
-                <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                      hasRecentActivity
-                        ? 'bg-green-100 dark:bg-green-900/30'
-                        : hasAnyActivity
+                <div className="space-y-2.5 sm:space-y-3">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${hasRecentActivity
+                      ? 'bg-green-100 dark:bg-green-900/30'
+                      : hasAnyActivity
                         ? 'bg-blue-100 dark:bg-blue-900/30'
                         : 'bg-gray-100 dark:bg-gray-900/30'
-                    }`}>
-                      <User className={`h-5 w-5 ${
-                        hasRecentActivity
-                          ? 'text-green-600 dark:text-green-400'
-                          : hasAnyActivity
+                      }`}>
+                      <User className={`h-5 w-5 ${hasRecentActivity
+                        ? 'text-green-600 dark:text-green-400'
+                        : hasAnyActivity
                           ? 'text-blue-600 dark:text-blue-400'
                           : 'text-gray-500 dark:text-gray-400'
-                      }`} />
-                  </div>
+                        }`} />
+                    </div>
                     <div className="flex-1">
                       <h4 className="font-semibold text-base sm:text-lg">
                         {member.displayName.startsWith('User ') || member.displayName.length > 20
@@ -274,7 +248,7 @@ function TeamLeadMemberCards() {
                         }
                       </h4>
                       <div className="flex items-center gap-2">
-                    <p className="text-xs text-muted-foreground sm:text-sm">{member.departmentName}</p>
+                        <p className="text-xs text-muted-foreground sm:text-sm">{member.departmentName}</p>
                         {hasRecentActivity ? (
                           <Badge variant="outline" className="text-[10px] sm:text-xs text-green-600 border-green-200">
                             Active
@@ -290,35 +264,32 @@ function TeamLeadMemberCards() {
                         )}
                       </div>
                     </div>
-                </div>
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-muted-foreground sm:text-sm">Today</span>
-                      <span className={`font-medium ${
-                        member.docsToday > 0 ? 'text-green-600' : 'text-gray-400'
-                      } text-sm sm:text-base`}>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-muted-foreground sm:text-sm">Today</span>
+                      <span className={`font-medium ${member.docsToday > 0 ? 'text-green-600' : 'text-gray-400'
+                        } text-sm sm:text-base`}>
                         {member.docsToday}
                       </span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-muted-foreground sm:text-sm">Yesterday</span>
-                      <span className={`font-medium ${
-                        member.docsYesterday > 0 ? 'text-blue-600' : 'text-gray-400'
-                      } text-sm sm:text-base`}>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-muted-foreground sm:text-sm">Yesterday</span>
+                      <span className={`font-medium ${member.docsYesterday > 0 ? 'text-blue-600' : 'text-gray-400'
+                        } text-sm sm:text-base`}>
                         {member.docsYesterday}
                       </span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-muted-foreground sm:text-sm">This Week</span>
-                      <span className={`font-medium ${
-                        member.docsThisWeek > 0 ? 'text-purple-600' : 'text-gray-400'
-                      } text-sm sm:text-base`}>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-muted-foreground sm:text-sm">This Week</span>
+                      <span className={`font-medium ${member.docsThisWeek > 0 ? 'text-purple-600' : 'text-gray-400'
+                        } text-sm sm:text-base`}>
                         {member.docsThisWeek}
                       </span>
                     </div>
+                  </div>
                 </div>
-              </div>
-            </Card>
+              </Card>
             );
           })}
         </div>
@@ -494,11 +465,11 @@ function getThemeColors(accentColor: string) {
 function MainSections() {
   const { user, bootstrapData } = useAuth();
   const permissions = bootstrapData?.permissions || {};
-  
+
   // Get dashboard permission level (defaults to role-based if not set)
   const dashboardLevel = permissions['dashboard.view'] || getDefaultDashboardLevel(user?.role);
   const hasAdminDashboard = dashboardLevel === 'admin';
-  
+
   // For regular dashboard, show cards based on role
   const isTeamLead = user?.role === 'teamLead';
   const showTeamLeadCards = !hasAdminDashboard && isTeamLead;
@@ -684,8 +655,8 @@ function AdminStats() {
           trend="Total storage"
           color="green"
         />
-                 {/* Active Users - Commented out for all views as requested */}
-         {/* <MetricCard
+        {/* Active Users - Commented out for all views as requested */}
+        {/* <MetricCard
            title="Active Users"
            value={stats.users.total}
            icon={Users}

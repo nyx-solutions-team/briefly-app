@@ -8,7 +8,7 @@ import { useSettings } from '@/hooks/use-settings';
 import type { StoredDocument } from '@/lib/types';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import { Grid2X2, List, Grid3X3, Folder as FolderIcon, FileText, Trash2, ArrowLeft, X } from 'lucide-react';
+import { Grid2X2, List, Grid3X3, Folder as FolderIcon, FileText, Trash2, ArrowLeft, X, FileImage, FileSpreadsheet, FileType, File } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
@@ -31,6 +31,49 @@ import { Plus, Upload } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 
 type ViewMode = 'grid' | 'list' | 'cards';
+
+// Helper to get file type icon and color based on mime type or filename
+function getFileTypeIcon(mimeType?: string, filename?: string): { icon: React.ElementType; color: string; bg: string } {
+  const mime = (mimeType || "").toLowerCase();
+  const ext = filename?.split(".").pop()?.toLowerCase() || "";
+
+  // PDF
+  if (mime.includes("pdf") || ext === "pdf") {
+    return { icon: FileText, color: "text-red-600", bg: "bg-red-100 dark:bg-red-900/30" };
+  }
+
+  // Images
+  if (mime.includes("image") || ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico"].includes(ext)) {
+    return { icon: FileImage, color: "text-purple-600", bg: "bg-purple-100 dark:bg-purple-900/30" };
+  }
+
+  // Excel / Spreadsheets
+  if (
+    mime.includes("spreadsheet") ||
+    mime.includes("excel") ||
+    mime.includes("csv") ||
+    ["xlsx", "xls", "csv", "ods"].includes(ext)
+  ) {
+    return { icon: FileSpreadsheet, color: "text-green-600", bg: "bg-green-100 dark:bg-green-900/30" };
+  }
+
+  // Word documents
+  if (
+    mime.includes("word") ||
+    mime.includes("document") ||
+    ["doc", "docx", "odt", "rtf"].includes(ext)
+  ) {
+    return { icon: FileType, color: "text-blue-600", bg: "bg-blue-100 dark:bg-blue-900/30" };
+  }
+
+  // Plain text / Markdown
+  if (mime.includes("text") || ["txt", "md", "markdown"].includes(ext)) {
+    return { icon: FileText, color: "text-gray-600", bg: "bg-gray-100 dark:bg-gray-800" };
+  }
+
+  // Default
+  return { icon: File, color: "text-primary", bg: "bg-primary/10" };
+}
 
 function getThemeIconColor(accentColor: string) {
   const colorMap: Record<string, string> = {
@@ -59,27 +102,27 @@ function getThemeIconColor(accentColor: string) {
 function ThemeIcon({ icon: Icon, className = '' }: { icon: any; className?: string }) {
   const { settings } = useSettings();
   const themeColor = getThemeIconColor(settings.accent_color);
-  
+
   return <Icon className={`${themeColor} ${className}`} />;
 }
 
 function DocumentsPageContent() {
-  const { documents, folders, listFolders, getFolderMetadata, getDocumentsInPath, createFolder, deleteFolder, removeDocument, updateDocument, moveDocumentsToPath, isLoading, loadAllDocuments, refresh, ensureFolderMetadata } = useDocuments();
+  const { documents, folders, listFolders, getFolderMetadata, getDocumentsInPath, createFolder, deleteFolder, removeDocument, removeDocuments, updateDocument, moveDocumentsToPath, isLoading, loadAllDocuments, refresh, ensureFolderMetadata } = useDocuments();
   const { departments, selectedDepartmentId, setSelectedDepartmentId, loading: departmentsLoading } = useDepartments();
   const { hasRoleAtLeast, hasPermission, isLoading: authLoading, bootstrapData } = useAuth();
   const searchParams = useSearchParams();
-  
+
   // Check page permission with fallback to functional permission for backward compatibility
   const permissions = bootstrapData?.permissions || {};
   const canAccessDocumentsPage = permissions['pages.documents'] !== false; // Default true if not set
   const canReadDocuments = hasPermission('documents.read');
   const hasAccess = canAccessDocumentsPage || canReadDocuments;
-  
+
   // Check other permissions
   const canCreateDocuments = hasPermission('documents.create');
   const canUpdateDocuments = hasPermission('documents.update');
   const canDeleteDocuments = hasPermission('documents.delete');
-  
+
   // Prevent loading documents if user doesn't have access
   React.useEffect(() => {
     if (!authLoading && !hasAccess) {
@@ -87,7 +130,7 @@ function DocumentsPageContent() {
       return;
     }
   }, [authLoading, hasAccess]);
-  
+
   // Global debug: Log when departments vs documents are loaded
   React.useEffect(() => {
     console.log('DocumentsPageContent state:', {
@@ -102,7 +145,7 @@ function DocumentsPageContent() {
       canDeleteDocuments
     });
   }, [departments.length, documents.length, departmentsLoading, isLoading, selectedDepartmentId, canReadDocuments, canCreateDocuments, canUpdateDocuments, canDeleteDocuments]);
-  
+
   // Listen for document deletion events and refresh the list
   useEffect(() => {
     const handleDocumentsChanged = () => {
@@ -120,9 +163,9 @@ function DocumentsPageContent() {
       window.removeEventListener('documentPurged', handleDocumentsChanged);
     };
   }, [refresh]);
-  
+
   const [path, setPath] = useState<string[]>([]);
-  
+
   // Initialize path from URL parameters on mount
   useEffect(() => {
     const pathParam = searchParams.get('path');
@@ -186,7 +229,7 @@ function DocumentsPageContent() {
   const [folderAccess, setFolderAccess] = useState<Record<string, string[]>>({});
   const isAdmin = hasRoleAtLeast('systemAdmin');
   const canShare = hasRoleAtLeast('teamLead');
-  
+
   useEffect(() => {
     if (!canShare) return;
     const orgId = getApiContext().orgId || '';
@@ -204,7 +247,7 @@ function DocumentsPageContent() {
         });
         const map = res?.results || {};
         setFolderAccess(prev => ({ ...prev, ...map }));
-      } catch {}
+      } catch { }
     })();
   }, [currentFolders, canShare, folderAccess]);
 
@@ -233,26 +276,27 @@ function DocumentsPageContent() {
   }, [departments]);
   const bulkTagInputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
-  
+
   // Folder deletion dialog state
   const [folderToDelete, setFolderToDelete] = useState<string[] | null>(null);
   const [deletionMode, setDeletionMode] = useState<'move_to_root' | 'delete_all'>('move_to_root');
   const [isDeleting, setIsDeleting] = useState(false);
-  
+
   // Bulk delete confirmation dialog state
   const [confirmBulkDeleteOpen, setConfirmBulkDeleteOpen] = useState(false);
-  
+  const [isDeletingDocuments, setIsDeletingDocuments] = useState(false);
+
   // Individual delete confirmation dialog state  
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [documentToDelete, setDocumentToDelete] = useState<StoredDocument | null>(null);
-  
+
   const handleFolderDeletion = async () => {
     if (!folderToDelete) return;
-    
+
     setIsDeleting(true);
     try {
       const result = await deleteFolder(folderToDelete, deletionMode);
-      
+
       let message = `Folder "${folderToDelete[folderToDelete.length - 1]}" deleted successfully`;
       if (result.documentsHandled > 0) {
         if (deletionMode === 'move_to_root') {
@@ -261,15 +305,15 @@ function DocumentsPageContent() {
           message += `. ${result.documentsHandled} document(s) deleted.`;
         }
       }
-      
+
       toast({ title: 'Success', description: message });
       setFolderToDelete(null);
     } catch (error: any) {
       console.error('Failed to delete folder:', error);
-      toast({ 
-        title: 'Failed to delete folder', 
+      toast({
+        title: 'Failed to delete folder',
         description: error instanceof Error ? error.message : 'Unknown error',
-        variant: 'destructive' 
+        variant: 'destructive'
       });
     } finally {
       setIsDeleting(false);
@@ -327,10 +371,10 @@ function DocumentsPageContent() {
 
   // Update URL when path changes (for navigation)
   useEffect(() => {
-    const newUrl = path.length > 0 
+    const newUrl = path.length > 0
       ? `/documents?path=${encodeURIComponent(path.join('/'))}`
       : '/documents';
-    
+
     // Update URL without triggering navigation
     window.history.replaceState({}, '', newUrl);
   }, [path]);
@@ -373,22 +417,57 @@ function DocumentsPageContent() {
     }
   };
 
-  const bulkDelete = () => {
-    selectedIds.forEach(id => removeDocument(id));
-    setSelectedIds(new Set());
-    setSelectAll(false);
-    setConfirmBulkDeleteOpen(false);
-    // Refresh the documents list to ensure UI updates immediately
-    setTimeout(() => refresh(), 100);
+  const bulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+
+    setIsDeletingDocuments(true);
+    try {
+      // Use the efficient bulk delete endpoint (single API call instead of N)
+      const result = await removeDocuments(Array.from(selectedIds));
+
+      toast({
+        title: 'Documents Deleted',
+        description: `${result.deleted || selectedIds.size} document(s) moved to recycle bin`,
+      });
+
+      setSelectedIds(new Set());
+      setSelectAll(false);
+      setConfirmBulkDeleteOpen(false);
+    } catch (error) {
+      console.error('Bulk delete failed:', error);
+      toast({
+        title: 'Delete Failed',
+        description: error instanceof Error ? error.message : 'Failed to delete documents',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsDeletingDocuments(false);
+    }
   };
 
-  const handleSingleDelete = () => {
-    if (documentToDelete) {
-      removeDocument(documentToDelete.id);
+  const handleSingleDelete = async () => {
+    if (!documentToDelete) return;
+
+    setIsDeletingDocuments(true);
+    try {
+      await removeDocument(documentToDelete.id);
+
+      toast({
+        title: 'Document Deleted',
+        description: `"${documentToDelete.title || documentToDelete.filename}" moved to recycle bin`,
+      });
+
       setDocumentToDelete(null);
       setConfirmDeleteOpen(false);
-      // Refresh the documents list to ensure UI updates immediately
-      setTimeout(() => refresh(), 100);
+    } catch (error) {
+      console.error('Delete failed:', error);
+      toast({
+        title: 'Delete Failed',
+        description: error instanceof Error ? error.message : 'Failed to delete document',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsDeletingDocuments(false);
     }
   };
 
@@ -468,7 +547,7 @@ function DocumentsPageContent() {
       moveDocumentsToPath(ids, folderPathArr);
       setSelectedIds(new Set());
       toast({ title: 'Moved', description: `${ids.length} document(s) moved` });
-    } catch {}
+    } catch { }
     setDragOverFolderIdx(null);
   };
 
@@ -493,7 +572,7 @@ function DocumentsPageContent() {
       const orgId = getApiContext().orgId || '';
       await apiFetch(`/orgs/${orgId}/folder-access`, { method: 'PUT', body: { path: sharePath, departmentIds: shareDeptIds } });
       setShareOpen(false);
-    } catch {}
+    } catch { }
   };
 
   if (isLoading || authLoading) {
@@ -540,9 +619,9 @@ function DocumentsPageContent() {
         {/* Navigation Header with Back Button */}
         <div className="flex flex-wrap items-center gap-2 sm:gap-4">
           {path.length > 0 && (
-            <Button 
-              variant="outline" 
-              size="sm" 
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setPath(path.slice(0, -1))}
               className="gap-2"
             >
@@ -575,8 +654,8 @@ function DocumentsPageContent() {
           )}
           {/* Department Filter - Always visible for admins */}
           {hasRoleAtLeast('systemAdmin') && (
-            <Select 
-              value={selectedDepartmentId || '__all__'} 
+            <Select
+              value={selectedDepartmentId || '__all__'}
               onValueChange={(v) => setSelectedDepartmentId(v === '__all__' ? null : v)}
             >
               <SelectTrigger className="hidden md:flex w-full sm:w-48">
@@ -592,7 +671,7 @@ function DocumentsPageContent() {
               </SelectContent>
             </Select>
           )}
-          
+
           <div className="relative flex-1 min-w-[220px] hidden md:block">
             <Input placeholder="Search documents..." value={query} onChange={(e) => setQuery(e.target.value)} className="w-full" />
             {query.trim() && (
@@ -635,20 +714,20 @@ function DocumentsPageContent() {
                   <DialogTrigger asChild>
                     <Button variant="outline">Move…</Button>
                   </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Move {selectedIds.size} documents</DialogTitle>
-                  </DialogHeader>
-                  <div className="space-y-2">
-                    <label className="text-sm text-muted-foreground">Destination path</label>
-                    <Input value={movePathInput} onChange={(e) => setMovePathInput(e.target.value)} placeholder="e.g., Finance/2025/Q1" />
-                    <p className="text-xs text-muted-foreground">New folders will be created automatically.</p>
-                  </div>
-                  <DialogFooter>
-                    <Button variant="outline" onClick={() => setMoveOpen(false)}>Cancel</Button>
-                    <Button onClick={onBulkMove}>Move</Button>
-                  </DialogFooter>
-                </DialogContent>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Move {selectedIds.size} documents</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-2">
+                      <label className="text-sm text-muted-foreground">Destination path</label>
+                      <Input value={movePathInput} onChange={(e) => setMovePathInput(e.target.value)} placeholder="e.g., Finance/2025/Q1" />
+                      <p className="text-xs text-muted-foreground">New folders will be created automatically.</p>
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setMoveOpen(false)}>Cancel</Button>
+                      <Button onClick={onBulkMove}>Move</Button>
+                    </DialogFooter>
+                  </DialogContent>
                 </Dialog>
               )}
               {hasPermission('documents.delete') && (
@@ -657,7 +736,7 @@ function DocumentsPageContent() {
             </div>
           )}
           <div className="ml-auto flex items-center gap-1 w-full sm:w-auto justify-between sm:justify-end">
-              <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1">
               <Button variant={effectiveView === 'grid' ? 'default' : 'outline'} size="icon" onClick={() => setView('grid')}><Grid2X2 className="h-4 w-4" /></Button>
               <Button variant={view === 'list' ? 'default' : 'outline'} size="icon" onClick={() => setView('list')} className="hidden sm:inline-flex"><List className="h-4 w-4" /></Button>
               <Button variant={effectiveView === 'cards' ? 'default' : 'outline'} size="icon" onClick={() => setView('cards')}><Grid3X3 className="h-4 w-4" /></Button>
@@ -702,8 +781,8 @@ function DocumentsPageContent() {
                   badge={selectedDepartmentId ? 1 : 0}
                   defaultOpen={!!selectedDepartmentId}
                 >
-                  <Select 
-                    value={selectedDepartmentId || '__all__'} 
+                  <Select
+                    value={selectedDepartmentId || '__all__'}
                     onValueChange={(v) => setSelectedDepartmentId(v === '__all__' ? null : v)}
                   >
                     <SelectTrigger className="w-full">
@@ -869,7 +948,7 @@ function DocumentsPageContent() {
             {selectedDepartmentId && hasRoleAtLeast('systemAdmin') && (
               <Badge variant="secondary" className="gap-1 text-[11px]">
                 Filtered by: {departments.find(d => d.id === selectedDepartmentId)?.name}
-                <button 
+                <button
                   onClick={() => setSelectedDepartmentId(null)}
                   className="ml-1 hover:bg-muted rounded-full p-0.5"
                   title="Clear department filter"
@@ -906,7 +985,7 @@ function DocumentsPageContent() {
                       onDrop={onFolderDrop(p, idx)}
                     >
                       <td className="p-2 sm:p-3 text-center">
-                        <input type="checkbox" disabled aria-label={`Folder ${p[p.length-1]}`} />
+                        <input type="checkbox" disabled aria-label={`Folder ${p[p.length - 1]}`} />
                       </td>
                       <td className="p-2 sm:p-3">
                         <div className="flex items-center gap-2">
@@ -970,7 +1049,15 @@ function DocumentsPageContent() {
                                 autoFocus
                               />
                             ) : (
-                              <Link href={`/documents/${d.id}`} className="flex items-center gap-2 hover:underline" onDoubleClick={hasRoleAtLeast('member') && canUpdateDocuments ? (e) => { e.preventDefault(); startEdit(d); } : undefined}><ThemeIcon icon={FileText} className="h-3.5 w-3.5 sm:h-4 sm:w-4" /> <span className="line-clamp-2">{d.title || d.name}</span></Link>
+                              (() => {
+                                const { icon: DocIcon, color: iconColor } = getFileTypeIcon((d as any).mimeType, d.filename || d.name);
+                                return (
+                                  <Link href={`/documents/${d.id}`} className="flex items-center gap-2 hover:underline" onDoubleClick={hasRoleAtLeast('member') && canUpdateDocuments ? (e) => { e.preventDefault(); startEdit(d); } : undefined}>
+                                    <DocIcon className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${iconColor}`} />
+                                    <span className="line-clamp-2">{d.title || d.name}</span>
+                                  </Link>
+                                );
+                              })()
                             )}
                           </PopoverTrigger>
                           <PopoverContent align="start" className="w-96 p-4">
@@ -1005,9 +1092,9 @@ function DocumentsPageContent() {
                         )}
                         <Link href={`/documents/${d.id}`} className="text-primary hover:underline">View</Link>
                         {hasPermission('documents.delete') && (
-                          <Button 
-                            variant="ghost" 
-                            size="sm" 
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             className="text-red-600 hover:text-red-700 h-auto p-1"
                             onClick={() => {
                               setDocumentToDelete(d);
@@ -1028,72 +1115,82 @@ function DocumentsPageContent() {
             </div>
           ) : effectiveView === 'grid' ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-              {filteredDocs.map(d => (
-                <Popover key={d.id}>
-                  <PopoverTrigger asChild>
-                    <Card className="hover:shadow-sm" draggable onDragStart={onDocDragStart} data-id={d.id}>
-                      <CardContent className="p-4 sm:p-5">
-                        <Link href={`/documents/${d.id}`} className="flex flex-col gap-2.5 sm:gap-3">
-                          <div className="flex items-center justify-between">
-                            <ThemeIcon icon={FileText} className="h-7 w-7 sm:h-8 sm:w-8" />
-                            <div className="flex items-center gap-2">
-                              {hasRoleAtLeast('systemAdmin') && renderDepartmentBadge((d as any).departmentId || (d as any).department_id || null)}
-                              <span className="rounded-md border px-2 py-0.5 text-[9px] sm:text-[10px] uppercase tracking-wide">{(d.documentType || d.type)}</span>
+              {filteredDocs.map(d => {
+                const { icon: DocIcon, color: iconColor, bg: iconBg } = getFileTypeIcon((d as any).mimeType, d.filename || d.name);
+                return (
+                  <Popover key={d.id}>
+                    <PopoverTrigger asChild>
+                      <Card className="hover:shadow-sm" draggable onDragStart={onDocDragStart} data-id={d.id}>
+                        <CardContent className="p-4 sm:p-5">
+                          <Link href={`/documents/${d.id}`} className="flex flex-col gap-2.5 sm:gap-3">
+                            <div className="flex items-center justify-between">
+                              <div className={`h-10 w-10 rounded-md ${iconBg} ${iconColor} flex items-center justify-center`}>
+                                <DocIcon className="h-5 w-5" />
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {hasRoleAtLeast('systemAdmin') && renderDepartmentBadge((d as any).departmentId || (d as any).department_id || null)}
+                                <span className="rounded-md border px-2 py-0.5 text-[9px] sm:text-[10px] uppercase tracking-wide">{(d.documentType || d.type)}</span>
+                              </div>
                             </div>
-                          </div>
-                          {editingId === d.id ? (
-                            <input
-                              className="border rounded px-2 py-1 text-xs sm:text-sm w-full"
-                              value={editingTitle}
-                              onChange={(e) => setEditingTitle(e.target.value)}
-                              onBlur={() => commitEdit(d.id)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(d.id); if (e.key === 'Escape') { setEditingId(null); setEditingTitle(''); } }}
-                              autoFocus
-                            />
-                          ) : (
-                            <div className="font-medium text-sm sm:text-base line-clamp-2" onDoubleClick={hasRoleAtLeast('member') && canUpdateDocuments ? (e) => { e.preventDefault(); startEdit(d); } : undefined}>{d.title || d.name}</div>
-                          )}
-                        </Link>
-                      </CardContent>
-                    </Card>
-                  </PopoverTrigger>
-                  <PopoverContent align="start" className="w-80 p-4">
-                    <div className="space-y-2">
-                      <div className="font-semibold">{d.title || d.name}</div>
-                      {d.aiPurpose && <p className="text-xs text-muted-foreground line-clamp-4">{d.aiPurpose}</p>}
-                      <div className="text-[10px] text-muted-foreground flex gap-3"><span>{formatNiceDate(d)}</span><span>{d.fileSizeBytes ? `${(d.fileSizeBytes/1024).toFixed(2)} KB` : ''}</span></div>
-                    </div>
-                  </PopoverContent>
-                </Popover>
-              ))}
+                            {editingId === d.id ? (
+                              <input
+                                className="border rounded px-2 py-1 text-xs sm:text-sm w-full"
+                                value={editingTitle}
+                                onChange={(e) => setEditingTitle(e.target.value)}
+                                onBlur={() => commitEdit(d.id)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(d.id); if (e.key === 'Escape') { setEditingId(null); setEditingTitle(''); } }}
+                                autoFocus
+                              />
+                            ) : (
+                              <div className="font-medium text-sm sm:text-base line-clamp-2" onDoubleClick={hasRoleAtLeast('member') && canUpdateDocuments ? (e) => { e.preventDefault(); startEdit(d); } : undefined}>{d.title || d.name}</div>
+                            )}
+                          </Link>
+                        </CardContent>
+                      </Card>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-80 p-4">
+                      <div className="space-y-2">
+                        <div className="font-semibold">{d.title || d.name}</div>
+                        {d.aiPurpose && <p className="text-xs text-muted-foreground line-clamp-4">{d.aiPurpose}</p>}
+                        <div className="text-[10px] text-muted-foreground flex gap-3"><span>{formatNiceDate(d)}</span><span>{d.fileSizeBytes ? `${(d.fileSizeBytes / 1024).toFixed(2)} KB` : ''}</span></div>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                );
+              })}
             </div>
           ) : (
             <div className="space-y-4">
-              {filteredDocs.map(d => (
-                <Card key={d.id} className="hover:shadow-sm">
-                  <CardContent className="p-4 sm:p-5 space-y-3">
-                    <div className="flex items-center gap-3">
-                      <div className="h-8 w-8 sm:h-9 sm:w-9 rounded-md bg-violet-100 text-violet-700 flex items-center justify-center"><span className="text-[11px] font-bold sm:text-xs">{(d.documentType || d.type).slice(0,3).toUpperCase()}</span></div>
-                      <div className="flex-1">
-                        <div className="font-semibold text-sm sm:text-base">{d.title || d.name}</div>
-                        {d.aiPurpose && (
-                          <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2">Purpose: {d.aiPurpose}</p>
-                        )}
+              {filteredDocs.map(d => {
+                const { icon: DocIcon, color: iconColor, bg: iconBg } = getFileTypeIcon((d as any).mimeType, d.filename || d.name);
+                return (
+                  <Card key={d.id} className="hover:shadow-sm">
+                    <CardContent className="p-4 sm:p-5 space-y-3">
+                      <div className="flex items-center gap-3">
+                        <div className={`h-9 w-9 sm:h-10 sm:w-10 rounded-md ${iconBg} ${iconColor} flex items-center justify-center`}>
+                          <DocIcon className="h-5 w-5" />
+                        </div>
+                        <div className="flex-1">
+                          <div className="font-semibold text-sm sm:text-base">{d.title || d.name}</div>
+                          {d.aiPurpose && (
+                            <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2">Purpose: {d.aiPurpose}</p>
+                          )}
+                        </div>
+                        {hasRoleAtLeast('systemAdmin') && renderDepartmentBadge((d as any).departmentId || (d as any).department_id || null)}
                       </div>
-                      {hasRoleAtLeast('systemAdmin') && renderDepartmentBadge((d as any).departmentId || (d as any).department_id || null)}
-                    </div>
-                    <div className="rounded-md border p-3 text-xs sm:text-sm text-muted-foreground flex flex-wrap items-center gap-2 sm:gap-4">
-                      <span>From <span className="text-foreground">{d.sender || '—'}</span> → To <span className="text-foreground">{d.receiver || '—'}</span></span>
-                       <span className="sm:ml-auto text-right">{formatNiceDate(d)}</span>
-                    </div>
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>{d.fileSizeBytes ? `${(d.fileSizeBytes/1024).toFixed(2)} KB` : ''}</span>
-                      <span className="rounded-md border px-2 py-0.5 text-[10px] uppercase tracking-wide">{(d.documentType || d.type)}</span>
-                    </div>
-                    <div className="text-right"><Link href={`/documents/${d.id}`} className="text-primary hover:underline">View</Link></div>
-                  </CardContent>
-                </Card>
-              ))}
+                      <div className="rounded-md border p-3 text-xs sm:text-sm text-muted-foreground flex flex-wrap items-center gap-2 sm:gap-4">
+                        <span>From <span className="text-foreground">{d.sender || '—'}</span> → To <span className="text-foreground">{d.receiver || '—'}</span></span>
+                        <span className="sm:ml-auto text-right">{formatNiceDate(d)}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>{d.fileSizeBytes ? `${(d.fileSizeBytes / 1024).toFixed(2)} KB` : ''}</span>
+                        <span className="rounded-md border px-2 py-0.5 text-[10px] uppercase tracking-wide">{(d.documentType || d.type)}</span>
+                      </div>
+                      <div className="text-right"><Link href={`/documents/${d.id}`} className="text-primary hover:underline">View</Link></div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
               {currentDocs.length === 0 && (
                 <div className="text-sm text-muted-foreground">No documents</div>
               )}
@@ -1101,7 +1198,7 @@ function DocumentsPageContent() {
           )}
         </div>
       </div>
-      
+
       {hasRoleAtLeast('member') && canCreateDocuments && (
         <Dialog open={newFolderOpen} onOpenChange={setNewFolderOpen}>
           <DialogContent>
@@ -1123,13 +1220,13 @@ function DocumentsPageContent() {
                 const existingFolders = listFolders(path);
                 const normalizedName = name.toLowerCase().trim();
                 const exists = existingFolders.some(p => (p[p.length - 1] || '').toLowerCase().trim() === normalizedName);
-                if (exists) { 
-                  toast({ 
-                    title: 'Folder already exists', 
+                if (exists) {
+                  toast({
+                    title: 'Folder already exists',
                     description: `A folder named "${name}" already exists in this location.`,
-                    variant: 'destructive' 
-                  }); 
-                  return; 
+                    variant: 'destructive'
+                  });
+                  return;
                 }
                 try {
                   await createFolder(path, name);
@@ -1149,10 +1246,10 @@ function DocumentsPageContent() {
                   if (error?.status === 409 || errorMessage.includes('already exists')) {
                     errorMessage = `Folder "${name}" already exists in this location.`;
                   }
-                  toast({ 
-                    title: 'Failed to create folder', 
+                  toast({
+                    title: 'Failed to create folder',
                     description: errorMessage,
-                    variant: 'destructive' 
+                    variant: 'destructive'
                   });
                 }
               }}>Create</Button>
@@ -1160,7 +1257,7 @@ function DocumentsPageContent() {
           </DialogContent>
         </Dialog>
       )}
-      
+
       {/* Folder Deletion Confirmation Dialog */}
       <UiDialog open={shareOpen} onOpenChange={setShareOpen}>
         <UiDialogContent>
@@ -1172,14 +1269,14 @@ function DocumentsPageContent() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
               {departments.map(d => (
                 <label key={d.id} className="flex items-center gap-2 text-sm">
-                  <Checkbox checked={shareDeptIds.includes(d.id)} onCheckedChange={(v:any)=>toggleShareDept(d.id, !!v)} />
+                  <Checkbox checked={shareDeptIds.includes(d.id)} onCheckedChange={(v: any) => toggleShareDept(d.id, !!v)} />
                   <span className="capitalize" data-color={d.color || 'default'}>{d.name}</span>
                 </label>
               ))}
             </div>
           </div>
           <UiDialogFooter>
-            <Button variant="outline" onClick={()=>setShareOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setShareOpen(false)}>Cancel</Button>
             <Button onClick={saveShare}>Save</Button>
           </UiDialogFooter>
         </UiDialogContent>
@@ -1190,19 +1287,19 @@ function DocumentsPageContent() {
           <DialogHeader>
             <DialogTitle>Delete Folder</DialogTitle>
           </DialogHeader>
-          
+
           {folderToDelete && (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
                 You are about to delete the folder <span className="font-medium">"{folderToDelete[folderToDelete.length - 1]}"</span>.
               </p>
-              
+
               {getDocumentsInPath(folderToDelete).length > 0 && (
                 <div className="space-y-3">
                   <p className="text-sm font-medium">
                     This folder contains {getDocumentsInPath(folderToDelete).length} document(s). What would you like to do?
                   </p>
-                  
+
                   <RadioGroup value={deletionMode} onValueChange={(value: 'move_to_root' | 'delete_all') => setDeletionMode(value)}>
                     <div className="flex items-center space-x-2">
                       <RadioGroupItem value="move_to_root" id="move" />
@@ -1223,7 +1320,7 @@ function DocumentsPageContent() {
                   </RadioGroup>
                 </div>
               )}
-              
+
               {getDocumentsInPath(folderToDelete).length === 0 && (
                 <p className="text-sm text-muted-foreground">
                   This folder is empty and will be deleted immediately.
@@ -1231,12 +1328,12 @@ function DocumentsPageContent() {
               )}
             </div>
           )}
-          
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setFolderToDelete(null)} disabled={isDeleting}>
               Cancel
             </Button>
-            <Button 
+            <Button
               variant={deletionMode === 'delete_all' ? 'destructive' : 'default'}
               onClick={handleFolderDeletion}
               disabled={isDeleting}
@@ -1255,25 +1352,25 @@ function DocumentsPageContent() {
           <DialogHeader>
             <DialogTitle>Delete Documents</DialogTitle>
           </DialogHeader>
-          
+
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Are you sure you want to delete <span className="font-medium">{selectedIds.size} document(s)</span>? 
+              Are you sure you want to delete <span className="font-medium">{selectedIds.size} document(s)</span>?
               This action cannot be undone.
             </p>
-            
+
             <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3">
               <p className="text-sm text-destructive font-medium">
                 ⚠️ Warning: This will permanently delete the selected documents and their files.
               </p>
             </div>
           </div>
-          
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmBulkDeleteOpen(false)}>
               Cancel
             </Button>
-            <Button 
+            <Button
               variant="destructive"
               onClick={bulkDelete}
             >
@@ -1289,25 +1386,25 @@ function DocumentsPageContent() {
           <DialogHeader>
             <DialogTitle>Delete Document</DialogTitle>
           </DialogHeader>
-          
+
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Are you sure you want to delete <span className="font-medium">"{documentToDelete?.title || documentToDelete?.name}"</span>? 
+              Are you sure you want to delete <span className="font-medium">"{documentToDelete?.title || documentToDelete?.name}"</span>?
               This action cannot be undone.
             </p>
-            
+
             <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3">
               <p className="text-sm text-destructive font-medium">
                 ⚠️ Warning: This will permanently delete the document and its files.
               </p>
             </div>
           </div>
-          
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmDeleteOpen(false)}>
               Cancel
             </Button>
-            <Button 
+            <Button
               variant="destructive"
               onClick={handleSingleDelete}
             >

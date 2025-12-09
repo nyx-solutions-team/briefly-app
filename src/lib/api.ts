@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { dedupRequest } from '@/lib/request-dedup';
 
 export type ApiOptions = {
   method?: string;
@@ -19,24 +20,24 @@ async function checkIpBypassPermission(): Promise<boolean> {
     const bootstrapData = JSON.parse(localStorage.getItem('bootstrapData') || '{}');
     return bootstrapData.permissions?.['security.ip_bypass'] === true;
   }
-  
+
   try {
     isCheckingPermissions = true;
-    
+
     // First try to get fresh bootstrap data from the auth context
     const { data: sess } = await supabase.auth.getSession();
     if (!sess.session?.access_token) return false;
-    
+
     const base = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8787';
-    const res = await fetch(`${base}/me/bootstrap`, { 
-      headers: { Authorization: `Bearer ${sess.session.access_token}` } 
+    const res = await fetch(`${base}/me/bootstrap`, {
+      headers: { Authorization: `Bearer ${sess.session.access_token}` }
     });
-    
+
     if (res.ok) {
       const bootstrap = await res.json();
       return bootstrap.permissions?.['security.ip_bypass'] === true;
     }
-    
+
     // Fallback to localStorage if API call fails
     const bootstrapData = JSON.parse(localStorage.getItem('bootstrapData') || '{}');
     return bootstrapData.permissions?.['security.ip_bypass'] === true;
@@ -103,7 +104,7 @@ export function setApiContext(ctx: { orgId?: string }) {
   }
   const snapshot = { orgId: currentOrgId };
   subscribers.forEach(cb => {
-    try { cb(snapshot); } catch {}
+    try { cb(snapshot); } catch { }
   });
 }
 
@@ -116,63 +117,52 @@ export function onApiContextChange(cb: Cb) {
   return () => subscribers.delete(cb);
 }
 
-export async function apiFetch<T = any>(path: string, opts: ApiOptions = {}): Promise<T> {
-  const { skipCache = false, ...restOpts } = opts;
+// Core fetch implementation (used by apiFetch and dedupRequest)
+async function performFetch<T = any>(
+  path: string,
+  opts: Omit<ApiOptions, 'skipCache'>,
+  headers: Record<string, string>,
+  method: string,
+  cacheKey: string,
+  skipCache: boolean
+): Promise<T> {
   const url = `${BASE_URL}${path}`;
-  const headers: Record<string, string> = {
-    ...(restOpts.headers || {}),
-  };
-  // Only set JSON content type when a body is provided (avoids Fastify empty JSON body error)
-  if (restOpts.body !== undefined && !headers['Content-Type']) {
-    headers['Content-Type'] = 'application/json';
-  }
-  if (currentOrgId && !headers['X-Org-Id']) headers['X-Org-Id'] = currentOrgId;
-  
-  // Check cache for GET requests only
-  const method = restOpts.method || 'GET';
-  const cacheKey = getCacheKey(path, headers);
-  
-  if (method === 'GET' && !skipCache) {
-    const cached = getCachedResponse<T>(cacheKey);
-    if (cached !== null) {
-      return cached;
-    }
-  }
-  
+
   // Attach Supabase JWT automatically when available (client-side only)
   try {
     const session = await supabase.auth.getSession();
     const token = session.data.session?.access_token;
     if (token && !headers['Authorization']) headers['Authorization'] = `Bearer ${token}`;
-  } catch {}
-  
+  } catch { }
+
   const res = await fetch(url, {
     method,
     headers,
-    body: restOpts.body !== undefined
-      ? (headers['Content-Type'] === 'application/json' ? JSON.stringify(restOpts.body) : (restOpts.body as any))
+    body: opts.body !== undefined
+      ? (headers['Content-Type'] === 'application/json' ? JSON.stringify(opts.body) : (opts.body as any))
       : undefined,
-    signal: restOpts.signal,
+    signal: opts.signal,
   });
+
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;
     let errorData: any = null;
-    try { 
-      errorData = await res.json(); 
-      msg = errorData.error || errorData.message || msg; 
-    } catch {}
+    try {
+      errorData = await res.json();
+      msg = errorData.error || errorData.message || msg;
+    } catch { }
 
     // Handle IP blocking specifically
     if (res.status === 403 && errorData?.code === 'IP_NOT_ALLOWED') {
       // Don't redirect if we're already on the IP blocked page or calling the IP check endpoint
       const isOnIpBlockedPage = typeof window !== 'undefined' && window.location.pathname === '/ip-blocked';
       const isIpCheckEndpoint = path.includes('/ip-check');
-      
+
       if (!isOnIpBlockedPage && !isIpCheckEndpoint && typeof window !== 'undefined') {
         // Check if user has IP bypass permission before redirecting
         // Use a more reliable method to check permissions
         const hasIpBypass = await checkIpBypassPermission();
-        
+
         if (!hasIpBypass) {
           window.location.href = '/ip-blocked';
           return undefined as T;
@@ -183,21 +173,22 @@ export async function apiFetch<T = any>(path: string, opts: ApiOptions = {}): Pr
       }
     }
 
-    const error = new Error(`API ${restOpts.method || 'GET'} ${path} failed: ${msg}`);
+    const error = new Error(`API ${method} ${path} failed: ${msg}`);
     (error as any).status = res.status;
     (error as any).data = errorData;
     throw error;
   }
+
   const text = await res.text();
   if (!text) return undefined as unknown as T;
-  
+
   let result: T;
-  try { 
-    result = JSON.parse(text) as T; 
-  } catch { 
-    result = text as unknown as T; 
+  try {
+    result = JSON.parse(text) as T;
+  } catch {
+    result = text as unknown as T;
   }
-  
+
   // Cache successful GET responses
   if (method === 'GET' && res.ok && !skipCache) {
     // Determine TTL based on endpoint
@@ -209,7 +200,7 @@ export async function apiFetch<T = any>(path: string, opts: ApiOptions = {}): Pr
     } else if (path.includes('/orgs') || path.includes('/users')) {
       ttl = CACHE_TTL.medium;
     }
-    
+
     setCachedResponse(cacheKey, result, ttl);
   }
   // Clear cache for related endpoints when modifying data
@@ -225,17 +216,49 @@ export async function apiFetch<T = any>(path: string, opts: ApiOptions = {}): Pr
             key.includes('/users/') ||
             key.includes('/overrides') ||
             key.includes('/roles/') ||
-          key.includes('/recycle-bin') ||
-          key.includes('/documents')
-        );
+            key.includes('/recycle-bin') ||
+            key.includes('/documents')
+          );
         if (needsBust) {
           cache.delete(key);
         }
       }
     }
   }
-  
+
   return result;
+}
+
+export async function apiFetch<T = any>(path: string, opts: ApiOptions = {}): Promise<T> {
+  const { skipCache = false, ...restOpts } = opts;
+  const headers: Record<string, string> = {
+    ...(restOpts.headers || {}),
+  };
+  // Only set JSON content type when a body is provided (avoids Fastify empty JSON body error)
+  if (restOpts.body !== undefined && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+  if (currentOrgId && !headers['X-Org-Id']) headers['X-Org-Id'] = currentOrgId;
+
+  // Check cache for GET requests only
+  const method = restOpts.method || 'GET';
+  const cacheKey = getCacheKey(path, headers);
+
+  if (method === 'GET' && !skipCache) {
+    const cached = getCachedResponse<T>(cacheKey);
+    if (cached !== null) {
+      return cached;
+    }
+
+    // Use request deduplication for GET requests to prevent duplicate in-flight requests
+    // This ensures multiple components requesting the same data only trigger one network request
+    return dedupRequest<T>(cacheKey, async () => {
+      return performFetch<T>(path, restOpts, headers, method, cacheKey, skipCache);
+    });
+  }
+
+  // For non-GET requests, just perform the fetch directly
+  return performFetch<T>(path, restOpts, headers, method, cacheKey, skipCache);
 }
 
 // Function to explicitly clear cache for a specific endpoint
@@ -260,7 +283,7 @@ export async function ssePost(
     const session = await supabase.auth.getSession();
     const token = session.data.session?.access_token;
     if (token) headers['Authorization'] = `Bearer ${token}`;
-  } catch {}
+  } catch { }
 
   const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: opts?.signal });
   if (!res.ok || !res.body) throw new Error(`SSE request failed: ${res.status}`);
@@ -273,7 +296,7 @@ export async function ssePost(
   let aborted = false;
   const onAbort = () => {
     aborted = true;
-    try { reader.cancel(); } catch {}
+    try { reader.cancel(); } catch { }
   };
   if (opts?.signal) {
     if (opts.signal.aborted) onAbort();
@@ -308,9 +331,9 @@ export async function ssePost(
             data += '\n' + line;
           }
         }
-        try { 
-          onEvent({ event, data: JSON.parse(data) }); 
-        } catch (parseError) { 
+        try {
+          onEvent({ event, data: JSON.parse(data) });
+        } catch (parseError) {
           console.warn('Failed to parse SSE data:', data, parseError);
           // Don't pass unparsed data to avoid showing raw JSON in UI
         }

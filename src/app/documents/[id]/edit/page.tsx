@@ -114,197 +114,231 @@ export default function EditDocumentPage() {
           <CardHeader>
             <CardTitle>Details</CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-sm flex items-center gap-1">
+          <CardContent className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl border bg-muted/20 p-4 shadow-sm space-y-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground/80">
                   <FileText className="h-4 w-4" />
-                  Title
-                </label>
-                <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                  <span>Basics</span>
+                </div>
+                <div className="grid gap-3">
+                  <div className="grid gap-1.5">
+                    <label className="text-sm font-medium flex items-center gap-1">
+                      <FileText className="h-4 w-4" />
+                      Title
+                    </label>
+                    <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <label className="text-sm font-medium flex items-center gap-1">
+                      <FileText className="h-4 w-4" />
+                      Filename
+                    </label>
+                    <Input value={form.filename} onChange={(e) => setForm({ ...form, filename: e.target.value })} />
+                  </div>
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium flex items-center gap-1">
+                      <FolderOpen className="h-4 w-4" />
+                      Folder
+                    </label>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <UiSelect value={form.folderPath || ''} onValueChange={(v) => setForm({ ...form, folderPath: v === '__root__' ? '' : v })}>
+                        <UiSelectTrigger className="w-full"><UiSelectValue placeholder="Select folder" /></UiSelectTrigger>
+                        <UiSelectContent>
+                          <UiSelectItem value="__root__">Root</UiSelectItem>
+                          {folders.map((p, idx) => (
+                            <UiSelectItem key={idx} value={p.join('/')}>{p.join('/')}</UiSelectItem>
+                          ))}
+                        </UiSelectContent>
+                      </UiSelect>
+                      <Input value={form.folderPath} onChange={(e) => setForm({ ...form, folderPath: e.target.value })} placeholder="Custom path e.g., Finance/2025/Q1" />
+                    </div>
+                    <p className="text-xs text-muted-foreground">Choose an existing folder or type a new nested path. We’ll create it for you.</p>
+                  </div>
+                </div>
               </div>
-              <div>
-                <label className="text-sm flex items-center gap-1">
-                  <FileText className="h-4 w-4" />
-                  Filename
-                </label>
-                <Input value={form.filename} onChange={(e) => setForm({ ...form, filename: e.target.value })} />
-              </div>
-              <div>
-                <label className="text-sm flex items-center gap-1">
-                  <MessageSquare className="h-4 w-4" />
-                  Subject
-                </label>
-                <Input value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} />
-              </div>
-              <div>
-                <label className="text-sm flex items-center gap-1">
+              <div className="rounded-xl border bg-muted/20 p-4 shadow-sm space-y-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground/80">
                   <User className="h-4 w-4" />
-                  Sender
-                </label>
-                <Input value={form.sender} onChange={(e) => setForm({ ...form, sender: e.target.value })} />
-              </div>
-              <div>
-                <label className="text-sm flex items-center gap-1">
-                  <UserCheck className="h-4 w-4" />
-                  Receiver
-                </label>
-                <Input value={form.receiver} onChange={(e) => setForm({ ...form, receiver: e.target.value })} />
-              </div>
-              <div>
-                <label className="text-sm flex items-center gap-1">
-                  <Calendar className="h-4 w-4" />
-                  Document Date
-                </label>
-                <Input value={form.documentDate} onChange={(e) => setForm({ ...form, documentDate: e.target.value })} />
-              </div>
-              <div>
-                <label className="text-sm flex items-center gap-1">
-                  <Tag className="h-4 w-4" />
-                  Document Type
-                </label>
-                <Input value={form.documentType} onChange={(e) => setForm({ ...form, documentType: e.target.value })} />
-              </div>
-              <div>
-                <label className="text-sm flex items-center gap-1">
-                  <Bookmark className="h-4 w-4" />
-                  Category
-                </label>
-                <UiSelect value={form.category || 'General'} onValueChange={(value) => setForm({ ...form, category: value })}>
-                  <UiSelectTrigger className="w-full">
-                    <UiSelectValue placeholder="Select category..." />
-                  </UiSelectTrigger>
-                  <UiSelectContent>
-                    {categories.map((category) => (
-                      <UiSelectItem key={category} value={category}>
-                        {category}
-                      </UiSelectItem>
-                    ))}
-                  </UiSelectContent>
-                </UiSelect>
-              </div>
-              <div className="md:col-span-2">
-                <label className="text-sm flex items-center gap-1">
-                  <MessageSquare className="h-4 w-4" />
-                  Description
-                </label>
-                <Textarea rows={4} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-              </div>
-              <div>
-                <label className="text-sm flex items-center gap-1">
-                  <Hash className="h-4 w-4" />
-                  Keywords (comma separated)
-                </label>
-                <Input value={form.keywords} onChange={(e) => setForm({ ...form, keywords: e.target.value })} />
-              </div>
-              <div>
-                <label className="text-sm flex items-center gap-1">
-                  <Tag className="h-4 w-4" />
-                  Tags (comma separated)
-                </label>
-                <Input value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} />
-              </div>
-              <div className="md:col-span-2">
-                <label className="text-sm">Folder</label>
-                <div className="mt-1 grid grid-cols-1 md:grid-cols-2 gap-2">
-                  <UiSelect value={form.folderPath || ''} onValueChange={(v) => setForm({ ...form, folderPath: v === '__root__' ? '' : v })}>
-                    <UiSelectTrigger className="w-full"><UiSelectValue placeholder="Select folder" /></UiSelectTrigger>
-                    <UiSelectContent>
-                      <UiSelectItem value="__root__">Root</UiSelectItem>
-                      {folders.map((p, idx) => (
-                        <UiSelectItem key={idx} value={p.join('/')}>{p.join('/')}</UiSelectItem>
-                      ))}
-                    </UiSelectContent>
-                  </UiSelect>
-                  <Input value={form.folderPath} onChange={(e) => setForm({ ...form, folderPath: e.target.value })} placeholder="Custom path e.g., Finance/2025/Q1" />
+                  <span>People & dates</span>
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground">Choose existing or type a new nested path. New folders will be created automatically.</p>
-              </div>
-              <div className="md:col-span-2">
-                <label className="text-sm font-medium flex items-center gap-1">
-                  <LinkIcon className="h-4 w-4" />
-                  Document Relationships
-                </label>
-                <div className="mt-3 space-y-4">
-                  
-                  {/* Linked (incoming + outgoing) */}
-                  <div>
-                    <div className="text-xs font-medium text-muted-foreground mb-2">
-                      Linked Documents ({(relationships.incoming?.length || 0) + (relationships.outgoing?.length || 0)})
-                    </div>
-                    {relLoading ? (
-                      <div className="text-xs text-muted-foreground">Loading…</div>
-                    ) : (
-                      <div className="space-y-2">
-                        {[...(relationships.outgoing || []), ...(relationships.incoming || [])].map((rel: any) => (
-                          <div key={`${rel.id}-${rel.direction}`} className="flex items-center justify-between rounded-md border p-2 bg-background">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <span className="truncate font-medium" title={rel.title}>
-                                  {rel.title}
-                                </span>
-                                {rel.versionNumber && (
-                                  <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">v{rel.versionNumber}</span>
-                                )}
-                              </div>
-                              <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2">
-                                <span>{rel.type}</span>
-                                <span className={rel.direction === 'outgoing' ? 'text-green-600' : 'text-blue-600'}>
-                                  {rel.direction === 'outgoing' ? '↗ links to' : '↙ linked from'}
-                                </span>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <Button size="sm" variant="ghost" asChild>
-                                <Link href={`/documents/${rel.id}`} target="_blank">View</Link>
-                              </Button>
-                              <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={async () => {
-                                try { const { orgId } = getApiContext(); await apiFetch(`/orgs/${orgId}/documents/${doc.id}/link/${rel.id}`, { method: 'DELETE' }); await loadRelationships(); } catch(e){ console.error('unlink failed', e);} }}>Remove</Button>
-                            </div>
-                          </div>
-                        ))}
-                        {((relationships.incoming?.length || 0) + (relationships.outgoing?.length || 0)) === 0 && (
-                          <div className="text-xs text-muted-foreground">No links yet.</div>
-                        )}
-                      </div>
-                    )}
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-1.5 sm:col-span-2">
+                    <label className="text-sm font-medium flex items-center gap-1">
+                      <MessageSquare className="h-4 w-4" />
+                      Subject
+                    </label>
+                    <Input value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} />
                   </div>
-
-                  {/* Removed Smart Suggestions - users should search manually */}
-                  <div>
-                    <div className="text-xs font-medium text-muted-foreground mb-2">
-                      Search and Link Documents
-                </div>
-                    <div className="text-sm text-muted-foreground py-2 text-center border border-dashed rounded-md">
-                      Use the search box below to find and link related documents.
-                    </div>
+                  <div className="grid gap-1.5">
+                    <label className="text-sm font-medium flex items-center gap-1">
+                      <User className="h-4 w-4" />
+                      Sender
+                    </label>
+                    <Input value={form.sender} onChange={(e) => setForm({ ...form, sender: e.target.value })} />
                   </div>
-
-                  {/* Search */}
-                  <div>
-                    <div className="text-xs font-medium text-muted-foreground mb-2">
-                      Search
-                    </div>
-                  <Input
-                      placeholder="Search by title, sender, or type..."
-                    value={linkQuery}
-                    onChange={(e) => setLinkQuery(e.target.value)}
-                      className="mb-2"
-                  />
-                    {linkQuery.trim() && (
-                      <div className="max-h-48 overflow-y-auto rounded-md border bg-background">
-                        <ServerSearchResults docId={doc.id} query={linkQuery} onAdd={async (targetId) => {
-                          try { const { orgId } = getApiContext(); await apiFetch(`/orgs/${orgId}/documents/${doc.id}/link`, { method: 'POST', body: { linkedId: targetId, linkType: 'related' } }); setLinkQuery(''); await loadRelationships(); } catch(e){ console.error('link failed', e);} }} />
-                      </div>
-                    )}
+                  <div className="grid gap-1.5">
+                    <label className="text-sm font-medium flex items-center gap-1">
+                      <UserCheck className="h-4 w-4" />
+                      Receiver
+                    </label>
+                    <Input value={form.receiver} onChange={(e) => setForm({ ...form, receiver: e.target.value })} />
+                  </div>
+                  <div className="grid gap-1.5 sm:col-span-2">
+                    <label className="text-sm font-medium flex items-center gap-1">
+                      <Calendar className="h-4 w-4" />
+                      Document Date
+                    </label>
+                    <Input value={form.documentDate} onChange={(e) => setForm({ ...form, documentDate: e.target.value })} placeholder="YYYY-MM-DD" />
                   </div>
                 </div>
               </div>
             </div>
 
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl border bg-muted/20 p-4 shadow-sm space-y-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground/80">
+                  <Tag className="h-4 w-4" />
+                  <span>Classification</span>
+                </div>
+                <div className="grid gap-3">
+                  <div className="grid gap-1.5">
+                    <label className="text-sm font-medium flex items-center gap-1">
+                      <Tag className="h-4 w-4" />
+                      Document Type
+                    </label>
+                    <Input value={form.documentType} onChange={(e) => setForm({ ...form, documentType: e.target.value })} placeholder="Invoice, Contract, Memo..." />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <label className="text-sm font-medium flex items-center gap-1">
+                      <Bookmark className="h-4 w-4" />
+                      Category
+                    </label>
+                    <UiSelect value={form.category || 'General'} onValueChange={(value) => setForm({ ...form, category: value })}>
+                      <UiSelectTrigger className="w-full">
+                        <UiSelectValue placeholder="Select category..." />
+                      </UiSelectTrigger>
+                      <UiSelectContent>
+                        {categories.map((category) => (
+                          <UiSelectItem key={category} value={category}>
+                            {category}
+                          </UiSelectItem>
+                        ))}
+                      </UiSelectContent>
+                    </UiSelect>
+                  </div>
+                  <div className="grid gap-1.5">
+                    <label className="text-sm font-medium flex items-center gap-1">
+                      <Hash className="h-4 w-4" />
+                      Keywords
+                    </label>
+                    <Input value={form.keywords} onChange={(e) => setForm({ ...form, keywords: e.target.value })} placeholder="Comma separated e.g. finance, q1, audit" />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <label className="text-sm font-medium flex items-center gap-1">
+                      <Tag className="h-4 w-4" />
+                      Tags
+                    </label>
+                    <Input value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="Comma separated e.g. urgent, vendor" />
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-xl border bg-gradient-to-br from-primary/5 via-primary/10 to-primary/5 p-4 shadow-sm space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground/80">
+                    <MessageSquare className="h-4 w-4" />
+                    <span>AI Summary</span>
+                  </div>
+                  <span className="text-xs text-muted-foreground">Aim for ~15 lines</span>
+                </div>
+                <Textarea
+                  rows={15}
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  placeholder="Summarize the document in plain language so anyone can grasp the essentials."
+                  className="leading-relaxed bg-background/70"
+                />
+              </div>
+            </div>
+
+            <div className="rounded-xl border bg-muted/10 p-4 shadow-sm space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground/80">
+                  <LinkIcon className="h-4 w-4" />
+                  <span>Document Relationships</span>
+                </div>
+                <span className="text-xs text-muted-foreground">Link related versions and files</span>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <div className="text-xs font-medium text-muted-foreground mb-2">
+                    Linked Documents ({(relationships.incoming?.length || 0) + (relationships.outgoing?.length || 0)})
+                  </div>
+                  {relLoading ? (
+                    <div className="text-xs text-muted-foreground">Loading…</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {[...(relationships.outgoing || []), ...(relationships.incoming || [])].map((rel: any) => (
+                        <div key={`${rel.id}-${rel.direction}`} className="flex items-center justify-between rounded-md border p-2 bg-background">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate font-medium" title={rel.title}>
+                                {rel.title}
+                              </span>
+                              {rel.versionNumber && (
+                                <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">v{rel.versionNumber}</span>
+                              )}
+                            </div>
+                            <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2">
+                              <span>{rel.type}</span>
+                              <span className={rel.direction === 'outgoing' ? 'text-green-600' : 'text-blue-600'}>
+                                {rel.direction === 'outgoing' ? '↗ links to' : '↙ linked from'}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Button size="sm" variant="ghost" asChild>
+                              <Link href={`/documents/${rel.id}`} target="_blank">View</Link>
+                            </Button>
+                            <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={async () => {
+                              try { const { orgId } = getApiContext(); await apiFetch(`/orgs/${orgId}/documents/${doc.id}/link/${rel.id}`, { method: 'DELETE' }); await loadRelationships(); } catch(e){ console.error('unlink failed', e);} }}>Remove</Button>
+                          </div>
+                        </div>
+                      ))}
+                      {((relationships.incoming?.length || 0) + (relationships.outgoing?.length || 0)) === 0 && (
+                        <div className="text-xs text-muted-foreground">No links yet.</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-dashed bg-background/60 p-3 space-y-2">
+                  <div className="text-xs font-medium text-muted-foreground">
+                    Search and link documents
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Find related files to keep versions and references tidy.
+                  </div>
+                  <Input
+                    placeholder="Search by title, sender, or type..."
+                    value={linkQuery}
+                    onChange={(e) => setLinkQuery(e.target.value)}
+                    className="mb-2"
+                  />
+                  {linkQuery.trim() && (
+                    <div className="max-h-48 overflow-y-auto rounded-md border bg-background">
+                      <ServerSearchResults docId={doc.id} query={linkQuery} onAdd={async (targetId) => {
+                        try { const { orgId } = getApiContext(); await apiFetch(`/orgs/${orgId}/documents/${doc.id}/link`, { method: 'POST', body: { linkedId: targetId, linkType: 'related' } }); setLinkQuery(''); await loadRelationships(); } catch(e){ console.error('link failed', e);} }} />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
             {/* Version History */}
-            <div className="mt-6">
-              <div className="text-xs font-medium text-muted-foreground mb-2">Version History</div>
+            <div className="rounded-xl border bg-muted/10 p-4 shadow-sm space-y-3">
+              <div className="text-xs font-medium text-muted-foreground">Version History</div>
               <div className="space-y-2">
                 {doc?.versionGroupId && (
                   <div className="p-3 rounded-md border bg-background/50 flex items-center justify-between">
@@ -337,7 +371,7 @@ export default function EditDocumentPage() {
               </div>
             </div>
 
-            <div className="mt-6 flex justify-between">
+            <div className="flex flex-col gap-3 border-t pt-4 md:flex-row md:items-center md:justify-between">
               <Button variant="destructive" onClick={onDelete}>Delete</Button>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => router.back()}>Cancel</Button>

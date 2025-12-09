@@ -12,7 +12,17 @@ import ErrorBoundary from '@/components/error-boundary';
 import { PlanBanner } from '@/components/plan-banner';
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
-  const { bootstrapData } = useAuth();
+  const { bootstrapData, isLoading } = useAuth();
+
+  // OPTIMIZATION: Don't render providers until auth is loaded
+  // This prevents providers from making API calls before bootstrap data is available
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-pulse text-muted-foreground">Loading...</div>
+      </div>
+    );
+  }
 
   return (
     <SettingsProvider

@@ -103,8 +103,8 @@ export function MobileFilterButton({
           className="md:hidden rounded-t-[32px] border-none px-0 pb-6 max-h-[85vh] overflow-hidden flex flex-col"
         >
           <SheetHeader className="px-6 pt-6 pb-4 border-b">
-            <div className="flex items-center justify-between">
-              <div className="flex-1">
+            <div className="flex items-center justify-center text-center">
+              <div>
                 <SheetTitle className="text-lg font-semibold">{title}</SheetTitle>
                 {description && (
                   <SheetDescription className="text-xs mt-1">
@@ -112,14 +112,6 @@ export function MobileFilterButton({
                   </SheetDescription>
                 )}
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => setOpen(false)}
-              >
-                <X className="h-4 w-4" />
-              </Button>
             </div>
             {activeCount > 0 && (
               <div className="mt-2 text-xs text-muted-foreground">

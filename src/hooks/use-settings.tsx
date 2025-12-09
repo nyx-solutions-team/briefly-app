@@ -48,68 +48,99 @@ export function SettingsProvider({
   }
 }) {
   const [settings, setSettings] = useState<OrgSettings>(DEFAULTS);
+  const initializedRef = React.useRef(false);
+
+  const applySettingsData = useCallback((settingsData: any) => {
+    const next: OrgSettings = {
+      date_format: settingsData.date_format || DEFAULTS.date_format,
+      accent_color: settingsData.accent_color || DEFAULTS.accent_color,
+      dark_mode: !!settingsData.dark_mode,
+      chat_filters_enabled: !!settingsData.chat_filters_enabled,
+      ui_scale: undefined,
+    };
+
+    try {
+      if (typeof window !== 'undefined') {
+        const ui = window.localStorage.getItem('ui_scale');
+        next.ui_scale = (ui === 'sm' || ui === 'md' || ui === 'lg') ? ui : DEFAULTS.ui_scale;
+      }
+    } catch { }
+
+    setSettings(next);
+    applyToDom(next);
+    try { if (typeof window !== 'undefined') (window as any).__APP_DATE_FORMAT = next.date_format; } catch { }
+  }, []);
 
   const load = useCallback(async () => {
     try {
       // Use bootstrap data if available, otherwise fall back to API call
-      let settingsData: any;
       if (bootstrapData?.userSettings) {
-        settingsData = bootstrapData.userSettings;
+        applySettingsData(bootstrapData.userSettings);
       } else {
         // Guard: require a session before calling
         const sess = await supabase.auth.getSession();
         if (!sess.data.session) return;
-        settingsData = await apiFetch<any>(`/me/settings`);
+        const settingsData = await apiFetch<any>(`/me/settings`);
+        applySettingsData(settingsData);
       }
+    } catch { }
+  }, [bootstrapData, applySettingsData]);
 
-      const next: OrgSettings = {
-        date_format: settingsData.date_format || DEFAULTS.date_format,
-        accent_color: settingsData.accent_color || DEFAULTS.accent_color,
-        dark_mode: !!settingsData.dark_mode,
-        chat_filters_enabled: !!settingsData.chat_filters_enabled,
-        ui_scale: undefined,
-      };
-
-      try { if (typeof window !== 'undefined') {
-        const ui = window.localStorage.getItem('ui_scale');
-        next.ui_scale = (ui === 'sm' || ui === 'md' || ui === 'lg') ? ui : DEFAULTS.ui_scale;
-      }} catch {}
-
-      setSettings(next);
-      // Apply to UI immediately
-      applyToDom(next);
-      // Expose date format globally for formatAppDate/formatAppDateTime
-      try { if (typeof window !== 'undefined') (window as any).__APP_DATE_FORMAT = next.date_format; } catch {}
-    } catch {}
-  }, [bootstrapData]);
-
-  useEffect(() => { void load(); }, [load]);
+  // Initialize with bootstrap data or fetch if needed
   useEffect(() => {
+    if (initializedRef.current) return;
+
+    // If we have bootstrap data, use it immediately
+    if (bootstrapData?.userSettings) {
+      initializedRef.current = true;
+      applySettingsData(bootstrapData.userSettings);
+      return;
+    }
+
+    // If bootstrapData is undefined, wait for it (auth still loading)
+    if (bootstrapData === undefined) {
+      return;
+    }
+
+    // bootstrapData is null or has no settings - need to fetch
+    initializedRef.current = true;
+    void load();
+  }, [load, bootstrapData, applySettingsData]);
+
+  // Only listen for org context changes if we don't have bootstrap data
+  useEffect(() => {
+    if (bootstrapData?.userSettings) {
+      return; // Bootstrap data available, no need to listen
+    }
     const off = onApiContextChange(() => { void load(); });
     return () => { off(); };
-  }, [load]);
+  }, [load, bootstrapData]);
 
   const updateSettings = useCallback(async (patch: Partial<OrgSettings>) => {
     const next = { ...settings, ...patch };
     setSettings(next);
     try {
-      await apiFetch(`/me/settings`, { method: 'PUT', body: {
-        date_format: next.date_format,
-        accent_color: next.accent_color,
-        dark_mode: next.dark_mode,
-        chat_filters_enabled: next.chat_filters_enabled,
-      }});
-    } catch {}
+      await apiFetch(`/me/settings`, {
+        method: 'PUT', body: {
+          date_format: next.date_format,
+          accent_color: next.accent_color,
+          dark_mode: next.dark_mode,
+          chat_filters_enabled: next.chat_filters_enabled,
+        }
+      });
+    } catch { }
     applyToDom(next);
-    try { if (typeof window !== 'undefined') (window as any).__APP_DATE_FORMAT = next.date_format; } catch {}
+    try { if (typeof window !== 'undefined') (window as any).__APP_DATE_FORMAT = next.date_format; } catch { }
   }, [settings]);
 
   function applyToDom(next: OrgSettings) {
-    try { if (typeof document !== 'undefined') document.documentElement.setAttribute('data-color', next.accent_color); } catch {}
-    try { if (typeof document !== 'undefined') document.documentElement.setAttribute('data-chat-filters', next.chat_filters_enabled ? '1' : '0'); } catch {}
-    try { if (typeof document !== 'undefined') {
-      if (next.dark_mode) document.documentElement.classList.add('dark'); else document.documentElement.classList.remove('dark');
-    }} catch {}
+    try { if (typeof document !== 'undefined') document.documentElement.setAttribute('data-color', next.accent_color); } catch { }
+    try { if (typeof document !== 'undefined') document.documentElement.setAttribute('data-chat-filters', next.chat_filters_enabled ? '1' : '0'); } catch { }
+    try {
+      if (typeof document !== 'undefined') {
+        if (next.dark_mode) document.documentElement.classList.add('dark'); else document.documentElement.classList.remove('dark');
+      }
+    } catch { }
     try {
       if (typeof document !== 'undefined') {
         const scale = next.ui_scale || DEFAULTS.ui_scale!;
@@ -119,7 +150,7 @@ export function SettingsProvider({
         (document.documentElement as HTMLElement).style.fontSize = `${size}px`;
         if (typeof window !== 'undefined') window.localStorage.setItem('ui_scale', scale);
       }
-    } catch {}
+    } catch { }
   }
 
   const value = useMemo(() => ({ settings, updateSettings }), [settings, updateSettings]);

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, useRef } from 'react';
 import { apiFetch, getApiContext, onApiContextChange } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 
@@ -11,7 +11,7 @@ type CategoriesContextValue = {
 };
 
 const DEFAULT_CATEGORIES = [
-  'General', 'Legal', 'Financial', 'HR', 'Marketing', 
+  'General', 'Legal', 'Financial', 'HR', 'Marketing',
   'Technical', 'Invoice', 'Contract', 'Report', 'Correspondence'
 ];
 
@@ -26,6 +26,7 @@ export function CategoriesProvider({
 }) {
   const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
   const [isLoading, setIsLoading] = useState(false);
+  const initializedRef = useRef(false);
 
   const loadCategories = useCallback(async () => {
     setIsLoading(true);
@@ -58,25 +59,46 @@ export function CategoriesProvider({
     }
   }, [bootstrapData]);
 
-  useEffect(() => { 
-    void loadCategories(); 
-  }, [loadCategories]);
-
+  // Initialize with bootstrap data or fetch if needed
   useEffect(() => {
-    const off = onApiContextChange(() => { 
-      void loadCategories(); 
+    if (initializedRef.current) return;
+
+    // If we have bootstrap data with categories, use it immediately
+    if (bootstrapData?.orgSettings?.categories) {
+      initializedRef.current = true;
+      setCategories(bootstrapData.orgSettings.categories);
+      return;
+    }
+
+    // If bootstrapData is undefined, wait for it (auth still loading)
+    if (bootstrapData === undefined) {
+      return;
+    }
+
+    // bootstrapData is null or has no categories - need to fetch
+    initializedRef.current = true;
+    void loadCategories();
+  }, [loadCategories, bootstrapData]);
+
+  // Only listen for org context changes if we don't have bootstrap data
+  useEffect(() => {
+    if (bootstrapData?.orgSettings?.categories) {
+      return; // Bootstrap data available, no need to listen
+    }
+    const off = onApiContextChange(() => {
+      void loadCategories();
     });
     return () => { off(); };
-  }, [loadCategories]);
+  }, [loadCategories, bootstrapData]);
 
   const refreshCategories = useCallback(async () => {
     await loadCategories();
   }, [loadCategories]);
 
-  const value = useMemo(() => ({ 
-    categories, 
-    isLoading, 
-    refreshCategories 
+  const value = useMemo(() => ({
+    categories,
+    isLoading,
+    refreshCategories
   }), [categories, isLoading, refreshCategories]);
 
   return <CategoriesContext.Provider value={value}>{children}</CategoriesContext.Provider>;

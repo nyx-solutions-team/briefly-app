@@ -45,6 +45,22 @@ type BootstrapData = {
     withinGrace?: boolean;
     usageCalculatedAt?: string | null;
   };
+  // Dashboard summary data from bootstrap (eliminates separate /dashboard/teams call)
+  dashboardSummary?: {
+    teams: Array<{
+      id: string;
+      name: string;
+      memberCount: number;
+      docsToday: number;
+      docsThisWeek: number;
+      leadUserId?: string | null;
+    }>;
+    stats?: {
+      totalDocs: number;
+      recentUploads: number;
+      totalStorageBytes: number;
+    } | null;
+  } | null;
 };
 
 type AuthContextValue = {
@@ -73,25 +89,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Consolidated auth initialization - single API call
   useEffect(() => {
     let mounted = true;
-    
+
     (async () => {
       try {
         const { data: sess } = await supabase.auth.getSession();
         const token = sess.session?.access_token;
-        
-        if (!token) { 
-          if (mounted) setIsLoading(false); 
-          return; 
+
+        if (!token) {
+          if (mounted) setIsLoading(false);
+          return;
         }
-        
+
         const base = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8787';
         const res = await fetch(`${base}/me/bootstrap`, { headers: { Authorization: `Bearer ${token}` } });
-        
-        if (!res.ok) { 
-          if (mounted) setIsLoading(false); 
-          return; 
+
+        if (!res.ok) {
+          if (mounted) setIsLoading(false);
+          return;
         }
-        
+
         const bootstrap = await res.json();
         if (!mounted) return; // Component unmounted
 
@@ -104,7 +120,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setApiContext({ orgId: firstActiveOrg });
 
         if (!firstActiveOrg) {
-          try { router.push('/no-access'); } catch {}
+          try { router.push('/no-access'); } catch { }
           return;
         }
 
@@ -125,7 +141,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         // Store bootstrap data for use by other providers
         setBootstrapData(bootstrap);
-        console.log('AuthProvider bootstrap data stored:', bootstrap);
+
 
         setUser({
           username: email,
@@ -134,15 +150,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           ipBypassExpiresAt: bypassExpiresAt ?? null
         });
 
-        console.log('AuthProvider user set, selectedOrgId:', firstActiveOrg);
-        
+
+
       } catch (error) {
         console.error('Auth initialization failed:', error);
       } finally {
         if (mounted) setIsLoading(false);
       }
     })();
-    
+
     return () => { mounted = false; };
   }, [router]);
 
@@ -156,12 +172,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (error || !data.session) return false;
 
     // Persist auth cookie marker for middleware gating
-      try {
-        if (typeof document !== 'undefined') {
-          const maxAge = 60 * 60 * 24 * 30; // 30 days
-          document.cookie = `docustore_auth_v1=1; path=/; max-age=${maxAge}`;
-        }
-      } catch {}
+    try {
+      if (typeof document !== 'undefined') {
+        const maxAge = 60 * 60 * 24 * 30; // 30 days
+        document.cookie = `docustore_auth_v1=1; path=/; max-age=${maxAge}`;
+      }
+    } catch { }
 
     // Fetch bootstrap data from backend with Authorization bearer token
     try {
@@ -169,14 +185,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch(`${base}/me/bootstrap`, { headers: { Authorization: `Bearer ${data.session.access_token}` } });
       if (!res.ok) throw new Error('profile fetch failed');
       const bootstrap = await res.json();
-      console.log('AuthProvider signIn bootstrap response:', bootstrap);
+
       const now = Date.now();
       const orgs = Array.isArray(bootstrap.orgs) ? bootstrap.orgs : [];
       const firstActiveOrg = orgs.find((o: any) => !o.expiresAt || new Date(o.expiresAt).getTime() > now)?.orgId || '';
-      console.log('AuthProvider signIn setting orgId:', firstActiveOrg);
+
       setApiContext({ orgId: firstActiveOrg });
       if (!firstActiveOrg) {
-        try { router.push('/no-access'); } catch {}
+        try { router.push('/no-access'); } catch { }
       }
       // Record login audit for the selected org (prevent duplicates within 60 seconds)
       // Make this non-blocking to speed up login
@@ -230,7 +246,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     setBootstrapData(null); // Clear bootstrap data
     // Clear API org context quickly to stop org-scoped calls
-    try { setApiContext({ orgId: '' }); } catch {}
+    try { setApiContext({ orgId: '' }); } catch { }
     // Clear Supabase session and localStorage
     try {
       void supabase.auth.signOut();
@@ -242,21 +258,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         });
       }
-    } catch {}
+    } catch { }
     // Clear our cookie
     try {
       if (typeof document !== 'undefined') {
         document.cookie = 'docustore_auth_v1=; Max-Age=0; path=/';
       }
-    } catch {}
+    } catch { }
     // Hard redirect to ensure clean state and middleware run
     try {
       if (typeof window !== 'undefined') {
         window.location.replace('/signin');
         return;
       }
-    } catch {}
-    try { router.replace('/signin'); } catch {}
+    } catch { }
+    try { router.replace('/signin'); } catch { }
   }, [router]);
 
   const hasRoleAtLeast = useCallback((role: Role) => {
@@ -268,24 +284,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Refresh permissions when organization context changes
   const refreshPermissionsForCurrentOrg = useCallback(async () => {
     if (!bootstrapData || !getApiContext().orgId) return;
-    
+
     // When org context changes, we need to refresh the bootstrap data
     // to get the permissions for the new organization
     try {
       const { data: sess } = await supabase.auth.getSession();
       if (!sess.session?.access_token) return;
-      
+
       const base = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8787';
       const currentOrgId = getApiContext().orgId;
-      
+
       // Fetch fresh bootstrap data with the current org context
-      const res = await fetch(`${base}/me/bootstrap`, { 
-        headers: { 
+      const res = await fetch(`${base}/me/bootstrap`, {
+        headers: {
           Authorization: `Bearer ${sess.session.access_token}`,
           'X-Org-Id': currentOrgId
-        } 
+        }
       });
-      
+
       if (res.ok) {
         const freshBootstrap = await res.json();
         setBootstrapData(freshBootstrap);
@@ -322,7 +338,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Listen for organization context changes and refresh permissions
   useEffect(() => {
     const off = onApiContextChange(({ orgId }) => {
-      console.log('Organization context changed to:', orgId);
+
       refreshPermissionsForCurrentOrg();
     });
     return () => { off(); };
