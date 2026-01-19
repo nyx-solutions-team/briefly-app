@@ -1,0 +1,36 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+
+# build outputs / caches
+.turbo/
+tsconfig.tsbuildinfo
+
+# env files
+.env
+.env.*
+!.env.example
+!.env.local.example
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# OS / tooling
+__MACOSX/
+.DS_Store
+
+# Archives / local docs (do not publish)
+*.zip
+*.pdf
+src/docs/
+
+# Sensitive local-only docs (do not publish)
+docs/setup/ACCESS_CREDENTIALS.md
+docs/setup/POLAAD_SETUP_README.md
