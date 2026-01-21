@@ -79,7 +79,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
 import {
   Select,
   SelectContent,
@@ -259,7 +258,6 @@ export default function DocumentDetailPage() {
   const [shareExpiresAt, setShareExpiresAt] = useState<string | null>(null);
   const [shareCopied, setShareCopied] = useState(false);
   const [sharePassword, setSharePassword] = useState('');
-  const [allowDownload, setAllowDownload] = useState(true);
   const [expiresInDays, setExpiresInDays] = useState('7');
 
   const formatSize = (bytes?: number) => {
@@ -422,7 +420,6 @@ export default function DocumentDetailPage() {
       setShareExpiresAt(null);
       setShareCopied(false);
       setSharePassword('');
-      setAllowDownload(true);
       setExpiresInDays('7');
     }
   }, [shareOpen, doc?.id]);
@@ -661,8 +658,8 @@ export default function DocumentDetailPage() {
       const days = Math.max(1, Number(expiresInDays) || 7);
       const payload: any = {
         expiresInDays: days,
-        allowDownload,
-        allowPreview: allowDownload,
+        allowDownload: true,
+        allowPreview: true,
       };
       if (sharePassword.trim()) payload.password = sharePassword.trim();
       const data: any = await apiFetch(`/orgs/${orgId}/documents/${doc.id}/shares`, {
@@ -1252,14 +1249,6 @@ export default function DocumentDetailPage() {
                   <SelectItem value="30">30 days</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
-
-            <div className="flex items-center justify-between gap-4 rounded-lg border border-border/40 p-3">
-              <div>
-                <div className="text-sm font-medium text-foreground">Allow download</div>
-                <div className="text-xs text-muted-foreground">Recipients can download the file</div>
-              </div>
-              <Switch checked={allowDownload} onCheckedChange={setAllowDownload} />
             </div>
 
             <div className="space-y-1.5">
