@@ -209,6 +209,19 @@ type ToolUsage = {
   description?: string;
 };
 
+type UsageInfo = {
+  tokensIn?: number;
+  tokensOut?: number;
+  tokensTotal?: number;
+  model?: string;
+  duration?: number;  // Run duration in seconds
+  timeToFirstToken?: number;  // TTFT latency in seconds
+  cacheReadTokens?: number;  // Tokens read from cache
+  cacheWriteTokens?: number;  // Tokens written to cache
+  reasoningTokens?: number;  // Reasoning tokens (o1 models)
+  source?: string;  // Where metrics came from (event, session_metrics, aggregatedFromMembers)
+};
+
 function dedupeSteps(steps: ProcessingStep[] = []): ProcessingStep[] {
   const seen = new Set<string>();
   const result: ProcessingStep[] = [];
@@ -694,6 +707,7 @@ interface Message {
   content: string;
   citations?: CitationMeta[];
   isStreaming?: boolean;
+  usage?: UsageInfo;
 }
 
 const INITIAL_ASSISTANT_TEXT = "Hello! I'm your Briefly Agent with enhanced AI-powered capabilities! 🚀";
@@ -733,6 +747,7 @@ export default function TestAgentEnhancedPage() {
   const [previewDocPage, setPreviewDocPage] = useState<number | null>(null);
   const { settings } = useSettings();
   const themeColors = getThemeColors(settings.accent_color);
+  const showTokenUsage = process.env.NEXT_PUBLIC_CHAT_USAGE_DEBUG === 'true';
   const hasUserMessage = messages.some(m => m.role === 'user');
   const { documents: allDocs, folders: allFolders, getFolderMetadata } = useDocuments();
   const { bootstrapData } = useAuth();
@@ -1109,6 +1124,7 @@ export default function TestAgentEnhancedPage() {
               } else if (data.type === 'complete') {
                 const finalContent = data.full_content || streamingContent;
                 const citations = dedupeCitations(data.citations || []);
+                const usage = data.usage && typeof data.usage === 'object' ? data.usage : null;
                 const baseSteps = Array.isArray(data.processingSteps) && data.processingSteps.length > 0
                   ? data.processingSteps
                   : taskStepsRef.current;
@@ -1143,9 +1159,14 @@ export default function TestAgentEnhancedPage() {
                     tools: derivedInsights.tools,
                     reasoning: data.reasoning || data.agentInsights?.join('\n'),
                     agent: data.agent || 'Smart Assistant',
-                    processingSteps: derivedInsights.steps
+                    processingSteps: derivedInsights.steps,
+                    usage: usage || undefined
                   };
                 }));
+
+                if (showTokenUsage && usage) {
+                  console.info('Chat token usage', usage);
+                }
 
                 // Keep the processing steps and tools visible in the message
                 // Don't clear them - they should remain visible
@@ -1237,24 +1258,24 @@ export default function TestAgentEnhancedPage() {
               <p className="text-[10px] sm:text-xs text-muted-foreground hidden sm:block">AI-powered document assistant</p>
             </div>
           </div>
-           <Button
-             variant="ghost"
-             size="icon"
-             onClick={() => {
-               if (isActionCenterOpen) {
-                 setIsActionCenterOpen(false);
-                 setPreviewDocId(null);
-                 setActionCenterCitationsMode('global');
-                 setActionCenterCitations(aggregatedCitations);
-               } else {
-                 openActionCenter('sources');
-               }
-             }}
-             className={cn("transition-colors h-7 w-7 sm:h-8 sm:w-8 flex-shrink-0", isSidebarOpen && "bg-accent text-accent-foreground")}
-             title="Toggle Action Center"
-           >
-             <Layers className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-           </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              if (isActionCenterOpen) {
+                setIsActionCenterOpen(false);
+                setPreviewDocId(null);
+                setActionCenterCitationsMode('global');
+                setActionCenterCitations(aggregatedCitations);
+              } else {
+                openActionCenter('sources');
+              }
+            }}
+            className={cn("transition-colors h-7 w-7 sm:h-8 sm:w-8 flex-shrink-0", isSidebarOpen && "bg-accent text-accent-foreground")}
+            title="Toggle Action Center"
+          >
+            <Layers className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+          </Button>
         </div>
 
         {/* Chat Area */}
@@ -1406,12 +1427,20 @@ export default function TestAgentEnhancedPage() {
                                 "transition-all duration-300 hover:border-border/50"
                               )}>
                                 <div className="prose prose-sm max-w-none text-foreground dark:prose-invert [&>p]:leading-relaxed text-xs sm:text-sm break-words overflow-wrap-anywhere">
-                                {processContentWithCitations(
-                                  message.content,
-                                  message.citations,
-                                  (citation, context) => handlePreviewFromMessage(citation, context)
-                                )}
+                                  {processContentWithCitations(
+                                    message.content,
+                                    message.citations,
+                                    (citation, context) => handlePreviewFromMessage(citation, context)
+                                  )}
                                 </div>
+                              </div>
+                            )}
+
+                            {showTokenUsage && message.usage && (
+                              <div className="text-[10px] sm:text-xs text-muted-foreground">
+                                Tokens: in {message.usage.tokensIn ?? 'n/a'} out {message.usage.tokensOut ?? 'n/a'} total {message.usage.tokensTotal ?? 'n/a'}
+                                {message.usage.duration ? ` • ${message.usage.duration.toFixed(2)}s` : ''}
+                                {message.usage.model ? ` • ${message.usage.model}` : ''}
                               </div>
                             )}
 
@@ -1429,39 +1458,39 @@ export default function TestAgentEnhancedPage() {
                               </div>
                             )}
 
-                          {message.citations && message.citations.length > 0 && (
-                            <div className={cn(
-                              "rounded-xl sm:rounded-2xl border border-border/40 p-3 sm:p-4",
-                              "bg-gradient-to-br from-muted/20 to-transparent",
-                              "flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4",
-                              "transition-all duration-300 hover:border-border/60 hover:shadow-sm"
-                            )}>
-                              <div className="flex items-center gap-2 sm:gap-3">
-                                <div className={cn(
-                                  "w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center",
-                                  "bg-gradient-to-br from-primary/10 to-primary/5",
-                                  "border border-primary/20"
-                                )}>
-                                  <FileText className={cn("h-3.5 w-3.5 sm:h-4 sm:w-4", themeColors.primary)} />
+                            {message.citations && message.citations.length > 0 && (
+                              <div className={cn(
+                                "rounded-xl sm:rounded-2xl border border-border/40 p-3 sm:p-4",
+                                "bg-gradient-to-br from-muted/20 to-transparent",
+                                "flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4",
+                                "transition-all duration-300 hover:border-border/60 hover:shadow-sm"
+                              )}>
+                                <div className="flex items-center gap-2 sm:gap-3">
+                                  <div className={cn(
+                                    "w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center",
+                                    "bg-gradient-to-br from-primary/10 to-primary/5",
+                                    "border border-primary/20"
+                                  )}>
+                                    <FileText className={cn("h-3.5 w-3.5 sm:h-4 sm:w-4", themeColors.primary)} />
+                                  </div>
+                                  <div>
+                                    <p className="text-xs sm:text-sm font-semibold text-foreground">Sources</p>
+                                    <p className="text-[10px] sm:text-xs text-muted-foreground">
+                                      {message.citations.length} reference{message.citations.length > 1 ? 's' : ''} cited in this response.
+                                    </p>
+                                  </div>
                                 </div>
-                                <div>
-                                  <p className="text-xs sm:text-sm font-semibold text-foreground">Sources</p>
-                                  <p className="text-[10px] sm:text-xs text-muted-foreground">
-                                    {message.citations.length} reference{message.citations.length > 1 ? 's' : ''} cited in this response.
-                                  </p>
-                                </div>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className={cn("rounded-full px-3 sm:px-4 text-xs sm:text-sm h-8 sm:h-9", themeColors.buttonHover)}
+                                  onClick={() => openActionCenter('sources', { citations: message.citations || [] })}
+                                >
+                                  <span className="hidden sm:inline">View in Action Center</span>
+                                  <span className="sm:hidden">View Sources</span>
+                                </Button>
                               </div>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className={cn("rounded-full px-3 sm:px-4 text-xs sm:text-sm h-8 sm:h-9", themeColors.buttonHover)}
-                                onClick={() => openActionCenter('sources', { citations: message.citations || [] })}
-                              >
-                                <span className="hidden sm:inline">View in Action Center</span>
-                                <span className="sm:hidden">View Sources</span>
-                              </Button>
-                            </div>
-                          )}
+                            )}
                           </div>
                         </>
                       )}

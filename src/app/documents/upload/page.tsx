@@ -145,8 +145,8 @@ type UploadQueueItem = {
   tabularPreview?: TabularPreviewState;
 };
 
-const BULK_UPLOAD_LIMIT = Number(process.env.NEXT_PUBLIC_BULK_UPLOAD_MAX_FILES || 10);
-const BULK_UPLOAD_MAX_FILE_MB = Number(process.env.NEXT_PUBLIC_BULK_UPLOAD_MAX_FILE_MB || 25);
+const BULK_UPLOAD_LIMIT = Number(process.env.NEXT_PUBLIC_BULK_UPLOAD_MAX_FILES || 200);
+const BULK_UPLOAD_MAX_FILE_MB = Number(process.env.NEXT_PUBLIC_BULK_UPLOAD_MAX_FILE_MB || 50);
 
 type ExtendedFile = File & { webkitRelativePath?: string };
 type FileSystemEntry = { isDirectory: boolean };
@@ -584,65 +584,6 @@ function StepProgress({ currentStatus, ingestionStatus }: { currentStatus: Inges
   );
 }
 
-// Realistic Vector File Icon Component for the Upload Dialog - Linear-inspired Monochromatic Version
-function RealisticFileIcon({ type, className }: { type: string; className?: string }) {
-  return (
-    <div className={cn("inline-block group", className)}>
-      <div className="relative w-12 h-16 sm:w-14 sm:h-[72px] transition-all duration-500 group-hover:scale-110 group-hover:-translate-y-2">
-        {/* Subtle shadow with larger spread on hover */}
-        <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-[60%] h-2 bg-black/30 blur-lg rounded-full opacity-40 group-hover:opacity-100 group-hover:w-[90%] transition-all duration-500" />
-
-        <svg viewBox="0 0 40 52" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
-          <defs>
-            <linearGradient id={`icon-grad-${type}`} x1="0" y1="0" x2="40" y2="52" gradientUnits="userSpaceOnUse">
-              <stop stopColor="white" stopOpacity="0.05" />
-              <stop offset="1" stopColor="white" stopOpacity="0.02" />
-            </linearGradient>
-            <filter id="glass-blur" x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur in="SourceGraphic" stdDeviation="1" />
-            </filter>
-          </defs>
-
-          {/* Main Body - Sleek Dark/Glassy */}
-          <path d="M4 0C1.79086 0 0 1.79086 0 4V48C0 50.2091 1.79086 52 4 52H36C38.2091 52 40 50.2091 40 48V12L28 0H4Z"
-            className="fill-background/40 dark:fill-slate-900/60 backdrop-blur-xl"
-          />
-
-          {/* Subtle Inner Gradient for Depth */}
-          <path d="M4 0C1.79086 0 0 1.79086 0 4V48C0 50.2091 1.79086 52 4 52H36C38.2091 52 40 50.2091 40 48V12L28 0H4Z"
-            fill={`url(#icon-grad-${type})`}
-          />
-
-          {/* Edge border - Mono */}
-          <path d="M4 0.5H27.5V12.5H39.5V48C39.5 49.933 37.933 51.5 36 51.5H4C2.067 51.5 0.5 49.933 0.5 48V4C0.5 2.067 2.067 0.5 4 0.5Z"
-            stroke="currentColor" strokeOpacity="0.15" className="text-foreground/30"
-          />
-
-          {/* Folded Corner - Monochrome accent */}
-          <path d="M28 0L40 12H32C29.7909 12 28 10.2091 28 8V0Z"
-            className="fill-muted/50 dark:fill-slate-800"
-          />
-          <path d="M28 0V8C28 10.2091 29.7909 12 32 12H40L28 0Z" className="fill-foreground/5 dark:fill-black/20" />
-
-          {/* Minimal Label Display */}
-          <rect x="0" y="38" width="40" height="14" rx="2" className="fill-primary/10 dark:fill-primary/20 backdrop-blur-sm" />
-          <text x="20" y="47.5" textAnchor="middle" fill="currentColor" fontSize="8" fontWeight="700"
-            className="text-primary/90 dark:text-primary tracking-wider"
-            style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-            {type}
-          </text>
-
-          {/* Abstract Content Lines (Linear Style) */}
-          <rect x="8" y="12" width="10" height="1" rx="0.5" className="fill-foreground/10 dark:fill-slate-700" />
-          <rect x="8" y="18" width="24" height="1" rx="0.5" className="fill-foreground/10 dark:fill-slate-700" />
-          <rect x="8" y="24" width="24" height="1" rx="0.5" className="fill-foreground/5 dark:fill-slate-800" />
-          <rect x="8" y="30" width="16" height="1" rx="0.5" className="fill-foreground/5 dark:fill-slate-800" />
-        </svg>
-      </div>
-    </div>
-  );
-}
-
 function UploadContent() {
   const [queue, setQueue] = useState<UploadQueueItem[]>([]);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
@@ -829,13 +770,13 @@ function UploadContent() {
   }, [createFolder]);
   const enqueueFiles = useCallback(async (items: { file: File; folderPathOverride?: string[] }[]) => {
     if (items.length === 0) return { added: 0, skipped: [] as { path: string; reason: string }[] };
-    const MAX_FILES = 10;
+    const MAX_FILES = BULK_UPLOAD_LIMIT;
     const maxSizeBytes = 50 * 1024 * 1024;
     const skipped: { path: string; reason: string }[] = [];
     const currentQueueLength = queue.length;
     const availableSlots = MAX_FILES - currentQueueLength;
     if (availableSlots <= 0) {
-      skipped.push(...items.map(({ file }) => ({ path: file.name, reason: 'Upload queue full (10 files max)' })));
+      skipped.push(...items.map(({ file }) => ({ path: file.name, reason: `Upload queue full (${MAX_FILES} files max)` })));
       toast({
         title: 'Upload queue full',
         description: 'Process or remove existing files before adding more.',
@@ -859,7 +800,7 @@ function UploadContent() {
     if (allowed.length > availableSlots) {
       skipped.push(...allowed.slice(availableSlots).map(({ file }) => ({
         path: file.name,
-        reason: 'Upload queue full (10 files max)',
+        reason: `Upload queue full (${MAX_FILES} files max)`,
       })));
       limited = allowed.slice(0, availableSlots);
       toast({
@@ -1097,7 +1038,6 @@ function UploadContent() {
     let lastPath: string[] | null = null;
 
     try {
-      const isMultiUpload = readyEntries.length > 1;
       for (const { index } of readyEntries) {
         try {
           const result = await onDone(index);
@@ -1111,16 +1051,8 @@ function UploadContent() {
         setRecentSavePath(lastPath);
         toast({
           title: 'Documents saved',
-          description: `Saved ${readyEntries.length} document${readyEntries.length === 1 ? '' : 's'}. Redirecting…`,
+          description: `Saved ${readyEntries.length} document${readyEntries.length === 1 ? '' : 's'}. Use "View folder" when ready.`,
         });
-        // Navigation rule:
-        // - single upload: go to the destination folder
-        // - multiple uploads: go to folders/documents root
-        if (isMultiUpload) {
-          router.push('/documents');
-        } else {
-          navigateToFolder(lastPath);
-        }
       }
     } finally {
       setIsSavingAll(false);
@@ -1128,26 +1060,15 @@ function UploadContent() {
   };
 
   const handleSave = async (index: number) => {
-    // Determine whether this upload session contains multiple items.
-    // We compute this before onDone mutates queue state.
-    const isMultiUpload = queue.length > 1;
     const result = await onDone(index);
     if (!result) return;
     setRecentSavePath(result.path);
     toast({
       title: 'Document saved',
       description: result.hasMoreReady
-        ? 'Continue reviewing remaining files…'
-        : 'All documents saved. Redirecting…',
+        ? 'Continue reviewing remaining files or view the folder when ready.'
+        : 'All documents saved. Use "View folder" to open the destination.',
     });
-    // Only redirect when there are no more ready items to review.
-    if (!result.hasMoreReady) {
-      if (isMultiUpload) {
-        router.push('/documents');
-      } else {
-        navigateToFolder(result.path);
-      }
-    }
   };
 
   const handleReject = async (index: number) => {
@@ -2037,6 +1958,18 @@ function UploadContent() {
   const hasSuccess = useMemo(() => queue.some(q => q.status === 'success'), [queue]);
   const hasProcessable = useMemo(() => queue.some(q => q.status === 'idle'), [queue]);
   const allSaved = useMemo(() => queue.length > 0 && queue.every(q => q.status === 'success'), [queue]);
+  
+  // Status counts for bulk upload display
+  const statusCounts = useMemo(() => {
+    const total = queue.length;
+    const processing = queue.filter(q => q.status === 'uploading' || q.status === 'processing').length;
+    const pending = queue.filter(q => q.status === 'idle' || q.status === 'ready').length;
+    const completed = queue.filter(q => q.status === 'success').length;
+    const errors = queue.filter(q => q.status === 'error').length;
+    const saving = queue.filter(q => q.status === 'saving').length;
+    const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
+    return { total, processing, pending, completed, errors, saving, progress };
+  }, [queue]);
   const hasExistingDocs = useMemo(() => documents.length > 0, [documents.length]);
 
   // Continue polling ingestion job status for items that are 'ready' but still processing (Vespa not done)
@@ -2393,6 +2326,8 @@ function UploadContent() {
         // Now attempt to accept
         await apiFetch(`/orgs/${orgId}/ingestion-jobs/${item.docId}/accept`, {
           method: 'POST',
+          // Send empty object to satisfy Fastify's Content-Type validation
+          body: {},
         });
       } catch (acceptError: any) {
         // Handle specific cases
@@ -2418,7 +2353,7 @@ function UploadContent() {
       toast({ title: 'Saved', description: `${item.file.name} stored.` });
 
       try {
-        await refresh();
+        await loadAllDocuments(); // Use loadAllDocuments to ensure folders are loaded
       } catch (error) {
         console.warn('Failed to refresh documents after save:', error);
       }
@@ -2601,12 +2536,21 @@ function UploadContent() {
                   </p>
                 </div>
 
-                {/* Supported file types - Realistic Vector Icons */}
-                <div className="flex flex-wrap items-center justify-center gap-6 sm:gap-8 mb-10 mt-4">
+                {/* Supported file types */}
+                <div className="flex flex-wrap items-center justify-center gap-2 mb-8">
                   {[
-                    'PDF', 'TXT', 'MD', 'CSV', 'XLSX', 'JPG', 'PNG'
-                  ].map((type) => (
-                    <RealisticFileIcon key={type} type={type} />
+                    { type: 'PDF', color: 'bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/30' },
+                    { type: 'TXT', color: 'bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30' },
+                    { type: 'MD', color: 'bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-500/30' },
+                    { type: 'CSV', color: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30' },
+                    { type: 'XLS', color: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30' },
+                    { type: 'XLSX', color: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30' },
+                    { type: 'JPG', color: 'bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/30' },
+                    { type: 'PNG', color: 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border-cyan-500/30' }
+                  ].map(({ type, color }) => (
+                    <span key={type} className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${color}`}>
+                      {type}
+                    </span>
                   ))}
                 </div>
 
@@ -2615,6 +2559,9 @@ function UploadContent() {
                   <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5">
                     <Database className="h-3 w-3" />
                     AI-powered metadata extraction & summary generation
+                  </p>
+                  <p className="text-xs text-muted-foreground/70 hidden sm:block">
+                    Supports ZIP archives and folder uploads for batch processing
                   </p>
                 </div>
                 <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
@@ -2675,8 +2622,64 @@ function UploadContent() {
                   </Button>
                 </div>
                 <p className="mt-6 text-xs text-muted-foreground">
-                  Supports ZIPs, folders, and up to {BULK_UPLOAD_LIMIT} files ({BULK_UPLOAD_MAX_FILE_MB}MB max per file).
+                  Supports up to {BULK_UPLOAD_LIMIT} files per bulk upload (PDF, TXT/MD, CSV/XLS/XLSX, JPG, PNG). Individual files must be under {BULK_UPLOAD_MAX_FILE_MB}MB.
                 </p>
+                {/* Upload Status Summary */}
+                {queue.length > 0 && (
+                  <div className="mt-4 w-full rounded-lg border bg-card p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-semibold text-foreground">Upload Progress</h3>
+                        <Badge variant="outline" className="text-xs">
+                          {statusCounts.total} file{statusCounts.total !== 1 ? 's' : ''}
+                        </Badge>
+                      </div>
+                      <div className="text-xs font-medium text-muted-foreground">
+                        {statusCounts.progress}% Complete
+                      </div>
+                    </div>
+                    
+                    {/* Progress Bar */}
+                    <div className="w-full">
+                      <Progress value={statusCounts.progress} className="h-2" />
+                    </div>
+                    
+                    {/* Status Breakdown */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-blue-500" />
+                        <div className="flex flex-col">
+                          <span className="text-xs font-medium text-foreground">{statusCounts.processing + statusCounts.saving}</span>
+                          <span className="text-[10px] text-muted-foreground">Processing</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-amber-500" />
+                        <div className="flex flex-col">
+                          <span className="text-xs font-medium text-foreground">{statusCounts.pending}</span>
+                          <span className="text-[10px] text-muted-foreground">Pending</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                        <div className="flex flex-col">
+                          <span className="text-xs font-medium text-foreground">{statusCounts.completed}</span>
+                          <span className="text-[10px] text-muted-foreground">Completed</span>
+                        </div>
+                      </div>
+                      {statusCounts.errors > 0 && (
+                        <div className="flex items-center gap-2">
+                          <div className="h-2 w-2 rounded-full bg-red-500" />
+                          <div className="flex flex-col">
+                            <span className="text-xs font-medium text-foreground">{statusCounts.errors}</span>
+                            <span className="text-[10px] text-muted-foreground">Errors</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                
                 {(lastBulkSummary || skipDetails) && (
                   <div className="mt-4 w-full rounded-md border bg-muted/30 p-3 text-xs space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2904,10 +2907,10 @@ function UploadContent() {
                                     </Button>
                                   )}
                                   {readyCount > 0 && (
-                                    <Button
-                                      size="sm"
-                                      onClick={saveAllReady}
-                                      disabled={isSavingAll || planBlocked}
+                                    <Button 
+                                      size="sm" 
+                                      onClick={saveAllReady} 
+                                      disabled={isSavingAll || planBlocked} 
                                       className="h-7 gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs"
                                     >
                                       {isSavingAll ? (
@@ -3384,7 +3387,7 @@ function UploadContent() {
         }}
         onCreateFolder={async (parentPath, name) => {
           await createFolder(parentPath, name);
-          await refresh();
+          await loadAllDocuments(); // Use loadAllDocuments to ensure folders are loaded
         }}
         onLoadChildren={loadFolderChildren}
         loading={folderPickerLoading}

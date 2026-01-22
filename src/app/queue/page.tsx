@@ -27,6 +27,7 @@ import {
   Eye,
   User,
   RefreshCw,
+  RotateCw,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiFetch, getApiContext } from "@/lib/api";
@@ -228,6 +229,8 @@ type QueueDoc = {
   submitterName?: string | null;
   submitterEmail?: string | null;
   submitterRole?: string | null;
+  vespaSyncStatus?: string;
+  vespaStepsFailed?: number;
 };
 
 const PAGE_SIZE = 20;
@@ -301,6 +304,8 @@ function mapIngestionJobToQueueDoc(job: IngestionJobResponse): QueueDoc {
     submitterName: job.submitterName || null,
     submitterEmail: job.submitterEmail || null,
     submitterRole: job.submitterRole || null,
+    vespaSyncStatus: (job as any).vespa_sync_status,
+    vespaStepsFailed: (job as any).vespa_steps_failed || 0,
   };
 }
 
@@ -386,6 +391,7 @@ export default function QueuePage() {
   }>({ open: false, action: null, count: 0 });
 
   const [rowActionLoading, setRowActionLoading] = useState<Set<string>>(new Set());
+  const [vespaRetryLoading, setVespaRetryLoading] = useState<Set<string>>(new Set());
 
   const { toast } = useToast();
   const router = useRouter();
@@ -685,7 +691,9 @@ export default function QueuePage() {
         `/orgs/${orgId}/ingestion-jobs/${docId}/accept`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          // Send empty object to satisfy Fastify's Content-Type validation
+          // The backend doesn't use the body, but Fastify requires it if Content-Type is set
+          body: {},
         }
       );
 
@@ -741,6 +749,77 @@ export default function QueuePage() {
         next.delete(docId);
         return next;
       });
+    }
+  };
+
+  const handleVespaRetry = async (docId: string) => {
+    setVespaRetryLoading((prev) => new Set(prev).add(docId));
+    try {
+      const orgId = getApiContext().orgId;
+      const response = await apiFetch<{
+        success: boolean;
+        message: string;
+        stepsRetried: number;
+        chunksRetried: number;
+        stepsRetriedInOrder?: Array<{ stepName: string; stepSequence: number; status: string }>;
+        stepErrors?: Array<{ stepName: string; error: string }>;
+        summary?: {
+          totalFailedSteps: number;
+          totalFailedChunks: number;
+          stepsSucceeded: number;
+          chunksSucceeded: number;
+        };
+      }>(`/orgs/${orgId}/documents/${docId}/vespa/retry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        skipCache: true,
+      });
+
+      if (response.success) {
+        toast({
+          title: "Vespa Retry Initiated",
+          description: response.message || `Retried ${response.stepsRetried} steps and ${response.chunksRetried} chunks`,
+        });
+        
+        // Refresh queue after a short delay to show updated status
+        setTimeout(() => {
+          fetchQueue(true, currentPage, debouncedSearch, statusFilter);
+        }, 2000);
+      } else {
+        throw new Error(response.message || "Retry failed");
+      }
+    } catch (error) {
+      toast({
+        title: "Vespa Retry Failed",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setVespaRetryLoading((prev) => {
+        const next = new Set(prev);
+        next.delete(docId);
+        return next;
+      });
+    }
+  };
+
+  const checkVespaStatus = async (docId: string) => {
+    try {
+      const orgId = getApiContext().orgId;
+      const response = await apiFetch<{
+        steps: Array<{ step_name: string; status: string; failure_type?: string }>;
+        summary: {
+          failedSteps: number;
+          retryableSteps: number;
+        };
+      }>(`/orgs/${orgId}/documents/${docId}/vespa/steps`, {
+        skipCache: true,
+      });
+
+      return response;
+    } catch (error) {
+      console.error("Failed to check Vespa status:", error);
+      return null;
     }
   };
 
@@ -1091,7 +1170,7 @@ export default function QueuePage() {
 
                     {/* Actions */}
                     <div
-                      className="w-24 flex justify-end gap-1"
+                      className="w-32 flex justify-end gap-1"
                       onClick={(e) => e.stopPropagation()}
                     >
                       {doc.status === "ready" || doc.status === "error" ? (
@@ -1116,6 +1195,32 @@ export default function QueuePage() {
                                 </TooltipTrigger>
                                 <TooltipContent side="top" className="text-xs">
                                   Accept
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          )}
+
+                          {/* Vespa Retry Button - Show for ready/error items if Vespa has failures */}
+                          {doc.vespaStepsFailed && doc.vespaStepsFailed > 0 && (
+                            <TooltipProvider delayDuration={300}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 text-muted-foreground hover:text-blue-600 hover:bg-blue-500/10"
+                                    disabled={isActionLoading || vespaRetryLoading.has(doc.docId)}
+                                    onClick={() => handleVespaRetry(doc.docId)}
+                                  >
+                                    {vespaRetryLoading.has(doc.docId) ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                      <RotateCw className="h-3.5 w-3.5" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="text-xs">
+                                  Retry Vespa Steps ({doc.vespaStepsFailed} failed)
                                 </TooltipContent>
                               </Tooltip>
                             </TooltipProvider>

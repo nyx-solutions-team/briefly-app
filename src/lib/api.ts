@@ -235,8 +235,12 @@ export async function apiFetch<T = any>(path: string, opts: ApiOptions = {}): Pr
     ...(restOpts.headers || {}),
   };
   // Only set JSON content type when a body is provided (avoids Fastify empty JSON body error)
+  // Also remove Content-Type if no body is provided to prevent Fastify errors
   if (restOpts.body !== undefined && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json';
+  } else if (restOpts.body === undefined && headers['Content-Type'] === 'application/json') {
+    // Remove Content-Type header if no body is provided to avoid Fastify empty JSON body error
+    delete headers['Content-Type'];
   }
   if (currentOrgId && !headers['X-Org-Id']) headers['X-Org-Id'] = currentOrgId;
 
