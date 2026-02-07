@@ -1,0 +1,850 @@
+/* Poppins font for chat (lightweight import) */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap');
+
+/* React-PDF styles - v9.x uses different export paths */
+@import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
+@import 'react-pdf/dist/esm/Page/TextLayer.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Font family is controlled via next/font variable --font-sans and Tailwind font-sans */
+
+@layer base {
+
+  /* Theme presets (via data-theme) - minimal example for default and slate.
+     Based on shadcn/ui themes guidance [https://ui.shadcn.com/docs/theming] and gallery [https://ui.shadcn.com/themes#themes]. */
+  [data-theme='default'] {
+    /* use variables from :root (already default) */
+  }
+
+  :root {
+    /* Neutral light theme (shadcn-style) */
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 231 48% 48%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 231 48% 48%;
+    --chart-1: 231 48% 48%;
+    --chart-2: 174 100% 29%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+    --radius: 0.5rem;
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 222.2 84% 4.9%;
+    --sidebar-primary: 231 48% 48%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 210 40% 96.1%;
+    --sidebar-accent-foreground: 222.2 47.4% 11.2%;
+    --sidebar-border: 214.3 31.8% 91.4%;
+    --sidebar-ring: 231 48% 48%;
+    /* UI scale token for spacing tweaks if needed */
+    --ui-scale: 1;
+  }
+
+  .dark {
+    /* Premium Black Theme - Sophisticated dark mode inspired by modern enterprise apps */
+
+    /* Deep background hierarchy for premium feel */
+    --background: 0 0% 3.5%;
+    /* Deepest background - main app backdrop */
+    --foreground: 210 40% 98%;
+
+    --card: 0 0% 6.5%;
+    /* Cards sit above main background */
+    --card-foreground: 210 40% 98%;
+
+    --popover: 0 0% 5.5%;
+    /* Popovers slightly different from cards */
+    --popover-foreground: 210 40% 98%;
+
+    /* Primary accent - sophisticated blue with premium feel */
+    --primary: 217 32% 56%;
+    /* Less saturated, more refined */
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary surfaces - subtle elevation */
+    --secondary: 0 0% 8.5%;
+    /* Slightly elevated from card background */
+    --secondary-foreground: 210 40% 95%;
+
+    /* Muted elements - for subtle distinctions */
+    --muted: 0 0% 10%;
+    /* Muted surfaces */
+    --muted-foreground: 215 15% 65%;
+    /* Softer muted text */
+
+    /* Accent surfaces - interactive elements */
+    --accent: 0 0% 12%;
+    /* Hover/active states */
+    --accent-foreground: 210 40% 95%;
+
+    /* Error states - refined destructive color */
+    --destructive: 0 75% 55%;
+    /* Less aggressive red */
+    --destructive-foreground: 0 0% 100%;
+
+    /* Borders and inputs - subtle but visible */
+    --border: 0 0% 15%;
+    /* Subtle borders for definition */
+    --input: 0 0% 8.5%;
+    /* Input backgrounds match secondary */
+
+    /* Focus rings - premium feel */
+    --ring: 217 32% 56%;
+    /* Matches primary but refined */
+
+    /* Chart colors - sophisticated palette */
+    --chart-1: 217 32% 56%;
+    /* Primary blue */
+    --chart-2: 160 45% 50%;
+    /* Green */
+    --chart-3: 30 85% 60%;
+    /* Orange */
+    --chart-4: 280 55% 65%;
+    /* Purple */
+    --chart-5: 340 70% 65%;
+    /* Pink */
+
+    /* Sidebar - distinct from main background but cohesive */
+    --sidebar-background: 0 0% 4.5%;
+    /* Slightly lighter than main background */
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 217 32% 56%;
+    /* Consistent with primary */
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 9%;
+    /* Sidebar hover states */
+    --sidebar-accent-foreground: 210 40% 95%;
+    --sidebar-border: 0 0% 12%;
+    /* Subtle sidebar borders */
+    --sidebar-ring: 217 32% 56%;
+  }
+
+  /* Theme-specific overrides placed AFTER .dark so they win by order; also using higher specificity */
+  [data-theme='slate'] {
+    /* Light Slate */
+    --background: 210 20% 98%;
+    --foreground: 215 28% 17%;
+    --card: 0 0% 100%;
+    --card-foreground: 215 28% 17%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 28% 17%;
+    --primary: 215 16% 47%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 210 16% 93%;
+    --secondary-foreground: 215 28% 17%;
+    --muted: 210 16% 92%;
+    --muted-foreground: 215 16% 46%;
+    --accent: 210 16% 92%;
+    --accent-foreground: 215 28% 17%;
+    --destructive: 0 72% 50%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 215 16% 90%;
+    --input: 215 16% 90%;
+    --ring: 215 16% 47%;
+    /* Charts */
+    --chart-1: 215 16% 47%;
+    --chart-2: 160 45% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 50% 55%;
+    --chart-5: 340 60% 55%;
+    /* Sidebar */
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 215 28% 17%;
+    --sidebar-primary: 215 16% 47%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 210 16% 93%;
+    --sidebar-accent-foreground: 215 28% 17%;
+    --sidebar-border: 215 16% 90%;
+    --sidebar-ring: 215 16% 47%;
+  }
+
+  .dark[data-theme='slate'] {
+    /* Premium Slate Dark - Sophisticated slate-based dark mode */
+
+    /* Deep slate background hierarchy */
+    --background: 215 25% 4.5%;
+    /* Deep slate background */
+    --foreground: 210 40% 98%;
+
+    --card: 215 20% 7.5%;
+    /* Slate cards with subtle warmth */
+    --card-foreground: 210 40% 98%;
+
+    --popover: 215 20% 6.5%;
+    /* Slightly different from cards */
+    --popover-foreground: 210 40% 98%;
+
+    /* Primary accent - refined slate blue */
+    --primary: 215 35% 60%;
+    /* Less saturated slate blue */
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary surfaces */
+    --secondary: 215 18% 9.5%;
+    /* Elevated slate surface */
+    --secondary-foreground: 210 40% 95%;
+
+    /* Muted elements */
+    --muted: 215 15% 11%;
+    /* Muted slate */
+    --muted-foreground: 215 15% 65%;
+
+    /* Accent surfaces */
+    --accent: 215 15% 13%;
+    /* Slate accent */
+    --accent-foreground: 210 40% 95%;
+
+    /* Error states */
+    --destructive: 0 75% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Borders and inputs */
+    --border: 215 15% 16%;
+    /* Subtle slate borders */
+    --input: 215 18% 9.5%;
+
+    /* Focus rings */
+    --ring: 215 35% 60%;
+
+    /* Charts - slate-inspired palette */
+    --chart-1: 215 35% 60%;
+    /* Slate blue */
+    --chart-2: 160 45% 50%;
+    /* Green */
+    --chart-3: 30 85% 60%;
+    /* Orange */
+    --chart-4: 280 55% 65%;
+    /* Purple */
+    --chart-5: 340 70% 65%;
+    /* Pink */
+
+    /* Sidebar - cohesive with main theme */
+    --sidebar-background: 215 25% 5.5%;
+    /* Slightly lighter slate */
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 215 35% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 215 18% 10.5%;
+    /* Slate sidebar hover */
+    --sidebar-accent-foreground: 210 40% 95%;
+    --sidebar-border: 215 15% 13%;
+    /* Subtle slate sidebar borders */
+    --sidebar-ring: 215 35% 60%;
+  }
+
+  /* Dark mode: tone the sidebar and card elevation for better separation */
+  .dark {
+    /* Slightly stronger accent for hover/active */
+    --sidebar-accent: var(--primary) / 0.22;
+    /* Keep foreground readable against the softer background */
+    --sidebar-accent-foreground: var(--sidebar-foreground);
+  }
+
+  /* Accent color overrides – placed last so they win over :root, .dark and theme presets */
+  [data-color='default'] {
+    /* no-op: keep theme's primary */
+  }
+
+  [data-color='red'] {
+    --primary: 0 84% 60%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 0 84% 60%;
+    --chart-1: 0 84% 60%;
+    --sidebar-primary: 0 84% 60%;
+  }
+
+  [data-color='rose'] {
+    --primary: 346 77% 56%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 346 77% 56%;
+    --chart-1: 346 77% 56%;
+    --sidebar-primary: 346 77% 56%;
+  }
+
+  [data-color='orange'] {
+    --primary: 24 95% 53%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 24 95% 53%;
+    --chart-1: 24 95% 53%;
+    --sidebar-primary: 24 95% 53%;
+  }
+
+  [data-color='green'] {
+    --primary: 142 76% 36%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 142 76% 36%;
+    --chart-1: 142 76% 36%;
+    --sidebar-primary: 142 76% 36%;
+  }
+
+  [data-color='blue'] {
+    --primary: 221 83% 53%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 221 83% 53%;
+    --chart-1: 221 83% 53%;
+    --sidebar-primary: 221 83% 53%;
+  }
+
+  [data-color='yellow'] {
+    --primary: 47 95% 53%;
+    --primary-foreground: 0 0% 10%;
+    --ring: 47 95% 53%;
+    --chart-1: 47 95% 53%;
+    --sidebar-primary: 47 95% 53%;
+  }
+
+  [data-color='violet'] {
+    --primary: 251 95% 60%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 251 95% 60%;
+    --chart-1: 251 95% 60%;
+    --sidebar-primary: 251 95% 60%;
+  }
+
+  /* Additional accent colors */
+  [data-color='amber'] {
+    --primary: 38 92% 50%;
+    --primary-foreground: 0 0% 10%;
+    --ring: 38 92% 50%;
+    --chart-1: 38 92% 50%;
+    --sidebar-primary: 38 92% 50%;
+  }
+
+  [data-color='lime'] {
+    --primary: 84 81% 44%;
+    --primary-foreground: 0 0% 10%;
+    --ring: 84 81% 44%;
+    --chart-1: 84 81% 44%;
+    --sidebar-primary: 84 81% 44%;
+  }
+
+  [data-color='emerald'] {
+    --primary: 152 76% 33%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 152 76% 33%;
+    --chart-1: 152 76% 33%;
+    --sidebar-primary: 152 76% 33%;
+  }
+
+  [data-color='teal'] {
+    --primary: 173 80% 36%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 173 80% 36%;
+    --chart-1: 173 80% 36%;
+    --sidebar-primary: 173 80% 36%;
+  }
+
+  [data-color='cyan'] {
+    --primary: 188 94% 42%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 188 94% 42%;
+    --chart-1: 188 94% 42%;
+    --sidebar-primary: 188 94% 42%;
+  }
+
+  [data-color='sky'] {
+    --primary: 204 94% 50%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 204 94% 50%;
+    --chart-1: 204 94% 50%;
+    --sidebar-primary: 204 94% 50%;
+  }
+
+  [data-color='indigo'] {
+    --primary: 239 84% 67%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 239 84% 67%;
+    --chart-1: 239 84% 67%;
+    --sidebar-primary: 239 84% 67%;
+  }
+
+  [data-color='purple'] {
+    --primary: 272 52% 47%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 272 52% 47%;
+    --chart-1: 272 52% 47%;
+    --sidebar-primary: 272 52% 47%;
+  }
+
+  [data-color='fuchsia'] {
+    --primary: 300 84% 60%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 300 84% 60%;
+    --chart-1: 300 84% 60%;
+    --sidebar-primary: 300 84% 60%;
+  }
+
+  [data-color='pink'] {
+    --primary: 330 81% 60%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 330 81% 60%;
+    --chart-1: 330 81% 60%;
+    --sidebar-primary: 330 81% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@layer components {
+
+  /* Poppins utility for targeted areas like chat */
+  .font-poppins {
+    font-family: 'Poppins', var(--font-sans), ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  }
+
+  /* Premium Dark Mode Enhancements */
+
+  /* Subtle gradients for cards and surfaces */
+  .dark .card-premium {
+    background: linear-gradient(to bottom right, hsl(var(--card) / 0.95), hsl(var(--card) / 0.9));
+    box-shadow:
+      0 1px 3px rgba(0, 0, 0, 0.12),
+      0 1px 2px rgba(0, 0, 0, 0.24);
+  }
+
+  .dark .sidebar-premium {
+    background: linear-gradient(to bottom, hsl(var(--sidebar-background)), hsl(var(--sidebar-background) / 0.95));
+  }
+
+  /* Refined hover states */
+  .dark .hover-premium {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .dark .hover-premium:hover {
+    box-shadow:
+      0 4px 6px rgba(0, 0, 0, 0.12),
+      0 2px 4px rgba(0, 0, 0, 0.08);
+    transform: translateY(-1px);
+  }
+
+  /* Subtle borders for depth */
+  .dark .border-premium {
+    @apply border-border/60;
+  }
+
+  .dark .border-premium:hover {
+    @apply border-border/80;
+  }
+
+  /* Premium input styling */
+  .dark input:focus,
+  .dark textarea:focus,
+  .dark select:focus {
+    @apply ring-2 ring-ring/30 ring-offset-0 ring-offset-background;
+  }
+
+  /* Enhanced button states */
+  .dark button:hover:not(:disabled) {
+    transform: translateY(-0.5px);
+    box-shadow:
+      0 2px 4px rgba(0, 0, 0, 0.1),
+      0 1px 2px rgba(0, 0, 0, 0.06);
+  }
+
+  /* Premium scrollbar */
+  .dark ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .dark ::-webkit-scrollbar-track {
+    @apply bg-muted/30;
+  }
+
+  .dark ::-webkit-scrollbar-thumb {
+    @apply bg-border/60 rounded-full;
+  }
+
+  .dark ::-webkit-scrollbar-thumb:hover {
+    @apply bg-border/80;
+  }
+
+  /* Subtle backdrop blur effects */
+  .dark .backdrop-premium {
+    backdrop-filter: blur(8px);
+    background: rgba(0, 0, 0, 0.4);
+  }
+
+  /* Premium focus rings */
+  .dark .focus-premium:focus-visible {
+    @apply outline-none ring-2 ring-ring/40 ring-offset-2 ring-offset-background;
+  }
+
+  /* ===================================
+     CHAT INTERFACE ENHANCEMENTS
+     =================================== */
+
+  /* Smooth scroll behavior for chat */
+  .smooth-scroll {
+    scroll-behavior: smooth;
+  }
+
+  /* Glass-morphism effect */
+  .glass-effect {
+    backdrop-filter: blur(12px) saturate(180%);
+    background-color: rgba(var(--background), 0.75);
+  }
+
+  /* Elegant hover lift effect */
+  .hover-lift {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .hover-lift:hover {
+    transform: translateY(-2px);
+  }
+
+  /* Shimmer animation for loading states */
+  @keyframes shimmer {
+    0% {
+      background-position: -1000px 0;
+    }
+
+    100% {
+      background-position: 1000px 0;
+    }
+  }
+
+  .shimmer {
+    animation: shimmer 2s infinite linear;
+    background: linear-gradient(90deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.1) 50%,
+        transparent 100%);
+    background-size: 1000px 100%;
+  }
+
+  /* Typing indicator animation */
+  @keyframes bounce {
+
+    0%,
+    60%,
+    100% {
+      transform: translateY(0);
+    }
+
+    30% {
+      transform: translateY(-8px);
+    }
+  }
+
+  .typing-indicator span {
+    animation: bounce 1.4s infinite;
+  }
+
+  .typing-indicator span:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+
+  .typing-indicator span:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+
+  /* Fade slide in animation */
+  @keyframes fade-slide-in {
+    from {
+      opacity: 0;
+      transform: translateY(16px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-fade-slide-in {
+    animation: fade-slide-in 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  /* Pulse glow effect */
+  @keyframes pulse-glow {
+
+    0%,
+    100% {
+      opacity: 1;
+      box-shadow: 0 0 0 0 rgba(var(--primary), 0.7);
+    }
+
+    50% {
+      opacity: 0.9;
+      box-shadow: 0 0 0 8px rgba(var(--primary), 0);
+    }
+  }
+
+  .pulse-glow {
+    animation: pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  /* Improved prose styling for chat messages */
+  .prose-chat {
+    @apply prose-sm prose-slate dark:prose-invert max-w-none;
+  }
+
+  .prose-chat p {
+    @apply leading-relaxed text-[15px] my-2;
+  }
+
+  .prose-chat ul,
+  .prose-chat ol {
+    @apply my-2;
+  }
+
+  .prose-chat li {
+    @apply my-1;
+  }
+
+  .prose-chat code {
+    @apply px-1.5 py-0.5 rounded-md bg-muted/50 text-[13px] font-mono;
+  }
+
+  .prose-chat pre {
+    @apply rounded-xl p-4 my-3 bg-muted/30 border border-border/50;
+  }
+
+  /* Smooth entry animations with stagger */
+  @keyframes enter-from-bottom {
+    from {
+      opacity: 0;
+      transform: translateY(20px) scale(0.98);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  .stagger-animation {
+    animation: enter-from-bottom 0.5s ease-out;
+  }
+
+  /* Gradient border animation */
+  @keyframes gradient-rotate {
+    0% {
+      transform: rotate(0deg);
+    }
+
+    100% {
+      transform: rotate(360deg);
+    }
+  }
+
+  .gradient-border-animated::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: inherit;
+    padding: 2px;
+    background: conic-gradient(from 0deg,
+        transparent 0deg 90deg,
+        var(--primary) 90deg 180deg,
+        transparent 180deg 270deg,
+        var(--primary) 270deg 360deg);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    animation: gradient-rotate 4s linear infinite;
+  }
+
+  /* ===== DOCUMENT SCANNING ANIMATION (Clean Dramatic Effect) ===== */
+
+  /* CSS Variables for scanning */
+  :root {
+    --scan-duration: 2s;
+  }
+
+  /* The main scan beam - moves from top to bottom */
+  @keyframes scanMove {
+    0% {
+      top: -10%;
+      opacity: 0;
+    }
+
+    5% {
+      opacity: 1;
+    }
+
+    95% {
+      opacity: 1;
+    }
+
+    100% {
+      top: 110%;
+      opacity: 0;
+    }
+  }
+
+  .scan-beam {
+    position: absolute;
+    top: -10%;
+    left: 0;
+    width: 100%;
+    height: 40px;
+    background: linear-gradient(to bottom,
+        transparent,
+        hsl(var(--primary) / 0.6),
+        transparent);
+    opacity: 0;
+    z-index: 10;
+    pointer-events: none;
+    mix-blend-mode: screen;
+  }
+
+  .scan-beam::after {
+    content: '';
+    position: absolute;
+    bottom: 20px;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: hsl(var(--primary));
+    box-shadow:
+      0 0 10px hsl(var(--primary)),
+      0 0 20px hsl(var(--primary)),
+      0 0 40px hsl(var(--primary) / 0.5);
+  }
+
+  /* Active scanning state */
+  .scanning .scan-beam {
+    animation: scanMove var(--scan-duration) linear infinite;
+  }
+
+  /* Container glow during scan */
+  .scanning {
+    border-color: hsl(var(--primary)) !important;
+    box-shadow:
+      0 0 30px hsl(var(--primary) / 0.2),
+      0 0 60px hsl(var(--primary) / 0.1) !important;
+    transform: scale(1.01);
+    transition: all 0.3s ease;
+  }
+
+  /* Status dot pulsing */
+  @keyframes statusBlink {
+
+    0%,
+    100% {
+      opacity: 0.5;
+    }
+
+    50% {
+      opacity: 1;
+    }
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: hsl(var(--muted-foreground));
+    transition: all 0.3s ease;
+  }
+
+  .status-dot.active {
+    background-color: hsl(var(--primary));
+    box-shadow: 0 0 8px hsl(var(--primary)), 0 0 16px hsl(var(--primary) / 0.5);
+    animation: statusBlink 0.5s ease infinite alternate;
+  }
+
+  .status-dot.success {
+    background-color: hsl(142 76% 50%);
+    box-shadow: 0 0 8px hsl(142 76% 50%);
+    animation: none;
+  }
+
+  /* Status text styling */
+  .status-text {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .status-text.active {
+    color: hsl(var(--primary));
+  }
+
+  .status-text.success {
+    color: hsl(142 76% 50%);
+  }
+
+  /* Overlay dimming during scan */
+  .scan-overlay {
+    position: absolute;
+    inset: 0;
+    background: hsl(0 0% 0% / 0.3);
+    backdrop-filter: blur(1px);
+    z-index: 5;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+  }
+
+  .scanning .scan-overlay {
+    opacity: 1;
+  }
+
+
+  /* Fade in animation */
+  @keyframes fadeSlideIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-fade-in {
+    animation: fadeSlideIn 0.5s ease forwards;
+  }
+
+  /* Simple glow border (for list items during processing) */
+  @keyframes simpleGlow {
+
+    0%,
+    100% {
+      box-shadow: 0 0 10px hsl(var(--primary) / 0.2);
+    }
+
+    50% {
+      box-shadow: 0 0 20px hsl(var(--primary) / 0.4);
+    }
+  }
+
+  .animate-glow-border {
+    animation: simpleGlow 2s ease-in-out infinite;
+    border-color: hsl(var(--primary) / 0.5) !important;
+  }
+}
