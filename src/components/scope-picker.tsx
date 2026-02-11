@@ -50,7 +50,10 @@ export function ScopePicker({
       type: scope === 'doc' ? 'document' : scope === 'folder' ? 'folder' : 'org',
       id: scope === 'doc' ? docId : undefined,
       folderPath: scope === 'folder' ? folderPath : undefined,
-      name: scope === 'folder' && folderPath.length > 0 ? folderPath[folderPath.length - 1] : undefined
+      name: scope === 'folder' && folderPath.length > 0 ? folderPath[folderPath.length - 1] : undefined,
+      includeLinked,
+      includeVersions: scope === 'doc' ? includeVersions : undefined,
+      includeSubfolders: scope === 'folder' ? includeSubfolders : undefined,
     };
     
     const key = JSON.stringify(mappedContext);
@@ -58,7 +61,7 @@ export function ScopePicker({
       setLastEmitted(key);
       onChange(mappedContext);
     }
-  }, [scope, docId, folderPath, onChange, lastEmitted]);
+  }, [scope, docId, folderPath, includeLinked, includeVersions, includeSubfolders, onChange, lastEmitted]);
 
   return (
     <div className="w-full rounded-md border p-3 md:p-4 bg-card/50">

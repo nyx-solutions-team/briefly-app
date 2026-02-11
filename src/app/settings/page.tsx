@@ -8,6 +8,7 @@ import {
   Building2,
   Users,
   UsersRound,
+  Link2,
   Lock,
   Shield
 } from 'lucide-react';
@@ -21,6 +22,7 @@ const SETTINGS_SECTIONS = [
     items: [
       { href: '/settings/profile', label: 'Profile', Icon: User, description: 'Manage your personal info' },
       { href: '/settings/preferences', label: 'Preferences', Icon: Palette, description: 'Theme & display settings' },
+      { href: '/settings/shared-links', label: 'Shared Links', Icon: Link2, description: 'Manage your external links' },
     ]
   },
   {
@@ -51,6 +53,7 @@ export default function SettingsIndexPage() {
   const isAdmin = hasPermission('org.manage_members');
   const isTeamLead = (bootstrapData?.departments || []).some((d: any) => d?.is_lead);
   const canManageTeamMembers = hasPermission('departments.manage_members');
+  const canShareDocuments = hasPermission('documents.share') || isAdmin;
 
   return (
     <div className="min-h-screen bg-background pb-20 md:p-10">
@@ -72,6 +75,7 @@ export default function SettingsIndexPage() {
             if (item.adminOnly && !isAdmin) return false;
             if (item.permission && !hasPermission(item.permission)) return false;
             if (item.href === '/settings/teams' && !(isAdmin || isTeamLead || canManageTeamMembers)) return false;
+            if (item.href === '/settings/shared-links' && !canShareDocuments) return false;
             return true;
           });
 

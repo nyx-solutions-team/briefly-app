@@ -18,7 +18,8 @@ import {
   Building2,
   Users,
   UsersRound,
-  FileText,
+  Link2,
+  // FileText,
   Lock,
   Shield,
 } from 'lucide-react';
@@ -26,6 +27,7 @@ import { cn } from '@/lib/utils';
 
 import { useAuth } from '@/hooks/use-auth';
 import { getApiContext, apiFetch } from '@/lib/api';
+import { getOrgFeatures } from '@/lib/org-features';
 import { useState, useEffect } from 'react';
 import {
   SidebarMenu,
@@ -39,7 +41,11 @@ import {
 const mainLinks = [
   { href: '/dashboard', label: 'Dashboard', Icon: LayoutDashboard },
   { href: '/documents', label: 'Folders', Icon: Folder },
+  // Temporarily hidden for deployment. Keep entry for easy restore.
+  // { href: '/editor', label: 'Editor', Icon: FileText, permission: 'documents.read' },
   { href: '/documents/upload', label: 'Upload Document', Icon: CloudUpload },
+  // Temporarily hidden for deployment. Keep entry for easy restore.
+  // { href: '/approvals', label: 'Approvals', Icon: PlusSquare, permission: 'documents.read' },
   { href: '/queue', label: 'Queue', Icon: ListChecks },
   { href: '/audit', label: 'Activity', Icon: Activity },
   { href: '/recycle-bin', label: 'Recycle Bin', Icon: Trash2 },
@@ -54,12 +60,15 @@ const adminLinks = [
 const settingsAccountLinks = [
   { href: '/settings/profile', label: 'Profile', Icon: User },
   { href: '/settings/preferences', label: 'Preferences', Icon: Palette },
+  { href: '/settings/shared-links', label: 'Shared Links', Icon: Link2 },
 ];
 
 const settingsOrgLinks = [
   { href: '/settings/general', label: 'General', Icon: Building2, adminOnly: true },
   { href: '/settings/members', label: 'Members', Icon: Users, permission: 'org.manage_members' },
   { href: '/settings/teams', label: 'Teams', Icon: UsersRound },
+  // Temporarily hidden for deployment. Keep entry for easy restore.
+  // { href: '/settings/approval-templates', label: 'Approval Templates', Icon: FileText, permission: 'org.update_settings' },
   { href: '/settings/permissions', label: 'Permissions', Icon: Lock, adminOnly: true },
   { href: '/settings/security', label: 'Security', Icon: Shield, adminOnly: true },
 ];
@@ -160,6 +169,8 @@ export default function SidebarNav() {
   const canChat = permissions['pages.chat'] !== false;
   const canManageOrgMembers = permissions['org.manage_members'] === true;
   const canManageTeamMembers = permissions['departments.manage_members'] === true;
+  const canReadDocuments = permissions['documents.read'] === true;
+  const canShareDocuments = permissions['documents.share'] === true || canManageOrgMembers;
 
   const [queueCount, setQueueCount] = useState(0);
   const [recycleCount, setRecycleCount] = useState(0);
@@ -215,10 +226,17 @@ export default function SidebarNav() {
 
   // Settings sidebar
   if (isSettings) {
+    const { approvalsUsable } = getOrgFeatures(bootstrapData?.orgSettings);
+    const visibleAccountLinks = settingsAccountLinks.filter((item) => {
+      if (item.href === '/settings/shared-links' && !canShareDocuments) return false;
+      return true;
+    });
     // Filter org settings links based on permissions
     const visibleOrgLinks = settingsOrgLinks.filter(item => {
       if (item.adminOnly && !isAdmin) return false;
       if (item.permission === 'org.manage_members' && !canManageOrgMembers) return false;
+      if (item.permission === 'org.update_settings' && permissions['org.update_settings'] !== true) return false;
+      if (item.href === '/settings/approval-templates' && !approvalsUsable) return false;
       // Teams: visible to admins, team leads, or those with team member management permission
       if (item.href === '/settings/teams' && !(isAdmin || isTeamLead || canManageTeamMembers)) return false;
       return true;
@@ -233,7 +251,7 @@ export default function SidebarNav() {
 
         {/* My Account Section */}
         <SectionLabel>My Account</SectionLabel>
-        {settingsAccountLinks.map(({ href, label, Icon }) => (
+        {visibleAccountLinks.map(({ href, label, Icon }) => (
           <NavItem
             key={href}
             href={href}
@@ -288,8 +306,11 @@ export default function SidebarNav() {
 
   // Filter main links based on permissions
   const visibleMainLinks = mainLinks.filter(({ href }) => {
+    const { editorEnabled, approvalsUsable } = getOrgFeatures(bootstrapData?.orgSettings);
     if (href === '/documents/upload' && !canUpload) return false;
     if (href === '/documents' && !canViewDocuments) return false;
+    if (href === '/editor' && (!canReadDocuments || !editorEnabled)) return false;
+    if (href === '/approvals' && (!canReadDocuments || !approvalsUsable)) return false;
     if (href === '/audit' && !canViewActivity) return false;
     if (href === '/queue' && !canViewQueue) return false;
     if (href === '/recycle-bin' && !canViewRecycleBin) return false;

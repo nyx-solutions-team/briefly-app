@@ -20,6 +20,8 @@ import {
   Building2,
   Users,
   UsersRound,
+  Link2,
+  FileText,
   Lock,
   Shield,
   Sun,
@@ -30,6 +32,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useSettings } from "@/hooks/use-settings";
+import { getOrgFeatures } from "@/lib/org-features";
 import { Switch } from "@/components/ui/switch";
 import {
   Sheet,
@@ -54,6 +57,8 @@ const BASE_LINKS: NavLink[] = [
 ];
 
 const MORE_LINKS: NavLink[] = [
+  { href: "/editor", label: "Editor", Icon: FileText, permission: "documents.read" },
+  { href: "/approvals", label: "Approvals", Icon: FileText, permission: "documents.read" },
   { href: "/audit", label: "Activity", Icon: Activity, permission: "pages.activity" },
   { href: "/queue", label: "Queue", Icon: ListChecks, permission: "pages.queue" },
   { href: "/recycle-bin", label: "Recycle Bin", Icon: Trash2, permission: "pages.recycle_bin" },
@@ -64,12 +69,14 @@ const MORE_LINKS: NavLink[] = [
 const SETTINGS_ACCOUNT_LINKS: NavLink[] = [
   { href: "/settings/profile", label: "Profile", Icon: User },
   { href: "/settings/preferences", label: "Preferences", Icon: Palette },
+  { href: "/settings/shared-links", label: "Shared Links", Icon: Link2 },
 ];
 
 const SETTINGS_ORG_LINKS: NavLink[] = [
   { href: "/settings/general", label: "General", Icon: Building2, adminOnly: true },
   { href: "/settings/members", label: "Members", Icon: Users, permission: "org.manage_members" },
   { href: "/settings/teams", label: "Teams", Icon: UsersRound },
+  { href: "/settings/approval-templates", label: "Approval Templates", Icon: FileText, permission: "org.update_settings" },
   { href: "/settings/permissions", label: "Permissions", Icon: Lock, adminOnly: true },
   { href: "/settings/security", label: "Security", Icon: Shield, adminOnly: true },
 ];
@@ -78,9 +85,17 @@ function useFilteredLinks(links: NavLink[]) {
   const { bootstrapData } = useAuth();
   const permissions = bootstrapData?.permissions || {};
   const canUpload = permissions['pages.upload'] !== false;
+  const features = getOrgFeatures(bootstrapData?.orgSettings);
+  const editorEnabled = features.editorEnabled;
+  const approvalsUsable = features.approvalsUsable;
 
   return useMemo(() => {
-    return links.filter(({ permission }) => {
+    return links.filter(({ permission, href }) => {
+      // Feature gating (org-level)
+      if (href === "/editor" && !editorEnabled) return false;
+      if (href === "/approvals" && !approvalsUsable) return false;
+      if (href === "/settings/approval-templates" && !approvalsUsable) return false;
+
       if (!permission) return true;
 
       const isPagePermission = permission.startsWith('pages.');
@@ -104,7 +119,7 @@ function useFilteredLinks(links: NavLink[]) {
       // Non-page permissions must be explicitly granted
       return permissions[permission] === true;
     });
-  }, [links, permissions, canUpload]);
+  }, [links, permissions, canUpload, editorEnabled, approvalsUsable]);
 }
 
 import { getApiContext, apiFetch } from "@/lib/api";
@@ -126,17 +141,19 @@ export function MobileTabBar() {
   const isTeamLead = (bootstrapData?.departments || []).some((d: any) => d?.is_lead);
   const canManageOrgMembers = permissions["org.manage_members"] === true;
   const canManageTeamMembers = permissions["departments.manage_members"] === true;
+  const canUpdateOrgSettings = permissions["org.update_settings"] === true;
 
   const settingsOrgLinks = useMemo(() => {
     return SETTINGS_ORG_LINKS.filter((item) => {
       if (item.adminOnly && !isAdmin) return false;
       if (item.permission === "org.manage_members" && !canManageOrgMembers) return false;
+      if (item.permission === "org.update_settings" && !canUpdateOrgSettings) return false;
       if (item.href === "/settings/teams" && !(isAdmin || isTeamLead || canManageTeamMembers)) {
         return false;
       }
       return true;
     });
-  }, [isAdmin, isTeamLead, canManageOrgMembers, canManageTeamMembers]);
+  }, [isAdmin, isTeamLead, canManageOrgMembers, canManageTeamMembers, canUpdateOrgSettings]);
 
   useEffect(() => {
     const isDarkMode = document.documentElement.classList.contains("dark");

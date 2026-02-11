@@ -847,4 +847,17 @@
     animation: simpleGlow 2s ease-in-out infinite;
     border-color: hsl(var(--primary) / 0.5) !important;
   }
+
+  /* Utility to hide scrollbars */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    /* IE and Edge */
+    scrollbar-width: none;
+    /* Firefox */
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+    /* Chrome, Safari and Opera */
+  }
 }

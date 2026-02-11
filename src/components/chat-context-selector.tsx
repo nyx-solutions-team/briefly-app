@@ -18,6 +18,10 @@ export type ChatContext = {
   folderPath?: string[];
   // Legacy support for 'path'
   path?: string[];
+  // Optional scope modifiers used by some chat UIs
+  includeLinked?: boolean;
+  includeVersions?: boolean;
+  includeSubfolders?: boolean;
 };
 
 interface ChatContextSelectorProps {

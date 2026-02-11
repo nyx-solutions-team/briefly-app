@@ -71,8 +71,8 @@ export function DocumentResultsTable({
 }: DocumentResultsTableProps) {
   const safeRows = Array.isArray(rows) ? rows : [];
   const derivedColumns = Array.isArray(columns) && columns.length > 0
-    ? columns
-    : (safeRows[0] ? Object.keys(safeRows[0]) : []);
+    ? columns.filter(col => col !== 'doc_type') // Filter out doc_type column
+    : (safeRows[0] ? Object.keys(safeRows[0]).filter(col => col !== 'doc_type') : []);
 
   // Apply preview limit for inline display
   const displayRows = previewLimit && safeRows.length > previewLimit

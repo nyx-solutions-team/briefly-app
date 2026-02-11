@@ -13,11 +13,12 @@ import type { Document, StoredDocument } from '@/lib/types';
 import type { ExtractDocumentMetadataOutput } from '@/ai/flows/extract-document-metadata';
 import { useToast } from '@/hooks/use-toast';
 import { Progress } from '@/components/ui/progress';
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { H1 } from '@/components/typography';
 import { PageHeader } from '@/components/page-header';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select as UiSelect, SelectContent as UiSelectContent, SelectItem as UiSelectItem, SelectTrigger as UiSelectTrigger, SelectValue as UiSelectValue } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 // Calls will be proxied via backend: sign upload, finalize, analyze
 import { apiFetch, getApiContext } from '@/lib/api';
@@ -602,6 +603,8 @@ function UploadContent() {
   const [skipDetails, setSkipDetails] = useState<{ path: string; reason: string }[] | null>(null);
   const [lastBulkSummary, setLastBulkSummary] = useState<{ count: number; path: string[] } | null>(null);
   const [recentSavePath, setRecentSavePath] = useState<string[] | null>(null);
+  const [shareTeamsOpen, setShareTeamsOpen] = useState(false);
+  const [additionalDepartmentIds, setAdditionalDepartmentIds] = useState<string[]>([]);
   const { toast } = useToast();
   const { departments, selectedDepartmentId, setSelectedDepartmentId } = useDepartments();
   const router = useRouter();
@@ -611,6 +614,7 @@ function UploadContent() {
   const { load: loadFolderChildren } = useFolderExplorer();
   const { hasPermission, bootstrapData } = useAuth();
   const isAdmin = hasPermission('org.manage_members');
+  const canShareDocuments = hasPermission('documents.share');
   const planInfo = bootstrapData?.plan;
   const planExpired = !!planInfo?.expired;
   const planStorageFull = !!planInfo?.storageFull;
@@ -657,6 +661,25 @@ function UploadContent() {
   const [folderCommandOpen, setFolderCommandOpen] = useState(false);
   const [folderOptions, setFolderOptions] = useState<{ id: string; path: string[]; label: string }[]>([]);
   const [cameFromQueue, setCameFromQueue] = useState(false);
+  const effectiveAdditionalDepartmentIds = useMemo<string[]>(() => {
+    const valid = new Set((departments || []).map((dept) => dept.id));
+    return Array.from(new Set(additionalDepartmentIds))
+      .filter((deptId) => !!deptId && deptId !== selectedDepartmentId && valid.has(deptId));
+  }, [additionalDepartmentIds, departments, selectedDepartmentId]);
+
+  useEffect(() => {
+    setAdditionalDepartmentIds((prev) => {
+      const valid = new Set((departments || []).map((dept) => dept.id));
+      return prev.filter((deptId) => !!deptId && deptId !== selectedDepartmentId && valid.has(deptId));
+    });
+  }, [departments, selectedDepartmentId]);
+
+  const toggleAdditionalDepartment = useCallback((deptId: string, checked: boolean) => {
+    setAdditionalDepartmentIds((prev) => {
+      if (checked) return Array.from(new Set([...prev, deptId]));
+      return prev.filter((id) => id !== deptId);
+    });
+  }, []);
 
   useEffect(() => {
     const dedup = new Map<string, { id: string; path: string[]; label: string }>();
@@ -765,12 +788,12 @@ function UploadContent() {
       const parent = segs.slice(0, -1);
       const name = segs[segs.length - 1];
       try {
-        await createFolder(parent, name);
+        await createFolder(parent, name, effectiveAdditionalDepartmentIds);
       } catch {
         // Folder likely exists; ignore errors
       }
     }
-  }, [createFolder]);
+  }, [createFolder, effectiveAdditionalDepartmentIds]);
   const enqueueFiles = useCallback(async (items: { file: File; folderPathOverride?: string[] }[]) => {
     if (items.length === 0) return { added: 0, skipped: [] as { path: string; reason: string }[] };
     const MAX_FILES = BULK_UPLOAD_LIMIT;
@@ -1621,6 +1644,7 @@ function UploadContent() {
           receiver: '',
           documentDate: '',
           departmentId: selectedDepartmentId,
+          additionalDepartmentIds: effectiveAdditionalDepartmentIds,
           isDraft: true,
         };
         const createdDraft = await apiFetch<StoredDocument>(`/orgs/${orgId}/documents`, { method: 'POST', body: initialDraftPayload });
@@ -2218,7 +2242,7 @@ function UploadContent() {
           const existing = documentFolders.find(f => JSON.stringify(f) === JSON.stringify(slice));
           if (!existing) {
             console.log(`🔍 Folder "${folderName}" doesn't exist, creating...`);
-            const result = await createFolder(parentPath, folderName);
+            const result = await createFolder(parentPath, folderName, effectiveAdditionalDepartmentIds);
             console.log(`🔍 Folder creation result:`, result);
           } else {
             console.log(`🔍 Folder "${folderName}" already exists, skipping creation`);
@@ -2264,6 +2288,7 @@ function UploadContent() {
         receiver: item.form.receiver || item.extracted.metadata.receiver,
         documentDate: documentDateValue,
         departmentId: selectedDepartmentId || undefined,
+        additionalDepartmentIds: effectiveAdditionalDepartmentIds,
         isDraft: false,
       };
 
@@ -2281,6 +2306,7 @@ function UploadContent() {
         receiver: versionDraft.receiver,
         document_date: documentDateValue,
         department_id: selectedDepartmentId || null,
+        additionalDepartmentIds: effectiveAdditionalDepartmentIds,
         is_draft: false,
       };
 
@@ -2481,7 +2507,7 @@ function UploadContent() {
                   </div>
                 </div>
                 {departments.length > 0 && (
-                  <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
+                  <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto flex-wrap sm:flex-nowrap">
                     <span className="text-xs text-muted-foreground font-medium hidden sm:inline">Team</span>
                     <UiSelect value={selectedDepartmentId || undefined as any} onValueChange={(v) => setSelectedDepartmentId(v)}>
                       <UiSelectTrigger className="w-full sm:w-[180px] h-8 text-sm bg-muted/30 border-border/40">
@@ -2491,6 +2517,22 @@ function UploadContent() {
                         {departments.map(d => (<UiSelectItem key={d.id} value={d.id}>{d.name}</UiSelectItem>))}
                       </UiSelectContent>
                     </UiSelect>
+                    {canShareDocuments && departments.length > 1 && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() => setShareTeamsOpen(true)}
+                      >
+                        Share with teams
+                        {effectiveAdditionalDepartmentIds.length > 0 && (
+                          <span className="ml-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                            {effectiveAdditionalDepartmentIds.length}
+                          </span>
+                        )}
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>
@@ -3369,6 +3411,48 @@ function UploadContent() {
           );
         })()}
 
+        {canShareDocuments && (
+          <Dialog open={shareTeamsOpen} onOpenChange={setShareTeamsOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Share upload access with teams</DialogTitle>
+                <DialogDescription>
+                  Select additional teams that should get read, edit, and share access for uploaded content.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  Selected teams get read, edit, and share access. Primary owner team remains unchanged.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {departments
+                    .filter((dept) => dept.id !== selectedDepartmentId)
+                    .map((dept) => {
+                      const checked = effectiveAdditionalDepartmentIds.includes(dept.id);
+                      return (
+                        <label key={dept.id} className="flex items-center gap-2 text-sm rounded-md border border-border/50 px-3 py-2">
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={(value: any) => toggleAdditionalDepartment(dept.id, !!value)}
+                          />
+                          <span className="truncate">{dept.name}</span>
+                        </label>
+                      );
+                    })}
+                </div>
+                {effectiveAdditionalDepartmentIds.length > 0 && (
+                  <div className="text-xs text-muted-foreground">
+                    {effectiveAdditionalDepartmentIds.length} additional team{effectiveAdditionalDepartmentIds.length === 1 ? '' : 's'} selected.
+                  </div>
+                )}
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShareTeamsOpen(false)}>Close</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+
         {/* Version link picker dialog (Linear-style, browse + search) */}
         {typeof pickerOpenIndex === 'number' && queue[pickerOpenIndex] && (
           <VersionLinkPickerDialog
@@ -3401,7 +3485,7 @@ function UploadContent() {
           setFolderPath(path);
         }}
         onCreateFolder={async (parentPath, name) => {
-          await createFolder(parentPath, name);
+          await createFolder(parentPath, name, effectiveAdditionalDepartmentIds);
           await loadAllDocuments(); // Use loadAllDocuments to ensure folders are loaded
         }}
         onLoadChildren={loadFolderChildren}

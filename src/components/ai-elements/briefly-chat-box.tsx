@@ -8,6 +8,7 @@ import {
   Search,
   Settings2,
   X,
+  Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState, useMemo, useRef, useEffect } from "react";
@@ -287,8 +288,6 @@ export function BrieflyChatBox({
   const [internalWebSearch, setInternalWebSearch] = useState(defaultWebSearch);
   const [text, setText] = useState("");
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
-  const [slashMenuOpen, setSlashMenuOpen] = useState(false);
-  const [slashTokenStart, setSlashTokenStart] = useState<number | null>(null);
 
   useEffect(() => {
     setMode(defaultMode);
@@ -316,18 +315,7 @@ export function BrieflyChatBox({
     return m;
   }, [documents]);
 
-  const removeSlashToken = () => {
-    setText((prev) => {
-      if (slashTokenStart === null) return prev;
-      const head = prev.slice(0, slashTokenStart);
-      return head.replace(/\s+$/, "");
-    });
-    setSlashMenuOpen(false);
-    setSlashTokenStart(null);
-  };
-
   const triggerFilePicker = () => {
-    removeSlashToken();
     onRequestFilePicker?.();
     // Keep focus for continued typing
     setTimeout(() => areaRef.current?.focus(), 0);
@@ -372,43 +360,44 @@ export function BrieflyChatBox({
     >
       {/* Pinned Files */}
       {pinnedDocIds.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="text-xs text-muted-foreground">
-            Pinned files (override scope)
-          </div>
-          {pinnedDocIds.slice(0, 2).map((id, idx) => (
-            <div
-              key={id}
-              className={cn(
-                "flex items-center gap-2 rounded-full border px-3 py-1",
-                "bg-muted/20"
-              )}
-            >
-              <span className="text-xs font-medium">File {idx + 1}:</span>
-              <span className="text-xs truncate max-w-[220px]">{docNameById.get(id) || "Untitled"}</span>
-              {onPinnedDocIdsChange ? (
-                <button
-                  type="button"
-                  className="rounded-full hover:bg-muted/60 p-1"
-                  aria-label={`Remove file ${idx + 1}`}
-                  onClick={() => onPinnedDocIdsChange(pinnedDocIds.filter((d) => d !== id))}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              ) : null}
-            </div>
-          ))}
-          {onPinnedDocIdsChange ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-xs"
-              onClick={() => onPinnedDocIdsChange([])}
-            >
-              Clear
-            </Button>
-          ) : null}
+        <div className="flex flex-wrap items-center gap-3">
+          {pinnedDocIds.slice(0, 3).map((id) => {
+            const name = docNameById.get(id) || "Untitled";
+            const ext = name.split('.').pop()?.toUpperCase().slice(0, 4) || 'FILE';
+
+            return (
+              <div
+                key={id}
+                className={cn(
+                  "relative group flex flex-col justify-between rounded-xl border bg-muted/20 p-3",
+                  "w-32 h-32 transition-all hover:bg-muted/30"
+                )}
+              >
+                {onPinnedDocIdsChange && (
+                  <button
+                    type="button"
+                    className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-background border rounded-full p-1 shadow-sm hover:bg-muted"
+                    aria-label="Remove file"
+                    onClick={() => onPinnedDocIdsChange(pinnedDocIds.filter((d) => d !== id))}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+
+                <div className="space-y-1">
+                  <div className="font-medium text-sm line-clamp-2 leading-tight break-words">
+                    {name}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold tracking-wider text-muted-foreground bg-background/50 px-1.5 py-0.5 rounded border border-border/50 uppercase">
+                    {ext}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -444,83 +433,34 @@ export function BrieflyChatBox({
           )}
         </div>
 
+        {/* Action Buttons */}
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-9 w-9 shrink-0 rounded-xl"
+            onClick={onRequestFilePicker}
+            title="Add files"
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       {/* Input Row */}
       <div className="flex items-end gap-2 min-w-0">
         <div className="relative w-full flex-1 min-w-0">
-          {slashMenuOpen && (
-            <div className="absolute bottom-full mb-2 left-0 w-[240px] rounded-xl border bg-background shadow-lg p-1 z-20">
-              <button
-                type="button"
-                className="w-full flex items-start gap-2 rounded-lg px-3 py-2 text-left hover:bg-muted/60"
-                onMouseDown={(e) => {
-                  // Keep focus in the textarea
-                  e.preventDefault();
-                  triggerFilePicker();
-                }}
-              >
-                <FileText className="h-4 w-4 mt-0.5 opacity-80" />
-                <div className="min-w-0">
-                  <div className="text-sm font-medium leading-none">File</div>
-                  <div className="text-xs text-muted-foreground">Pin up to 2 files for this chat</div>
-                </div>
-              </button>
-            </div>
-          )}
           <Textarea
             ref={areaRef}
             value={text}
-            onChange={(e) => {
-              const next = e.target.value;
-              setText(next);
-              // Slash command detection (token must start after whitespace or at beginning)
-              const lastSlash = next.lastIndexOf("/");
-              if (lastSlash === -1) {
-                setSlashMenuOpen(false);
-                setSlashTokenStart(null);
-                return;
-              }
-              const before = lastSlash > 0 ? next[lastSlash - 1] : "";
-              const validBoundary = lastSlash === 0 || /\s/.test(before);
-              if (!validBoundary) {
-                setSlashMenuOpen(false);
-                setSlashTokenStart(null);
-                return;
-              }
-              const tail = next.slice(lastSlash + 1);
-              // Only show when cursor is at end-of-token (no spaces/newlines after slash)
-              if (tail.includes(" ") || tail.includes("\n")) {
-                setSlashMenuOpen(false);
-                setSlashTokenStart(null);
-                return;
-              }
-              const q = tail.trim().toLowerCase();
-              if (q === "" || "file".startsWith(q)) {
-                setSlashMenuOpen(true);
-                setSlashTokenStart(lastSlash);
-              } else {
-                setSlashMenuOpen(false);
-                setSlashTokenStart(null);
-              }
-            }}
+            onChange={(e) => setText(e.target.value)}
             placeholder={placeholder}
             className={cn(
-              "min-h-[60px] w-full flex-1 min-w-0 resize-none rounded-2xl border bg-muted/20 p-3 text-sm",
-              "focus-visible:ring-1"
+              "min-h-[60px] w-full flex-1 min-w-0 resize-none border-0 bg-transparent p-3 text-sm shadow-none focus-visible:ring-0",
+              "pl-0"
             )}
             onKeyDown={(e) => {
-              if (slashMenuOpen && (e.key === "Enter" || e.key === "Tab")) {
-                e.preventDefault();
-                triggerFilePicker();
-                return;
-              }
-              if (slashMenuOpen && e.key === "Escape") {
-                e.preventDefault();
-                setSlashMenuOpen(false);
-                setSlashTokenStart(null);
-                return;
-              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 handleSubmit();
@@ -539,8 +479,6 @@ export function BrieflyChatBox({
           <span className="hidden sm:inline ml-2">{sending ? "Sending…" : "Send"}</span>
         </Button>
       </div>
-
-      {/* Helper Row removed per UX request */}
     </div>
   );
 }

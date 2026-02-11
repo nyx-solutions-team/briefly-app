@@ -7,7 +7,16 @@ export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   // Allow next internals and static files
   // Also allow public share routes (no auth required)
-  if (pathname.startsWith('/_next') || pathname.startsWith('/api') || pathname.startsWith('/favicon') || pathname.startsWith('/signin') || pathname.startsWith('/no-access') || pathname.startsWith('/ip-blocked') || pathname.startsWith('/share')) {
+  if (
+    pathname.startsWith('/_next')
+    || pathname.startsWith('/api')
+    || pathname.startsWith('/favicon')
+    || pathname.startsWith('/signin')
+    || pathname.startsWith('/no-access')
+    || pathname.startsWith('/ip-blocked')
+    || pathname.startsWith('/share')
+    || pathname.startsWith('/folder-share')
+  ) {
     return NextResponse.next();
   }
 
@@ -26,5 +35,4 @@ export function middleware(req: NextRequest) {
 export const config = {
   matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
 };
-
 

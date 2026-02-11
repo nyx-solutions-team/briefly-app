@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { ExternalLink, Loader2, AlertCircle, X, FileText, Globe, Eye, Layers, Quote, File } from 'lucide-react';
+import { ExternalLink, Loader2, AlertCircle, X, FileText, Globe, Eye, Layers, Quote, File, Pin } from 'lucide-react';
 import FilePreview from '@/components/file-preview';
 import { DoclingPreview } from '@/components/docling-preview';
 import ReactMarkdown from 'react-markdown';
@@ -34,6 +34,10 @@ export type CitationMeta = {
     page_height?: number | null;
     chunkIndex?: number | null;
     chunkId?: string | null;
+    evidenceIds?: string[];
+    primaryEvidenceId?: string | null;
+    anchorStatus?: 'resolved' | 'partial' | 'unresolved' | string;
+    anchorIds?: string[];
 };
 
 export type ActionCenterTab = 'sources' | 'preview' | 'context';
@@ -41,6 +45,8 @@ export type ActionCenterTab = 'sources' | 'preview' | 'context';
 type ActionCenterProps = {
     open: boolean;
     onOpenChange: (open: boolean) => void;
+    isPinned?: boolean;
+    onPinnedChange?: (pinned: boolean) => void;
     activeDocumentId: string | null;
     activeDocumentPage?: number | null;
     onSelectDocument: (docId: string) => void;
@@ -59,6 +65,8 @@ type ActionCenterProps = {
 export function ActionCenter({
     open,
     onOpenChange,
+    isPinned = false,
+    onPinnedChange,
     activeDocumentId,
     activeDocumentPage = null,
     onSelectDocument,
@@ -73,7 +81,7 @@ export function ActionCenter({
     activeTab,
     onTabChange,
 }: ActionCenterProps) {
-    const highlightEnabled = false;
+    const highlightEnabled = true;
     const { getDocumentById } = useDocuments();
     const [docRecord, setDocRecord] = useState<StoredDocument | null>(null);
     const [loading, setLoading] = useState(false);
@@ -215,6 +223,36 @@ export function ActionCenter({
 
         (async () => {
             try {
+                const metaBbox = activeCitation?.bbox || activeCitation?.fields?.bbox;
+                const metaPage =
+                    typeof activeCitationPage === 'number'
+                        ? activeCitationPage
+                        : typeof activeDocumentPage === 'number'
+                            ? activeDocumentPage
+                            : null;
+                const directOrigin =
+                    activeCitationBboxOrigin ||
+                    (activeCitation?.fields?.bbox_origin || activeCitation?.fields?.bboxOrigin) ||
+                    (activeCitation as any)?.bbox_origin ||
+                    (activeCitation as any)?.bboxOrigin ||
+                    'BOTTOMLEFT';
+                if (metaPage !== null && Array.isArray(metaBbox) && metaBbox.length === 4) {
+                    const [vx, vy, vw, vh] = metaBbox.map(Number);
+                    if ([vx, vy, vw, vh].every(Number.isFinite)) {
+                        const origin = String(directOrigin).toUpperCase();
+                        const top = origin.startsWith('BOTTOM') ? vy + vh : vy;
+                        const bottom = origin.startsWith('BOTTOM') ? vy : vy + vh;
+                        setHighlightSpan({
+                            page: metaPage,
+                            bbox: { l: vx, t: top, r: vx + vw, b: bottom, coord_origin: origin },
+                            text: activeCitation?.snippet || undefined,
+                        });
+                        setHighlightMessage('Highlighted from citation metadata');
+                        setDoclingPages(null);
+                        return;
+                    }
+                }
+
                 const { orgId } = getApiContext();
                 if (!orgId) throw new Error('No organization selected');
                 console.debug('[ActionCenter] Fetching extraction for citation highlight', {
@@ -457,7 +495,7 @@ export function ActionCenter({
         })();
 
         return () => { active = false; };
-    }, [highlightEnabled, activeCitationDocId, activeCitationChunkId, activeCitation?.snippet, activeCitationPage, activeCitationBboxOrigin]);
+    }, [highlightEnabled, activeCitationDocId, activeCitationChunkId, activeCitation?.snippet, activeCitationPage, activeCitationBboxOrigin, activeDocumentPage]);
 
     const metadata = useMemo(() => {
         if (!docRecord) return [];
@@ -538,8 +576,8 @@ export function ActionCenter({
                         )}
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
-                        <div className="min-w-0 space-y-1">
-                            <h2 className="text-base sm:text-lg font-semibold text-foreground break-words">{primaryTitle}</h2>
+                        <div className="min-w-0 flex-1 space-y-1">
+                            <h2 className="text-base sm:text-lg font-semibold text-foreground break-all">{primaryTitle}</h2>
                             {secondaryTitle && (
                                 <p className="text-xs text-muted-foreground break-all">{secondaryTitle}</p>
                             )}
@@ -654,9 +692,9 @@ export function ActionCenter({
                                     <div className="mt-1 rounded-md bg-primary/10 p-2 text-primary">
                                         <FileText className="h-4 w-4" />
                                     </div>
-                                    <div className="space-y-1 overflow-hidden">
-                                        <p className="font-medium leading-none truncate">{title}</p>
-                                        <p className="text-muted-foreground truncate">
+                                    <div className="space-y-1 overflow-hidden flex-1 min-w-0">
+                                        <p className="font-medium leading-snug line-clamp-2 break-all">{title}</p>
+                                        <p className="text-muted-foreground line-clamp-1 break-all text-xs">
                                             {doc?.filename || id.slice(0, 8)}
                                         </p>
                                     </div>
@@ -732,7 +770,7 @@ export function ActionCenter({
                         </button>
                     </div>
                 </div>
-                <div className="grid gap-3">
+                <div className="flex flex-col gap-3">
                     {uniqueCitations.map((citation, idx) => {
                         const isDoc = !!citation.docId;
                         // Enhanced title extraction logic
@@ -754,11 +792,20 @@ export function ActionCenter({
                             title = citation.docId ? `Document ${citation.docId.slice(0, 8)}` : 'Source';
                         }
                         const snippet = citation.snippet || citation.fields?.description;
+                        const anchorStatus = String(citation.anchorStatus || '').toLowerCase();
+                        const statusBadge =
+                            anchorStatus === 'unresolved'
+                                ? { label: 'Unresolved', className: 'bg-rose-500/10 text-rose-700 border-rose-500/30 dark:text-rose-300' }
+                                : anchorStatus === 'partial'
+                                    ? { label: 'Partial', className: 'bg-amber-500/10 text-amber-700 border-amber-500/30 dark:text-amber-300' }
+                                    : anchorStatus === 'resolved'
+                                        ? { label: 'Resolved', className: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/30 dark:text-emerald-300' }
+                                        : null;
 
                         return (
                             <Card
                                 key={`${getCitationKey(citation)}-${idx}`}
-                                className="cursor-pointer transition-all hover:bg-accent/40 rounded-xl"
+                                className="cursor-pointer transition-all hover:bg-accent/40 rounded-xl overflow-hidden min-w-0"
                                 onClick={() => {
                                     if (isDoc && citation.docId) {
                                         onSelectCitation?.(citation);
@@ -769,16 +816,23 @@ export function ActionCenter({
                                 }}
                             >
                                 <CardContent className="p-3 sm:p-4 flex items-start gap-3 text-xs sm:text-sm">
-                                    <div className="mt-1 rounded-md bg-muted p-2 text-muted-foreground">
+                                    <div className="mt-1 rounded-md bg-muted p-2 text-muted-foreground shrink-0">
                                         {isDoc ? <FileText className="h-4 w-4" /> : <Globe className="h-4 w-4" />}
                                     </div>
-                                    <div className="space-y-1 overflow-hidden">
-                                        <div className="flex items-center gap-2">
-                                            <p className="font-medium leading-none truncate">{title}</p>
-                                            {!isDoc && <ExternalLink className="h-3 w-3 text-muted-foreground" />}
+                                    <div className="flex-1 space-y-1 min-w-0">
+                                        <div className="flex items-start gap-2 w-full">
+                                            <p className="font-medium leading-snug line-clamp-2 flex-1 min-w-0 break-all text-sm" title={title}>{title}</p>
+                                            <div className="flex items-center gap-2 shrink-0">
+                                                {statusBadge && (
+                                                    <Badge variant="outline" className={cn("rounded-full text-[10px] px-2 py-0.5 h-5", statusBadge.className)}>
+                                                        {statusBadge.label}
+                                                    </Badge>
+                                                )}
+                                                {!isDoc && <ExternalLink className="h-3 w-3 text-muted-foreground" />}
+                                            </div>
                                         </div>
                                         {snippet && (
-                                            <p className="text-muted-foreground line-clamp-2">
+                                            <p className="text-muted-foreground line-clamp-2 text-xs break-words">
                                                 {snippet}
                                             </p>
                                         )}
@@ -797,27 +851,49 @@ export function ActionCenter({
     const panel = (
         <div
             className={cn(
-                'pointer-events-none fixed inset-y-0 right-0 z-50 flex max-w-full transition-all duration-300'
+                'flex max-w-full transition-all duration-300',
+                isPinned
+                    ? 'pointer-events-auto relative z-0' // When pinned, static positioned
+                    : 'pointer-events-none fixed inset-y-0 right-0 z-[9999]' // When overlay, fixed positioned with highest z-index
             )}
             aria-hidden={!open}
         >
             <div
                 className={cn(
                     'pointer-events-auto flex h-full w-full max-w-full flex-col border-l border-border bg-background shadow-2xl transition-transform duration-300 ease-in-out sm:max-w-[420px] lg:w-[clamp(360px,40vw,560px)]',
-                    open ? 'translate-x-0' : 'translate-x-full'
+                    isPinned
+                        ? 'translate-x-0' // When pinned, always visible
+                        : (open ? 'translate-x-0' : 'translate-x-full') // When overlay, slide based on open state
                 )}
             >
                 <div className="flex items-center justify-between border-b px-3 sm:px-4 py-3 text-sm">
                     <p className="font-medium text-muted-foreground">Action Center</p>
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => onOpenChange(false)}
-                    >
-                        <X className="h-3.5 w-3.5" />
-                        <span className="sr-only">Close panel</span>
-                    </Button>
+                    <div className="flex items-center gap-1">
+                        {onPinnedChange && (
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className={cn(
+                                    "h-7 w-7",
+                                    isPinned && "bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary"
+                                )}
+                                onClick={() => onPinnedChange(!isPinned)}
+                                title={isPinned ? "Unpin panel" : "Pin panel"}
+                            >
+                                <Pin className={cn("h-3.5 w-3.5", isPinned && "fill-current")} />
+                                <span className="sr-only">{isPinned ? "Unpin" : "Pin"} panel</span>
+                            </Button>
+                        )}
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={() => onOpenChange(false)}
+                        >
+                            <X className="h-3.5 w-3.5" />
+                            <span className="sr-only">Close panel</span>
+                        </Button>
+                    </div>
                 </div>
 
                 <Tabs
@@ -862,6 +938,11 @@ export function ActionCenter({
             </div>
         </div>
     );
+
+    // Only use portal for overlay mode, render inline when pinned
+    if (isPinned) {
+        return panel;
+    }
 
     return createPortal(panel, document.body);
 }

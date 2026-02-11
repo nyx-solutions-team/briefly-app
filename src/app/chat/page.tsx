@@ -37,7 +37,7 @@ import MermaidDiagram from '@/components/ai-elements/mermaid-diagram';
 import { DocumentResultsTable } from '@/components/ai-elements/document-results-table';
 import { ResultsSidebar } from '@/components/ai-elements/results-sidebar';
 import { useSettings } from '@/hooks/use-settings';
-import { Bot, FileText, ChevronDown, Sparkles, Globe, FileSpreadsheet, FileArchive, FileImage, FileVideo, FileAudio, FileCode, File as FileGeneric, Eye, Layers } from 'lucide-react';
+import { Bot, FileText, ChevronDown, Sparkles, Globe, FileSpreadsheet, FileArchive, FileImage, FileVideo, FileAudio, FileCode, File as FileGeneric, Eye, Layers, Check, Loader2, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { type ChatContext } from '@/components/chat-context-selector';
 import { createFolderChatEndpoint } from '@/lib/folder-utils';
@@ -178,7 +178,7 @@ function getCitationIcon(citation: any, className?: string) {
 }
 
 function dedupeCitations(citations: CitationMeta[] = []): CitationMeta[] {
-  const seen = new Set<string>();
+  const seenIndex = new Map<string, number>();
   const result: CitationMeta[] = [];
 
   for (const citation of citations) {
@@ -191,9 +191,46 @@ function dedupeCitations(citations: CitationMeta[] = []): CitationMeta[] {
         ? `url:${citation.url}`
         : `text:${citation.docName || citation.title || citation.snippet || JSON.stringify(citation)}`;
 
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(citation);
+    const existingIdx = seenIndex.get(key);
+    if (existingIdx === undefined) {
+      seenIndex.set(key, result.length);
+      result.push(citation);
+      continue;
+    }
+
+    const current = result[existingIdx];
+    const merged: CitationMeta = { ...current };
+
+    if ((!merged.snippet || String(merged.snippet).length < String(citation.snippet || '').length) && citation.snippet) {
+      merged.snippet = citation.snippet;
+    }
+    if (!merged.page && citation.page) merged.page = citation.page;
+    if (!merged.chunkId && citation.chunkId) merged.chunkId = citation.chunkId;
+    if (!merged.bbox && citation.bbox) merged.bbox = citation.bbox;
+    if (!merged.docName && citation.docName) merged.docName = citation.docName;
+
+    const currentEvidence = Array.isArray((merged as any).evidenceIds) ? (merged as any).evidenceIds : [];
+    const nextEvidence = Array.isArray((citation as any).evidenceIds) ? (citation as any).evidenceIds : [];
+    const mergedEvidence = Array.from(new Set([...currentEvidence, ...nextEvidence].filter(Boolean)));
+    if (mergedEvidence.length > 0) {
+      (merged as any).evidenceIds = mergedEvidence;
+      (merged as any).primaryEvidenceId = (merged as any).primaryEvidenceId || mergedEvidence[0];
+    }
+
+    const statusRank: Record<string, number> = { resolved: 1, partial: 2, unresolved: 3 };
+    const currentStatus = String((merged as any).anchorStatus || '').toLowerCase();
+    const nextStatus = String((citation as any).anchorStatus || '').toLowerCase();
+    if ((statusRank[nextStatus] || 0) > (statusRank[currentStatus] || 0)) {
+      (merged as any).anchorStatus = nextStatus;
+    }
+    const currentAnchors = Array.isArray((merged as any).anchorIds) ? (merged as any).anchorIds : [];
+    const nextAnchors = Array.isArray((citation as any).anchorIds) ? (citation as any).anchorIds : [];
+    const mergedAnchors = Array.from(new Set([...currentAnchors, ...nextAnchors].filter(Boolean)));
+    if (mergedAnchors.length > 0) {
+      (merged as any).anchorIds = mergedAnchors;
+    }
+
+    result[existingIdx] = merged;
   }
 
   return result;
@@ -206,12 +243,60 @@ type ProcessingStep = {
   description?: string;
   task?: string;
   category?: string;
+  startedAtMs?: number;
+  endedAtMs?: number;
+  updatedAtMs?: number;
 };
 
 type ToolUsage = {
+  toolId?: string;
   name?: string;
   status?: string;
   description?: string;
+  startedAtMs?: number;
+  endedAtMs?: number;
+  updatedAtMs?: number;
+};
+
+type CitationAnchor = {
+  anchorId?: string;
+  startChar?: number;
+  endChar?: number;
+  citationIds?: string[];
+  evidenceIds?: string[];
+  status?: 'resolved' | 'partial' | 'unresolved' | string;
+  synthetic?: boolean;
+};
+
+type EvidenceSpan = {
+  evidenceId?: string;
+  docId?: string | null;
+  chunkId?: string | null;
+  page?: number | null;
+  snippet?: string;
+  charStart?: number | null;
+  charEnd?: number | null;
+  bbox?: { l: number; t: number; r: number; b: number; coord_origin?: string } | null;
+  bboxArray?: number[] | null;
+  bboxOrigin?: string | null;
+  pageWidth?: number | null;
+  pageHeight?: number | null;
+  relevance?: number;
+  toolName?: string;
+};
+
+type CitationMetrics = {
+  anchor_count?: number;
+  resolved_anchor_count?: number;
+  partial_anchor_count?: number;
+  unresolved_anchor_count?: number;
+  anchor_resolution_rate?: number;
+  citation_count?: number;
+  evidence_count?: number;
+  inline_marker_count?: number;
+  has_inline_markers?: boolean;
+  page_or_bbox_coverage?: number;
+  highlightable_coverage?: number;
 };
 
 type UsageInfo = {
@@ -227,117 +312,437 @@ type UsageInfo = {
   source?: string;  // Where metrics came from (event, session_metrics, aggregatedFromMembers)
 };
 
+type ActivityStatus = 'in_progress' | 'completed' | 'error';
+
+const ACTIVITY_LABELS: Record<string, string> = {
+  understand: 'Understanding request',
+  delegate: 'Planning retrieval',
+  delegate_task: 'Planning retrieval',
+  execute_yql: 'Searching records',
+  search_content: 'Searching document text',
+  search_document_content: 'Searching selected files',
+  get_full_document_content: 'Reading full document',
+  get_document: 'Loading document details',
+  get_page_content: 'Loading relevant pages',
+  get_schema: 'Checking available fields',
+  lookup_relationships: 'Finding related records',
+  aggregate: 'Computing totals',
+  get_available_doc_types: 'Checking available document types',
+};
+
+const STAGE_LABELS: Record<string, string> = {
+  understand: 'Understanding request',
+  plan: 'Planning retrieval',
+  schema: 'Checking available fields',
+  search: 'Searching records',
+  read: 'Reading matched documents',
+  relate: 'Finding related records',
+  aggregate: 'Computing totals',
+  respond: 'Preparing response',
+};
+
+const STAGE_ORDER = ['understand', 'plan', 'schema', 'search', 'read', 'relate', 'aggregate', 'respond'];
+
+function normalizeActivityStatus(status?: string): ActivityStatus {
+  const value = String(status || '').trim().toLowerCase();
+  if (value === 'completed' || value === 'done' || value === 'success') return 'completed';
+  if (value === 'error' || value === 'failed' || value === 'failure') return 'error';
+  return 'in_progress';
+}
+
+function stripLeadingDecorations(value?: string): string {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text.replace(/^[^A-Za-z0-9]+/, '').trim();
+}
+
+function canonicalActivityKey(value?: string): string {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return '';
+  const normalized = text
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  if (!normalized || normalized === 'processing') return '';
+  if (normalized === 'delegate_task') return 'delegate';
+  return normalized;
+}
+
+function resolveActivityLabel(key?: string, fallbackText?: string, fallbackLabel = 'Working'): string {
+  const canonical = canonicalActivityKey(key);
+  if (canonical && ACTIVITY_LABELS[canonical]) {
+    return ACTIVITY_LABELS[canonical];
+  }
+  const cleaned = stripLeadingDecorations(fallbackText);
+  return normalizeActivityLabel(cleaned || fallbackLabel, fallbackLabel);
+}
+
+function normalizeActivityLabel(value?: string, fallback = 'Working'): string {
+  const text = String(value || '').trim();
+  if (!text) return fallback;
+  return text.length > 140 ? `${text.slice(0, 137)}...` : text;
+}
+
+function looksLikeNarrativeSentence(value?: string): boolean {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  const words = text.split(/\s+/).filter(Boolean);
+  return words.length >= 8 || /[.!?]/.test(text);
+}
+
+function shouldKeepStep(step: ProcessingStep): boolean {
+  const label = String(step.title || step.description || '').trim().toLowerCase();
+  if (!label) return false;
+  if (label === 'processing' || label === 'processing...' || label === 'working...' || label === 'working') {
+    return false;
+  }
+  return true;
+}
+
+function shouldKeepTool(tool: ToolUsage): boolean {
+  const toolKey = canonicalActivityKey(tool.toolId || tool.name);
+  const name = normalizeActivityLabel(tool.name, '');
+  const desc = normalizeActivityLabel(tool.description, '');
+  if (!name && !desc) return false;
+  if (toolKey === 'tool_call') return false;
+  if (name === 'tool_call' && (!desc || looksLikeNarrativeSentence(desc))) return false;
+  if (name === 'tool' && !desc) return false;
+  if (name && looksLikeNarrativeSentence(name) && (!desc || desc === name)) return false;
+  return true;
+}
+
 function dedupeSteps(steps: ProcessingStep[] = []): ProcessingStep[] {
-  const seen = new Set<string>();
-  const result: ProcessingStep[] = [];
+  const orderedKeys: string[] = [];
+  const byKey = new Map<string, ProcessingStep>();
 
   steps.forEach((step, idx) => {
     if (!step) return;
-    const key = (step.step || step.title || `step-${idx}`).toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    result.push({
-      status: step.status || 'completed',
-      ...step
-    });
+    const rawKey = String(step.step || step.title || step.description || `step-${idx}`);
+    const canonicalKey = canonicalActivityKey(rawKey);
+    const key = String(canonicalKey || rawKey).toLowerCase();
+    const prev = byKey.get(key);
+    const status = normalizeActivityStatus(step.status || prev?.status);
+    const updatedAtMs = step.updatedAtMs ?? prev?.updatedAtMs;
+    const startedAtMs = prev?.startedAtMs ?? step.startedAtMs ?? updatedAtMs;
+    let endedAtMs = prev?.endedAtMs ?? step.endedAtMs;
+    if (status === 'completed' || status === 'error') {
+      endedAtMs = step.endedAtMs ?? updatedAtMs ?? endedAtMs;
+    } else {
+      endedAtMs = undefined;
+    }
+
+    if (!prev) orderedKeys.push(key);
+    const merged: ProcessingStep = {
+      ...(prev || {}),
+      ...step,
+      step: canonicalKey || step.step || rawKey,
+      title: resolveActivityLabel(canonicalKey || step.step, step.title || step.description || step.step, 'Working'),
+      description: resolveActivityLabel(canonicalKey || step.step, step.description || step.title || step.step, 'Working'),
+      status,
+      startedAtMs,
+      endedAtMs,
+      updatedAtMs,
+    };
+    if (shouldKeepStep(merged)) {
+      byKey.set(key, merged);
+    }
   });
 
-  return result;
+  return orderedKeys
+    .map((key) => byKey.get(key))
+    .filter((step): step is ProcessingStep => Boolean(step));
 }
 
 function dedupeTools(tools: ToolUsage[] = []): ToolUsage[] {
-  const seen = new Set<string>();
-  const result: ToolUsage[] = [];
+  const orderedKeys: string[] = [];
+  const byKey = new Map<string, ToolUsage>();
 
   tools.forEach((tool, idx) => {
     if (!tool) return;
-    const key = (tool.name || `tool-${idx}`).toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    result.push({
-      status: tool.status || 'completed',
-      ...tool
-    });
+    const rawKey = String(tool.toolId || tool.name || tool.description || `tool-${idx}`);
+    const canonicalKey = canonicalActivityKey(rawKey);
+    const key = String(canonicalKey || rawKey).toLowerCase();
+    const prev = byKey.get(key);
+    const status = normalizeActivityStatus(tool.status || prev?.status);
+    const updatedAtMs = tool.updatedAtMs ?? prev?.updatedAtMs;
+    const startedAtMs = prev?.startedAtMs ?? tool.startedAtMs ?? updatedAtMs;
+    let endedAtMs = prev?.endedAtMs ?? tool.endedAtMs;
+    if (status === 'completed' || status === 'error') {
+      endedAtMs = tool.endedAtMs ?? updatedAtMs ?? endedAtMs;
+    } else {
+      endedAtMs = undefined;
+    }
+
+    if (!prev) orderedKeys.push(key);
+    const merged: ToolUsage = {
+      ...(prev || {}),
+      ...tool,
+      toolId: canonicalKey || prev?.toolId || undefined,
+      name: resolveActivityLabel(canonicalKey || tool.toolId || tool.name, tool.name || tool.description, tool.name ? 'Tool call' : ''),
+      description: normalizeActivityLabel(stripLeadingDecorations(tool.description), ''),
+      status,
+      startedAtMs,
+      endedAtMs,
+      updatedAtMs,
+    };
+    if (shouldKeepTool(merged)) {
+      byKey.set(key, merged);
+    }
   });
 
-  return result;
+  return orderedKeys
+    .map((key) => byKey.get(key))
+    .filter((tool): tool is ToolUsage => Boolean(tool));
 }
 
-function buildActivityInsights(
+function settleActivityOnComplete<T extends ProcessingStep | ToolUsage>(items: T[], completedAtMs: number): T[] {
+  return items.map((item) => {
+    const status = normalizeActivityStatus(item.status);
+    if (status === 'in_progress') {
+      return {
+        ...item,
+        status: 'completed',
+        endedAtMs: item.endedAtMs ?? completedAtMs,
+        updatedAtMs: completedAtMs,
+      };
+    }
+    return item;
+  });
+}
+
+function formatDurationMs(startedAtMs?: number, endedAtMs?: number): string | null {
+  if (!startedAtMs || !endedAtMs || endedAtMs <= startedAtMs) return null;
+  const durationMs = endedAtMs - startedAtMs;
+  if (durationMs < 1000) return '<1s';
+  if (durationMs < 10_000) return `${(durationMs / 1000).toFixed(1)}s`;
+  return `${Math.round(durationMs / 1000)}s`;
+}
+
+function mergeActivityStatus(current: ActivityStatus, next: ActivityStatus): ActivityStatus {
+  if (current === 'error' || next === 'error') return 'error';
+  if (current === 'in_progress' || next === 'in_progress') return 'in_progress';
+  return 'completed';
+}
+
+function minTimestamp(...values: Array<number | undefined>): number | undefined {
+  const nums = values.filter((v): v is number => Number.isFinite(v));
+  if (nums.length === 0) return undefined;
+  return Math.min(...nums);
+}
+
+function maxTimestamp(...values: Array<number | undefined>): number | undefined {
+  const nums = values.filter((v): v is number => Number.isFinite(v));
+  if (nums.length === 0) return undefined;
+  return Math.max(...nums);
+}
+
+function mapStageIdFromKey(key: string): string | null {
+  switch (key) {
+    case 'understand':
+    case 'understanding_request':
+      return 'understand';
+    case 'delegate':
+    case 'planning_retrieval':
+      return 'plan';
+    case 'get_schema':
+    case 'get_available_doc_types':
+    case 'checking_available_fields':
+      return 'schema';
+    case 'execute_yql':
+    case 'search_content':
+    case 'search_document_content':
+    case 'searching_records':
+    case 'searching_document_text':
+    case 'searching_selected_files':
+      return 'search';
+    case 'get_document':
+    case 'get_page_content':
+    case 'get_full_document_content':
+    case 'loading_document_details':
+    case 'loading_relevant_pages':
+    case 'reading_full_document':
+    case 'reading_matched_documents':
+      return 'read';
+    case 'lookup_relationships':
+    case 'finding_related_records':
+      return 'relate';
+    case 'aggregate':
+    case 'computing_totals':
+      return 'aggregate';
+    case 'respond':
+    case 'preparing_response':
+      return 'respond';
+    default:
+      if (key.startsWith('search_')) return 'search';
+      if (key.startsWith('get_')) return 'read';
+      return null;
+  }
+}
+
+function buildStageTimeline(
+  steps: ProcessingStep[],
+  tools: ToolUsage[],
+  message: Message
+): ProcessingStep[] {
+  const byStage = new Map<string, ProcessingStep>();
+  const seenOrder: string[] = [];
+
+  const upsert = (
+    stageId: string,
+    status: ActivityStatus,
+    startedAtMs?: number,
+    endedAtMs?: number,
+    updatedAtMs?: number
+  ) => {
+    if (!byStage.has(stageId)) {
+      seenOrder.push(stageId);
+    }
+    const prev = byStage.get(stageId);
+    byStage.set(stageId, {
+      step: stageId,
+      title: STAGE_LABELS[stageId] || resolveActivityLabel(stageId, stageId, 'Working'),
+      description: STAGE_LABELS[stageId] || resolveActivityLabel(stageId, stageId, 'Working'),
+      status: prev ? mergeActivityStatus(normalizeActivityStatus(prev.status), status) : status,
+      startedAtMs: minTimestamp(prev?.startedAtMs, startedAtMs),
+      endedAtMs: maxTimestamp(prev?.endedAtMs, endedAtMs),
+      updatedAtMs: maxTimestamp(prev?.updatedAtMs, updatedAtMs),
+    });
+  };
+
+  steps.forEach((step) => {
+    const key = canonicalActivityKey(step.step || step.title || step.description);
+    if (!key) return;
+    const stageId = mapStageIdFromKey(key);
+    if (!stageId) return;
+    upsert(
+      stageId,
+      normalizeActivityStatus(step.status),
+      step.startedAtMs,
+      step.endedAtMs,
+      step.updatedAtMs
+    );
+  });
+
+  tools.forEach((tool) => {
+    const key = canonicalActivityKey(tool.toolId || tool.name || tool.description);
+    if (!key) return;
+    const stageId = mapStageIdFromKey(key);
+    if (!stageId) return;
+    upsert(
+      stageId,
+      normalizeActivityStatus(tool.status),
+      tool.startedAtMs,
+      tool.endedAtMs,
+      tool.updatedAtMs
+    );
+  });
+
+  const hasActivityEvidence = steps.length > 0
+    || tools.length > 0
+    || Boolean(message.streamRunId || message.streamStartedAtMs || message.streamLastEventSeq);
+
+  if (hasActivityEvidence && String(message.content || '').trim()) {
+    upsert(
+      'respond',
+      message.isStreaming ? 'in_progress' : 'completed',
+      message.streamStartedAtMs,
+      message.isStreaming ? undefined : message.streamLastEventTs,
+      message.streamLastEventTs
+    );
+  }
+
+  const orderedStageIds = [
+    ...STAGE_ORDER.filter((id) => byStage.has(id)),
+    ...seenOrder.filter((id) => !STAGE_ORDER.includes(id)),
+  ];
+
+  const staged = orderedStageIds
+    .map((id) => byStage.get(id))
+    .filter((step): step is ProcessingStep => Boolean(step));
+
+  if (staged.length > 0) return staged.slice(0, 6);
+  return steps.slice(0, 6);
+}
+
+function formatDurationSeconds(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '<1s';
+  if (seconds < 1) return '<1s';
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  return `${Math.round(seconds)}s`;
+}
+
+function getMessageDurationSeconds(message: Message): number | null {
+  const usageDuration = Number(message.usage?.duration);
+  if (Number.isFinite(usageDuration) && usageDuration > 0) {
+    return usageDuration;
+  }
+  const start = Number(message.streamStartedAtMs);
+  const end = Number(message.streamLastEventTs);
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+    return (end - start) / 1000;
+  }
+  return null;
+}
+
+function pluralizeDocType(docType: string, count: number): string {
+  const base = String(docType || 'record').trim().toLowerCase() || 'record';
+  if (count === 1) return base;
+  if (base.endsWith('s')) return base;
+  return `${base}s`;
+}
+
+function derivePrimaryStatus(
   message: Message,
-  streamingSteps: ProcessingStep[],
-  streamingTools: ToolUsage[]
-) {
-  if (message.isStreaming) {
+  stageSteps: ProcessingStep[]
+): { label: string | null; state: ActivityStatus } {
+  if (stageSteps.some((step) => normalizeActivityStatus(step.status) === 'error')) {
+    return { label: 'Completed with issues', state: 'error' };
+  }
+
+  const active = stageSteps.find((step) => normalizeActivityStatus(step.status) === 'in_progress');
+  if (active) {
     return {
-      steps: dedupeSteps(streamingSteps),
-      tools: dedupeTools(streamingTools)
+      label: active.title || active.description || 'Working on your answer',
+      state: 'in_progress',
     };
   }
 
-  const citations = dedupeCitations(message.citations || []);
-  const hasDocs = citations.some(cit => cit.docId);
-  const hasWeb = citations.some(cit => cit.sourceType === 'web' || (!cit.docId && !!cit.url));
+  if (message.isStreaming) {
+    return { label: 'Working on your answer', state: 'in_progress' };
+  }
 
-  const backendSteps = dedupeSteps((message as any).processingSteps || []);
-  const backendTools = dedupeTools((message as any).tools || []);
+  const totalCount = Number(message.metadata?.total_count);
+  if (message.metadata?.list_mode && Number.isFinite(totalCount) && totalCount >= 0) {
+    const noun = pluralizeDocType(String(message.metadata?.doc_type || 'record'), totalCount);
+    return { label: `Found ${totalCount} ${noun}`, state: 'completed' };
+  }
 
-  const steps: ProcessingStep[] = [];
-  const tools: ToolUsage[] = [];
+  const durationSeconds = getMessageDurationSeconds(message);
+  if (durationSeconds !== null) {
+    return { label: `Completed in ${formatDurationSeconds(durationSeconds)}`, state: 'completed' };
+  }
 
-  const addStep = (step: ProcessingStep) => {
-    const key = (step.step || step.title || '').toLowerCase();
-    if (!key) return;
-    if (steps.some(existing => (existing.step || existing.title || '').toLowerCase() === key)) return;
-    steps.push(step);
+  if (stageSteps.length > 0) {
+    return { label: 'Completed', state: 'completed' };
+  }
+
+  return { label: null, state: 'completed' };
+}
+
+function buildActivityInsights(
+  message: Message
+) {
+  const dedupedSteps = dedupeSteps(message.processingSteps || []);
+  const dedupedTools = dedupeTools(message.tools || []);
+  const stageSteps = buildStageTimeline(dedupedSteps, dedupedTools, message);
+  const primary = derivePrimaryStatus(message, stageSteps);
+  return {
+    steps: stageSteps,
+    tools: dedupedTools,
+    primaryStatus: primary.label,
+    primaryStatusState: primary.state,
   };
-
-  const addTool = (tool: ToolUsage) => {
-    const key = (tool.name || '').toLowerCase();
-    if (!key) return;
-    if (tools.some(existing => (existing.name || '').toLowerCase() === key)) return;
-    tools.push(tool);
-  };
-
-  if (hasDocs || hasWeb) {
-    backendSteps.forEach(addStep);
-    backendTools.forEach(addTool);
-  }
-
-  if (hasDocs) {
-    addStep({
-      step: 'document_analysis',
-      title: 'Document analysis',
-      description: 'Read and summarized relevant internal documents',
-      status: 'completed'
-    });
-    addTool({
-      name: 'document_retriever',
-      status: 'completed',
-      description: 'Vector search across organization documents'
-    });
-    addTool({
-      name: 'document_analyzer',
-      status: 'completed',
-      description: 'Summarized and reasoned over retrieved docs'
-    });
-  }
-
-  if (hasWeb) {
-    addStep({
-      step: 'web_search',
-      title: 'Web search',
-      description: 'Pulled current articles from trusted news sources',
-      status: 'completed'
-    });
-    addTool({
-      name: 'web_search',
-      status: 'completed',
-      description: 'DuckDuckGo recent-news lookup'
-    });
-  }
-
-  return { steps, tools };
 }
 
 // Function to render assistant content with inline citation components
@@ -348,6 +753,14 @@ function processContentWithCitations(
 ) {
   if (!content || typeof content !== 'string') return content;
   const normalizedCitations = dedupeCitations(citations);
+
+  const cleanDanglingCitationMarkers = (text: string): string =>
+    (text || '')
+      .replace(/\s*\[\^\d+\]/g, '')
+      .replace(/\s*\[\^\d+(?:\s*,\s*\^?\d+)*\]/g, '')
+      .replace(/\s*\[\^\?\]/g, '')
+      .replace(/\s*\[([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\]/gi, '')
+      .replace(/^\[\^\d+\]:.*$/gm, '');
 
   // Extract mermaid fenced blocks and replace with placeholders to avoid interfering with citation parsing
   const mermaidBlocks: string[] = [];
@@ -389,26 +802,77 @@ function processContentWithCitations(
     return elements;
   };
 
-  // Create a map of citation numbers to citation objects (1-based indexing)
+  // Create a map of citation numbers to citation objects.
+  // Prefer backend-stable citationId (cite_N); fallback to index-based numbering.
   const citationMap = new Map<number, any>();
   normalizedCitations.forEach((citation, index) => {
-    citationMap.set(index + 1, citation);
+    const rawCitationId = String((citation as any)?.citationId || '');
+    const parsed = rawCitationId.match(/^cite_(\d+)$/i);
+    const citationNumber = parsed ? parseInt(parsed[1], 10) : (index + 1);
+    if (Number.isFinite(citationNumber) && citationNumber > 0) {
+      citationMap.set(citationNumber, citation);
+    }
   });
 
-  // Collect all citation positions and components
-  const citationData: Array<{ index: number; component: JSX.Element; length: number }> = [];
-  const citationPattern = /\[\^(\d+(?:\s*,\s*\^?\d+)*)\]/g;
+  // Collect all individual citation markers first
+  const individualCitationPattern = /\[\^(\d+)\]/g;
+  const allMatches: Array<{ index: number; length: number; citationNumber: number }> = [];
   let match;
 
-  while ((match = citationPattern.exec(contentWithPlaceholders)) !== null) {
-    // Parse citation numbers from the match
-    const citationNumbers = match[1]
-      .split(',')
-      .map(num => parseInt(num.replace(/\^/g, '').trim(), 10))
-      .filter(num => !isNaN(num));
+  while ((match = individualCitationPattern.exec(contentWithPlaceholders)) !== null) {
+    const citationNumber = parseInt(match[1], 10);
+    if (!isNaN(citationNumber) && citationMap.has(citationNumber)) {
+      allMatches.push({
+        index: match.index,
+        length: match[0].length,
+        citationNumber
+      });
+    }
+  }
 
+  // Group consecutive citations (those separated only by whitespace)
+  const citationGroups: Array<{
+    startIndex: number;
+    endIndex: number;
+    length: number;
+    citationNumbers: number[];
+  }> = [];
+
+  for (let i = 0; i < allMatches.length; i++) {
+    const current = allMatches[i];
+    const citationNumbers = [current.citationNumber];
+    let startIndex = current.index;
+    let endIndex = current.index + current.length;
+
+    // Check if the next citation is consecutive (only whitespace between them)
+    while (i + 1 < allMatches.length) {
+      const next = allMatches[i + 1];
+      const textBetween = contentWithPlaceholders.slice(endIndex, next.index);
+
+      // If only whitespace between citations, they're consecutive
+      if (textBetween.trim() === '') {
+        citationNumbers.push(next.citationNumber);
+        endIndex = next.index + next.length;
+        i++;
+      } else {
+        break;
+      }
+    }
+
+    citationGroups.push({
+      startIndex,
+      endIndex,
+      length: endIndex - startIndex,
+      citationNumbers
+    });
+  }
+
+  // Create citation components from groups
+  const citationData: Array<{ index: number; component: JSX.Element; length: number }> = [];
+
+  for (const group of citationGroups) {
     // Get citations for these numbers
-    const matchedCitations = citationNumbers
+    const matchedCitations = group.citationNumbers
       .map(num => citationMap.get(num))
       .filter(Boolean);
 
@@ -426,10 +890,10 @@ function processContentWithCitations(
         const extraCount = sourceData.length > 1 ? sourceData.length - 1 : 0;
 
         citationData.push({
-          index: match.index,
-          length: match[0].length,
+          index: group.startIndex,
+          length: group.length,
           component: (
-            <InlineCitation key={`citation-${match.index}`} className="inline">
+            <InlineCitation key={`citation-${group.startIndex}`} className="inline">
               <InlineCitationCard>
                 <InlineCitationCardTrigger
                   sources={sourceUrls}
@@ -479,13 +943,7 @@ function processContentWithCitations(
 
   // If no citations found, clean and return
   if (citationData.length === 0) {
-    const cleaned = contentWithPlaceholders
-      .replace(/\s*\[\^\d+\]/g, '')
-      .replace(/\s*\[\^\d+(?:\s*,\s*\d+)*\]/g, '')
-      .replace(/\s*\[\^\?\]/g, '')
-      .replace(/\s*\[([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\]/gi, '')
-      .replace(/^\[\^\d+\]:.*$/gm, '')
-      .trim();
+    const cleaned = cleanDanglingCitationMarkers(contentWithPlaceholders).trim();
     return <span className="inline">{renderTextWithMermaid(cleaned, `clean`)}</span>;
   }
 
@@ -500,6 +958,7 @@ function processContentWithCitations(
     // Add text before citation
     if (citation.index > lastIndex) {
       let textBefore = contentWithPlaceholders.slice(lastIndex, citation.index);
+      textBefore = cleanDanglingCitationMarkers(textBefore);
       textBefore = preserveNewlines(textBefore);
       if (textBefore) {
         parts.push(textBefore);
@@ -514,7 +973,7 @@ function processContentWithCitations(
 
   // Add remaining text after last citation
   if (lastIndex < contentWithPlaceholders.length) {
-    const textAfter = contentWithPlaceholders.slice(lastIndex);
+    const textAfter = cleanDanglingCitationMarkers(contentWithPlaceholders.slice(lastIndex));
     if (textAfter) {
       parts.push(textAfter);
     }
@@ -738,9 +1197,21 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   citations?: CitationMeta[];
+  citationAnchors?: CitationAnchor[];
+  evidenceSpans?: EvidenceSpan[];
+  citationVersion?: string | null;
+  citationMetrics?: CitationMetrics | null;
   isStreaming?: boolean;
   usage?: UsageInfo;
   metadata?: ChatResultsMetadata | null;
+  processingSteps?: ProcessingStep[];
+  tools?: ToolUsage[];
+  reasoning?: string | null;
+  agent?: string | { name?: string; type?: string; confidence?: number } | null;
+  streamRunId?: string | null;
+  streamStartedAtMs?: number;
+  streamLastEventSeq?: number;
+  streamLastEventTs?: number;
 }
 
 const INITIAL_ASSISTANT_TEXT = "Hello! I'm your Briefly Agent with enhanced AI-powered capabilities! 🚀";
@@ -755,17 +1226,6 @@ const buildInitialMessages = (): Message[] => [
 
 export default function TestAgentEnhancedPage() {
   const [messages, setMessages] = useState<Message[]>(() => buildInitialMessages());
-
-  const [currentTaskSteps, setCurrentTaskSteps] = useState<any[]>([]);
-  const [currentTools, setCurrentTools] = useState<any[]>([]);
-  const taskStepsRef = useRef<any[]>(currentTaskSteps);
-  const toolsRef = useRef<any[]>(currentTools);
-  useEffect(() => {
-    taskStepsRef.current = currentTaskSteps;
-  }, [currentTaskSteps]);
-  useEffect(() => {
-    toolsRef.current = currentTools;
-  }, [currentTools]);
 
   const [isLoading, setIsLoading] = useState(false);
   const [lastListDocIds, setLastListDocIds] = useState<string[]>([]);
@@ -829,6 +1289,7 @@ export default function TestAgentEnhancedPage() {
     }
   }, [sessionId]);
   const [isActionCenterOpen, setIsActionCenterOpen] = useState(false);
+  const [isActionCenterPinned, setIsActionCenterPinned] = useState(false);
   const [actionCenterTab, setActionCenterTab] = useState<ActionCenterTab>('sources');
   const [actionCenterCitations, setActionCenterCitations] = useState<CitationMeta[]>([]);
   const [messageScopedCitations, setMessageScopedCitations] = useState<CitationMeta[]>([]);
@@ -904,9 +1365,11 @@ export default function TestAgentEnhancedPage() {
             ? citation.page
             : typeof citation.fields?.page === 'number'
               ? citation.fields.page
-              : typeof citation.fields?.pageNumber === 'number'
-                ? citation.fields.pageNumber
-                : null;
+              : typeof citation.fields?.page_number === 'number'
+                ? citation.fields.page_number
+                : typeof citation.fields?.pageNumber === 'number'
+                  ? citation.fields.pageNumber
+                  : null;
         setPreviewDocPage(citationPage);
       }
       const normalized = dedupeCitations(
@@ -1010,10 +1473,6 @@ export default function TestAgentEnhancedPage() {
 
   const resetChatSession = useCallback(() => {
     setMessages(buildInitialMessages());
-    setCurrentTaskSteps([]);
-    setCurrentTools([]);
-    taskStepsRef.current = [];
-    toolsRef.current = [];
     setLastListDocIds([]);
     setIsLoading(false);
     setInputValue('');
@@ -1199,7 +1658,10 @@ export default function TestAgentEnhancedPage() {
         id: assistantId,
         role: 'assistant',
         content: '',
-        isStreaming: true
+        isStreaming: true,
+        processingSteps: [],
+        tools: [],
+        streamStartedAtMs: Date.now(),
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -1207,12 +1669,16 @@ export default function TestAgentEnhancedPage() {
 
       try {
         let streamingContent = '';
+        let streamRunId: string | null = null;
+        let streamLastEventSeq = 0;
+        let streamLastEventTs = Date.now();
+        let hasCompleted = false;
+        let streamSteps: ProcessingStep[] = [];
+        let streamTools: ToolUsage[] = [];
 
-        // Reset task steps and tools for new query
-        setCurrentTaskSteps([]);
-        setCurrentTools([]);
-        taskStepsRef.current = [];
-        toolsRef.current = [];
+        const updateAssistantMessage = (updater: (message: Message) => Message) => {
+          setMessages(prev => prev.map(m => (m.id === assistantId ? updater(m) : m)));
+        };
 
         // Ensure a stable session id for this page session
         const ensuredSessionId = sessionId || (typeof crypto !== 'undefined' && (crypto as any).randomUUID ? (crypto as any).randomUUID() : Math.random().toString(36).slice(2));
@@ -1266,71 +1732,161 @@ export default function TestAgentEnhancedPage() {
                 return; // Skip this event
               }
 
+              const eventSeq = Number((data as any).event_seq);
+              if (Number.isFinite(eventSeq) && eventSeq > 0) {
+                if (eventSeq <= streamLastEventSeq) {
+                  return;
+                }
+                streamLastEventSeq = eventSeq;
+              }
+
+              const eventTs = Number((data as any).ts_ms);
+              if (Number.isFinite(eventTs) && eventTs > 0) {
+                streamLastEventTs = eventTs;
+              }
+
+              const incomingRunId = typeof (data as any).run_id === 'string' ? String((data as any).run_id) : null;
+              if (incomingRunId) {
+                if (!streamRunId) {
+                  streamRunId = incomingRunId;
+                } else if (streamRunId !== incomingRunId) {
+                  console.warn('Ignoring stream event from different run', { expected: streamRunId, received: incomingRunId });
+                  return;
+                }
+              }
+
+              if (hasCompleted && data.type !== 'error') {
+                return;
+              }
+
               console.log('Processing streaming data:', data.type, data);
               console.log('Current streamingContent:', streamingContent);
 
-              if (data.type === 'task_step') {
-                // Update task steps
-                setCurrentTaskSteps(prev => {
-                  const next = (() => {
-                    const existing = prev.find(step => step.step === data.step);
-                    if (existing) {
-                      return prev.map(step =>
-                        step.step === data.step ? { ...step, ...data } : step
-                      );
-                    }
-                    return [...prev, data];
-                  })();
-                  taskStepsRef.current = next;
-                  return next;
-                });
+              if (data.type === 'start') {
+                updateAssistantMessage((m) => ({
+                  ...m,
+                  streamRunId: streamRunId || m.streamRunId || null,
+                  streamStartedAtMs: m.streamStartedAtMs || streamLastEventTs || Date.now(),
+                  streamLastEventSeq: streamLastEventSeq || m.streamLastEventSeq,
+                  streamLastEventTs,
+                }));
+              } else if (data.type === 'task_step') {
+                const nextStep: ProcessingStep = {
+                  step: data.step || data.step_id || data.title || `step_${streamSteps.length + 1}`,
+                  title: data.title || data.description || data.message || 'Working',
+                  description: data.description || data.message || data.title,
+                  status: normalizeActivityStatus(data.status),
+                  task: data.task,
+                  category: data.category,
+                  updatedAtMs: streamLastEventTs,
+                };
+                streamSteps = dedupeSteps([...streamSteps, nextStep]);
+                updateAssistantMessage((m) => ({
+                  ...m,
+                  processingSteps: streamSteps,
+                  tools: streamTools,
+                  streamRunId: streamRunId || m.streamRunId || null,
+                  streamLastEventSeq: streamLastEventSeq || m.streamLastEventSeq,
+                  streamLastEventTs,
+                }));
               } else if (data.type === 'tool_usage') {
-                // Update tools used
-                setCurrentTools(prev => {
-                  const next = (() => {
-                    const existing = prev.find(tool => tool.name === data.name);
-                    if (existing) {
-                      return prev.map(tool =>
-                        tool.name === data.name ? { ...tool, ...data } : tool
-                      );
-                    }
-                    return [...prev, data];
-                  })();
-                  toolsRef.current = next;
-                  return next;
-                });
+                const rawToolId = data.name || data.tool || data.tool_name || 'tool';
+                const nextTool: ToolUsage = {
+                  toolId: canonicalActivityKey(rawToolId) || rawToolId,
+                  name: data.name || data.tool || data.tool_name || 'tool',
+                  status: normalizeActivityStatus(data.status || 'running'),
+                  description: data.description || data.message,
+                  updatedAtMs: streamLastEventTs,
+                };
+                streamTools = dedupeTools([...streamTools, nextTool]);
+                updateAssistantMessage((m) => ({
+                  ...m,
+                  processingSteps: streamSteps,
+                  tools: streamTools,
+                  streamRunId: streamRunId || m.streamRunId || null,
+                  streamLastEventSeq: streamLastEventSeq || m.streamLastEventSeq,
+                  streamLastEventTs,
+                }));
+              } else if (data.type === 'tool_call') {
+                const rawToolId = data.tool_name || data.name || 'tool_call';
+                const nextTool: ToolUsage = {
+                  toolId: canonicalActivityKey(rawToolId) || rawToolId,
+                  name: data.tool_name || data.name || 'tool_call',
+                  status: normalizeActivityStatus(data.status || 'running'),
+                  description: data.message || data.description || 'Tool call in progress',
+                  updatedAtMs: streamLastEventTs,
+                };
+                streamTools = dedupeTools([...streamTools, nextTool]);
+                updateAssistantMessage((m) => ({
+                  ...m,
+                  processingSteps: streamSteps,
+                  tools: streamTools,
+                  streamRunId: streamRunId || m.streamRunId || null,
+                  streamLastEventSeq: streamLastEventSeq || m.streamLastEventSeq,
+                  streamLastEventTs,
+                }));
               } else if (data.type === 'content' && data.chunk) {
                 streamingContent += data.chunk;
-                setMessages(prev => prev.map(m =>
-                  m.id === assistantId
-                    ? { ...m, content: streamingContent }
-                    : m
-                ));
-              } else if (data.type === 'tool_call' && data.message) {
-                setMessages(prev => prev.map(m =>
-                  m.id === assistantId
-                    ? { ...m, content: streamingContent + `\n\n🔍 ${data.message}` }
-                    : m
-                ));
+                updateAssistantMessage((m) => ({
+                  ...m,
+                  content: streamingContent,
+                  processingSteps: streamSteps,
+                  tools: streamTools,
+                  streamRunId: streamRunId || m.streamRunId || null,
+                  streamLastEventSeq: streamLastEventSeq || m.streamLastEventSeq,
+                  streamLastEventTs,
+                }));
               } else if (data.type === 'complete') {
-                const meta = data.metadata && typeof data.metadata === 'object' ? data.metadata : null;
+                if (hasCompleted) return;
+                hasCompleted = true;
+                const meta = data.metadata && typeof data.metadata === 'object' ? data.metadata as ChatResultsMetadata : null;
                 const listMode = Boolean(meta?.list_mode);
                 let finalContent = data.full_content || streamingContent;
                 if (listMode) {
                   finalContent = stripMarkdownTables(finalContent);
                 }
-                const citations = dedupeCitations(data.citations || []);
+                const citations = dedupeCitations(data.citations || data.citationSources || []);
+                const citationAnchors = Array.isArray((data as any).citationAnchors) ? (data as any).citationAnchors as CitationAnchor[] : [];
+                const evidenceSpans = Array.isArray((data as any).evidenceSpans) ? (data as any).evidenceSpans as EvidenceSpan[] : [];
+                const citationVersion = typeof (data as any).citationVersion === 'string' ? (data as any).citationVersion as string : null;
+                const citationMetrics = ((data as any).citationMetrics && typeof (data as any).citationMetrics === 'object')
+                  ? (data as any).citationMetrics as CitationMetrics
+                  : null;
                 console.debug('[Chat] Received citations', {
                   count: citations.length,
                   withChunkId: citations.filter((c: any) => c?.chunkId || c?.fields?.chunk_id).length,
+                  anchors: citationAnchors.length,
+                  evidenceSpans: evidenceSpans.length,
                 });
                 const usage = data.usage && typeof data.usage === 'object' ? data.usage : null;
-                const baseSteps = Array.isArray(data.processingSteps) && data.processingSteps.length > 0
-                  ? data.processingSteps
-                  : taskStepsRef.current;
-                const baseTools = Array.isArray(data.tools) && data.tools.length > 0
-                  ? data.tools
-                  : toolsRef.current;
+                const incomingSteps = Array.isArray(data.processingSteps) && data.processingSteps.length > 0
+                  ? data.processingSteps.map((step: ProcessingStep) => ({ ...step, updatedAtMs: streamLastEventTs }))
+                  : [];
+                const incomingTools = Array.isArray(data.tools) && data.tools.length > 0
+                  ? data.tools.map((tool: ToolUsage) => {
+                    const rawToolId = tool.toolId || tool.name || tool.description || '';
+                    return {
+                      ...tool,
+                      toolId: canonicalActivityKey(rawToolId) || tool.toolId || rawToolId || undefined,
+                      updatedAtMs: streamLastEventTs
+                    };
+                  })
+                  : [];
+
+                const baseSteps = dedupeSteps(
+                  settleActivityOnComplete(
+                    dedupeSteps([...streamSteps, ...incomingSteps]),
+                    streamLastEventTs
+                  )
+                );
+                const baseTools = dedupeTools(
+                  settleActivityOnComplete(
+                    dedupeTools([...streamTools, ...incomingTools]),
+                    streamLastEventTs
+                  )
+                );
+                streamSteps = baseSteps;
+                streamTools = baseTools;
 
                 setMessageScopedCitations(citations);
                 if (citations.length > 0) {
@@ -1342,27 +1898,24 @@ export default function TestAgentEnhancedPage() {
                   setActionCenterCitationsMode('global');
                 }
 
-                setMessages(prev => prev.map(m => {
-                  if (m.id !== assistantId) return m;
-
-                  const derivedInsights = buildActivityInsights(
-                    { ...m, citations, isStreaming: false },
-                    baseSteps,
-                    baseTools
-                  );
-
-                  return {
-                    ...m,
-                    content: finalContent,
-                    citations: citations,
-                    isStreaming: false,
-                    tools: derivedInsights.tools,
-                    reasoning: data.reasoning || data.agentInsights?.join('\n'),
-                    agent: data.agent || 'Smart Assistant',
-                    processingSteps: derivedInsights.steps,
-                    usage: usage || undefined,
-                    metadata: meta
-                  };
+                updateAssistantMessage((m) => ({
+                  ...m,
+                  content: finalContent,
+                  citations,
+                  citationAnchors,
+                  evidenceSpans,
+                  citationVersion,
+                  citationMetrics,
+                  isStreaming: false,
+                  tools: baseTools,
+                  reasoning: data.reasoning || data.agentInsights?.join('\n'),
+                  agent: data.agent || 'Smart Assistant',
+                  processingSteps: baseSteps,
+                  usage: usage || undefined,
+                  metadata: meta,
+                  streamRunId: streamRunId || m.streamRunId || null,
+                  streamLastEventSeq: streamLastEventSeq || m.streamLastEventSeq,
+                  streamLastEventTs,
                 }));
 
                 if (showTokenUsage && usage) {
@@ -1392,20 +1945,17 @@ export default function TestAgentEnhancedPage() {
                   setSessionId(data.sessionId || data.session_id);
                 }
               } else if (data.type === 'error') {
-                setMessages(prev => prev.map(m =>
-                  m.id === assistantId
-                    ? {
-                      ...m,
-                      content: streamingContent + `\n\n❌ **Error**: ${data.error}`,
-                      isStreaming: false,
-                      processingSteps: dedupeSteps(taskStepsRef.current),
-                      tools: dedupeTools(toolsRef.current)
-                    }
-                    : m
-                ));
-
-                // Keep processing steps visible even on error
-                // Don't clear them - they show what was attempted
+                hasCompleted = true;
+                updateAssistantMessage((m) => ({
+                  ...m,
+                  content: `${streamingContent}\n\n❌ **Error**: ${data.error || 'Unknown error'}`,
+                  isStreaming: false,
+                  processingSteps: dedupeSteps(streamSteps),
+                  tools: dedupeTools(streamTools),
+                  streamRunId: streamRunId || m.streamRunId || null,
+                  streamLastEventSeq: streamLastEventSeq || m.streamLastEventSeq,
+                  streamLastEventTs,
+                }));
               } else {
                 // Handle any other data types - don't add to content
                 console.log('Unhandled data type:', data.type, data);
@@ -1440,511 +1990,605 @@ export default function TestAgentEnhancedPage() {
   };
 
   return (
-    <AppLayout>
-      <div
-        className={cn(
-          "flex flex-col h-full max-w-6xl mx-auto px-2 sm:px-3 md:px-4 font-poppins text-sm transition-[margin] duration-300",
-          isSidebarOpen && 'sm:mr-[420px] lg:mr-[clamp(360px,40vw,560px)]'
-        )}
-      >
-        {/* Minimal Header */}
-        <div className="flex items-center justify-between py-2 sm:py-3 md:py-4 border-b border-border/40 flex-shrink-0">
-          <div className="w-6 sm:w-8" /> {/* Spacer for centering */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg ${themeColors.iconBg} flex items-center justify-center flex-shrink-0`}>
-              <Bot className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${themeColors.primary}`} />
+    <AppLayout collapseSidebar={isActionCenterPinned}>
+      <div className={cn("flex w-full h-full", isActionCenterPinned && "gap-0")}>
+        <div
+          className={cn(
+            "flex flex-col h-[100dvh] md:h-svh overflow-hidden w-full max-w-[98%] mx-auto px-2 sm:px-3 md:px-4 font-poppins text-sm transition-all duration-300",
+            !isActionCenterPinned && isSidebarOpen && 'sm:mr-[420px] lg:mr-[clamp(360px,40vw,560px)]'
+          )}
+        >
+          {/* Minimal Header */}
+          <div className="flex items-center justify-between py-2 sm:py-3 md:py-4 border-b border-border/40 flex-shrink-0">
+            <div className="w-6 sm:w-8" /> {/* Spacer for centering */}
+            <div className="flex items-center gap-2 sm:gap-3">
+              <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg ${themeColors.iconBg} flex items-center justify-center flex-shrink-0`}>
+                <Bot className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${themeColors.primary}`} />
+              </div>
+              <div className="text-center min-w-0">
+                <h1 className="text-base sm:text-lg font-semibold text-foreground truncate">Briefly Agent</h1>
+                <p className="text-[10px] sm:text-xs text-muted-foreground hidden sm:block">AI-powered document assistant</p>
+              </div>
             </div>
-            <div className="text-center min-w-0">
-              <h1 className="text-base sm:text-lg font-semibold text-foreground truncate">Briefly Agent</h1>
-              <p className="text-[10px] sm:text-xs text-muted-foreground hidden sm:block">AI-powered document assistant</p>
-            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => {
+                if (isActionCenterOpen) {
+                  setIsActionCenterOpen(false);
+                  setPreviewDocId(null);
+                  setActionCenterCitationsMode('global');
+                  setActionCenterCitations(aggregatedCitations);
+                } else {
+                  openActionCenter('sources');
+                }
+              }}
+              className={cn("transition-colors h-7 w-7 sm:h-8 sm:w-8 flex-shrink-0", isSidebarOpen && "bg-accent text-accent-foreground")}
+              title="Toggle Action Center"
+            >
+              <Layers className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+            </Button>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              if (isActionCenterOpen) {
-                setIsActionCenterOpen(false);
-                setPreviewDocId(null);
-                setActionCenterCitationsMode('global');
-                setActionCenterCitations(aggregatedCitations);
-              } else {
-                openActionCenter('sources');
-              }
-            }}
-            className={cn("transition-colors h-7 w-7 sm:h-8 sm:w-8 flex-shrink-0", isSidebarOpen && "bg-accent text-accent-foreground")}
-            title="Toggle Action Center"
-          >
-            <Layers className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-          </Button>
-        </div>
 
-        {/* Chat Area */}
-        {hasUserMessage ? (
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            <div className="flex-1 overflow-y-auto px-2 sm:px-3 md:px-4 [scrollbar-gutter:stable]" ref={scrollAreaRef}>
-              <div className="max-w-6xl mx-auto py-4 sm:py-6 md:py-8 space-y-4 sm:space-y-6 md:space-y-8 pb-[calc(env(safe-area-inset-bottom)+5.5rem)] sm:pb-4 md:pb-8">
-                {messages.map((message, idx) => {
-                  console.log('Rendering message:', message);
-                  return (
-                    <div
-                      key={message.id}
-                      className={cn(
-                        "animate-in fade-in slide-in-from-bottom-4 duration-700",
-                        "group w-full flex gap-2 sm:gap-3 md:gap-4"
-                      )}
-                      style={{ animationDelay: `${idx * 50}ms` }}
-                    >
-                      {message.role === 'user' ? (
-                        <>
-                          {/* User Message - Right aligned */}
-                          <div className="flex-1 flex justify-end">
-                            <div className={cn(
-                              "max-w-[90%] sm:max-w-[85%] md:max-w-[75%]",
-                              "rounded-2xl rounded-tr-md px-3 sm:px-4 py-2.5 sm:py-3.5",
-                              "bg-gradient-to-br from-primary/90 to-primary",
-                              "text-primary-foreground shadow-lg shadow-primary/25",
-                              "border border-primary/20",
-                              "transition-all duration-300 hover:shadow-xl hover:shadow-primary/30",
-                              "backdrop-blur-sm"
-                            )}>
-                              <div className="prose prose-sm max-w-none text-primary-foreground [&>*]:text-primary-foreground text-xs sm:text-sm break-words">
-                                {message.content}
+          {/* Chat Area */}
+          {hasUserMessage ? (
+            // Main Chat Layout - Flex Column
+            <div className="flex flex-col flex-1 min-h-0 overflow-hidden relative">
+
+              {/* Messages Area - Flex Grow */}
+              <div className="flex-1 overflow-y-auto px-2 sm:px-3 md:px-4 scrollbar-hide" ref={scrollAreaRef}>
+                <div className="w-full max-w-[98%] mx-auto py-4 sm:py-6 md:py-8 space-y-4 sm:space-y-6 md:space-y-8 min-h-full">
+                  {messages.map((message, idx) => {
+                    console.log('Rendering message:', message);
+                    return (
+                      <div
+                        key={message.id}
+                        className={cn(
+                          "animate-in fade-in slide-in-from-bottom-4 duration-700",
+                          "group w-full flex gap-2 sm:gap-3 md:gap-4"
+                        )}
+                        style={{ animationDelay: `${idx * 50}ms` }}
+                      >
+                        {message.role === 'user' ? (
+                          <>
+                            {/* User Message - Right aligned */}
+                            <div className="flex-1 flex justify-end">
+                              <div className={cn(
+                                "max-w-[90%] sm:max-w-[85%] md:max-w-[75%]",
+                                "rounded-2xl rounded-tr-md px-3 sm:px-4 py-2.5 sm:py-3.5",
+                                "bg-gradient-to-br from-primary/90 to-primary",
+                                "text-primary-foreground shadow-lg shadow-primary/25",
+                                "border border-primary/20",
+                                "transition-all duration-300 hover:shadow-xl hover:shadow-primary/30",
+                                "backdrop-blur-sm"
+                              )}>
+                                <div className="prose prose-sm max-w-none text-primary-foreground [&>*]:text-primary-foreground text-xs sm:text-sm break-words">
+                                  {message.content}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          {/* AI Message - Left aligned with avatar */}
-                          <div className="flex-shrink-0">
-                            <div className={cn(
-                              "w-7 h-7 sm:w-8 sm:h-9 rounded-xl flex items-center justify-center",
-                              "bg-gradient-to-br shadow-md border border-border/50",
-                              themeColors.gradient.includes('blue') && "from-blue-500/10 via-indigo-500/10 to-purple-500/10",
-                              themeColors.gradient.includes('green') && "from-green-500/10 via-emerald-500/10 to-teal-500/10",
-                              themeColors.gradient.includes('purple') && "from-purple-500/10 via-fuchsia-500/10 to-pink-500/10",
-                              !themeColors.gradient.includes('blue') && !themeColors.gradient.includes('green') && !themeColors.gradient.includes('purple') && "from-muted/50 to-muted/30"
-                            )}>
-                              <Bot className={cn("h-3.5 w-3.5 sm:h-4 sm:w-4", themeColors.primary)} />
+                          </>
+                        ) : (
+                          <>
+                            {/* AI Message - Left aligned with avatar */}
+                            <div className="flex-shrink-0">
+                              <div className={cn(
+                                "w-7 h-7 sm:w-8 sm:h-9 rounded-xl flex items-center justify-center",
+                                "bg-gradient-to-br shadow-md border border-border/50",
+                                themeColors.gradient.includes('blue') && "from-blue-500/10 via-indigo-500/10 to-purple-500/10",
+                                themeColors.gradient.includes('green') && "from-green-500/10 via-emerald-500/10 to-teal-500/10",
+                                themeColors.gradient.includes('purple') && "from-purple-500/10 via-fuchsia-500/10 to-pink-500/10",
+                                !themeColors.gradient.includes('blue') && !themeColors.gradient.includes('green') && !themeColors.gradient.includes('purple') && "from-muted/50 to-muted/30"
+                              )}>
+                                <Bot className={cn("h-3.5 w-3.5 sm:h-4 sm:w-4", themeColors.primary)} />
+                              </div>
                             </div>
-                          </div>
-                          <div className="flex-1 min-w-0 space-y-2 sm:space-y-3 md:space-y-4">
-                            {/* Agent activity using Task component */}
-                            {(() => {
-                              const { steps: activitySteps, tools } = buildActivityInsights(
-                                message,
-                                currentTaskSteps,
-                                currentTools
-                              );
-                              const hasSteps = activitySteps.length > 0;
-                              const hasTools = tools.length > 0;
+                            <div className="flex-1 min-w-0 space-y-2 sm:space-y-3 md:space-y-4">
+                              {/* Agent activity using Task component */}
+                              {(() => {
+                                const { steps: activitySteps, tools, primaryStatus, primaryStatusState } = buildActivityInsights(message);
+                                const hasOnlyRespondStage = activitySteps.length === 1 && activitySteps[0]?.step === 'respond';
+                                const hasSteps = activitySteps.length > 0 && !hasOnlyRespondStage;
+                                const hasTools = tools.length > 0;
 
-                              if (!hasSteps && !hasTools) return null;
+                                if (!primaryStatus && !hasSteps && !hasTools) return null;
 
-                              return (
-                                <div className="space-y-3">
-                                  {/* Processing Steps Task */}
-                                  {hasSteps && (() => {
-                                    // Group steps by task or show as single task
-                                    const hasMultipleTasks = activitySteps.some((step: any) => step.task || step.category);
+                                return (
+                                  <div className="space-y-3">
+                                    {primaryStatus && (
+                                      <div className={cn(
+                                        "inline-flex max-w-full items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-medium",
+                                        primaryStatusState === 'error' && 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300',
+                                        primaryStatusState === 'in_progress' && 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300',
+                                        primaryStatusState === 'completed' && 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300'
+                                      )}>
+                                        <span className={cn(
+                                          "h-1.5 w-1.5 shrink-0 rounded-full",
+                                          primaryStatusState === 'error' && 'bg-red-500',
+                                          primaryStatusState === 'in_progress' && 'bg-amber-500 animate-pulse',
+                                          primaryStatusState === 'completed' && 'bg-emerald-500'
+                                        )} />
+                                        <span className="truncate">{primaryStatus}</span>
+                                      </div>
+                                    )}
 
-                                    if (hasMultipleTasks) {
-                                      // Group by task/category
-                                      const grouped = activitySteps.reduce((acc: any, step: any) => {
-                                        const key = step.task || step.category || 'general';
-                                        if (!acc[key]) {
-                                          acc[key] = [];
-                                        }
-                                        acc[key].push(step);
-                                        return acc;
-                                      }, {});
+                                    {/* Processing Steps Task */}
+                                    {hasSteps && (() => {
+                                      // Group steps by task or show as single task
+                                      const hasMultipleTasks = activitySteps.some((step: any) => step.task || step.category);
 
+                                      if (hasMultipleTasks) {
+                                        // Group by task/category
+                                        const grouped = activitySteps.reduce((acc: any, step: any) => {
+                                          const key = step.task || step.category || 'general';
+                                          if (!acc[key]) {
+                                            acc[key] = [];
+                                          }
+                                          acc[key].push(step);
+                                          return acc;
+                                        }, {});
+
+                                        return (
+                                          <>
+                                            {Object.entries(grouped).map(([taskKey, steps]: [string, any]) => (
+                                              <Task key={taskKey} defaultOpen={taskKey === Object.keys(grouped)[0]}>
+                                                <TaskTrigger title={steps[0]?.task || steps[0]?.category || 'Processing'} />
+                                                <TaskContent>
+                                                  {steps.map((step: any, index: number) => (
+                                                    <TaskItem key={`${step.step}-${index}`}>
+                                                      <div className="flex items-center justify-between gap-2">
+                                                        <span className="min-w-0 truncate">{step.description || step.title}</span>
+                                                        <span className={cn(
+                                                          "shrink-0 flex items-center justify-center w-5 h-5 rounded-full",
+                                                          step.status === 'error' && 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400',
+                                                          step.status === 'in_progress' && 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400',
+                                                          step.status === 'completed' && 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400'
+                                                        )}>
+                                                          {step.status === 'error' ? <X className="w-3 h-3" /> : step.status === 'in_progress' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                                                        </span>
+                                                      </div>
+                                                    </TaskItem>
+                                                  ))}
+                                                </TaskContent>
+                                              </Task>
+                                            ))}
+                                          </>
+                                        );
+                                      }
+
+                                      // Single task with all steps
                                       return (
-                                        <>
-                                          {Object.entries(grouped).map(([taskKey, steps]: [string, any]) => (
-                                            <Task key={taskKey} defaultOpen={taskKey === Object.keys(grouped)[0]}>
-                                              <TaskTrigger title={steps[0]?.task || steps[0]?.category || 'Processing'} />
-                                              <TaskContent>
-                                                {steps.map((step: any, index: number) => (
-                                                  <TaskItem key={`${step.step}-${index}`}>
-                                                    {step.description || step.title}
-                                                    {step.status === 'completed' && ' ✓'}
-                                                    {step.status === 'error' && ' ✗'}
-                                                  </TaskItem>
-                                                ))}
-                                              </TaskContent>
-                                            </Task>
-                                          ))}
-                                        </>
+                                        <Task defaultOpen={Boolean(message.isStreaming)}>
+                                          <TaskTrigger title="Activity" />
+                                          <TaskContent>
+                                            {activitySteps.map((step: any, index: number) => (
+                                              <TaskItem key={`${step.step}-${index}`}>
+                                                <div className="flex items-center justify-between gap-2">
+                                                  <span className="min-w-0 truncate">{step.description || step.title}</span>
+                                                  <span className={cn(
+                                                    "shrink-0 flex items-center justify-center w-5 h-5 rounded-full",
+                                                    step.status === 'error' && 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400',
+                                                    step.status === 'in_progress' && 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400',
+                                                    step.status === 'completed' && 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400'
+                                                  )}>
+                                                    {step.status === 'error' ? <X className="w-3 h-3" /> : step.status === 'in_progress' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                                                  </span>
+                                                </div>
+                                              </TaskItem>
+                                            ))}
+                                          </TaskContent>
+                                        </Task>
                                       );
-                                    }
+                                    })()}
 
-                                    // Single task with all steps
-                                    return (
-                                      <Task defaultOpen={true}>
-                                        <TaskTrigger title="Processing Steps" />
+                                    {/* Tools Task */}
+                                    {hasTools && (
+                                      <Task defaultOpen={false}>
+                                        <TaskTrigger title="Tool Calls" />
                                         <TaskContent>
-                                          {activitySteps.map((step: any, index: number) => (
-                                            <TaskItem key={`${step.step}-${index}`}>
-                                              {step.description || step.title}
-                                              {step.status === 'completed' && ' ✓'}
-                                              {step.status === 'error' && ' ✗'}
-                                              {step.status === 'in_progress' && ' ⏳'}
+                                          {tools.map((tool: any, index: number) => (
+                                            <TaskItem key={`tool-${tool.name}-${index}`}>
+                                              <div className="flex items-center justify-between gap-2">
+                                                <span className="min-w-0 truncate">
+                                                  {tool.name || tool.tool}
+                                                  {tool.description && tool.description !== tool.name && ` - ${tool.description}`}
+                                                </span>
+                                                <span className={cn(
+                                                  "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                                                  tool.status === 'error' && 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
+                                                  tool.status === 'in_progress' && 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
+                                                  tool.status === 'completed' && 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                                                )}>
+                                                  {tool.status === 'error' ? 'Error' : tool.status === 'in_progress' ? 'Running' : 'Done'}
+                                                  {tool.status === 'completed' && formatDurationMs(tool.startedAtMs, tool.endedAtMs) ? ` • ${formatDurationMs(tool.startedAtMs, tool.endedAtMs)}` : ''}
+                                                </span>
+                                              </div>
                                             </TaskItem>
                                           ))}
                                         </TaskContent>
                                       </Task>
-                                    );
-                                  })()}
+                                    )}
+                                  </div>
+                                );
+                              })()}
 
-                                  {/* Tools Task */}
-                                  {hasTools && (
-                                    <Task defaultOpen={hasSteps ? false : true}>
-                                      <TaskTrigger title="Tools Used" />
-                                      <TaskContent>
-                                        {tools.map((tool: any, index: number) => (
-                                          <TaskItem key={`tool-${tool.name}-${index}`}>
-                                            {tool.name || tool.tool}
-                                            {tool.description && ` - ${tool.description}`}
-                                            {tool.status === 'completed' && ' ✓'}
-                                            {tool.status === 'error' && ' ✗'}
-                                            {tool.status === 'running' && ' ⏳'}
-                                          </TaskItem>
-                                        ))}
-                                      </TaskContent>
-                                    </Task>
-                                  )}
-                                </div>
-                              );
-                            })()}
-
-                            {/* Main Response Content - Enhanced typography */}
-                            {message.content && (
-                              <div className={cn(
-                                "space-y-2 sm:space-y-3 rounded-xl sm:rounded-2xl p-3 sm:p-4 md:p-5",
-                                "bg-gradient-to-br from-card/50 to-transparent",
-                                "border border-border/30",
-                                "transition-all duration-300 hover:border-border/50"
-                              )}>
-                                <div className="prose prose-sm max-w-none text-foreground dark:prose-invert [&>p]:leading-relaxed text-xs sm:text-sm break-words overflow-wrap-anywhere">
+                              {/* Main Response Content - Enhanced typography */}
+                              {message.content && (
+                                <div className="prose prose-sm max-w-none text-foreground dark:prose-invert [&>p]:leading-relaxed text-xs sm:text-sm break-words overflow-wrap-anywhere pl-1">
                                   {processContentWithCitations(
                                     message.content,
                                     message.citations,
                                     (citation, context) => handlePreviewFromMessage(citation, context)
                                   )}
                                 </div>
-                              </div>
-                            )}
+                              )}
 
-                            {message.metadata?.list_mode && Array.isArray(message.metadata?.results_data) && message.metadata.results_data.length > 0 && (
-                              <DocumentResultsTable
-                                columns={message.metadata?.columns || []}
-                                rows={message.metadata?.results_data || []}
-                                totalCount={message.metadata?.total_count ?? null}
-                                hasMore={Boolean(message.metadata?.has_more) && message.id === lastListMessageId}
-                                isLoadingMore={Boolean(loadingMoreByMessageId[message.id])}
-                                previewLimit={10}
-                                onViewAllInSidebar={() => handleViewAllInSidebar(message.id)}
-                                onViewMore={
-                                  message.id === lastListMessageId
-                                    ? () => fetchAllResultsForMessage(message.id)
-                                    : undefined
-                                }
-                                className="mt-2 sm:mt-3"
-                              />
-                            )}
+                              {message.metadata?.list_mode && Array.isArray(message.metadata?.results_data) && message.metadata.results_data.length > 0 && (
+                                <DocumentResultsTable
+                                  columns={message.metadata?.columns || []}
+                                  rows={message.metadata?.results_data || []}
+                                  totalCount={message.metadata?.total_count ?? null}
+                                  hasMore={Boolean(message.metadata?.has_more) && message.id === lastListMessageId}
+                                  isLoadingMore={Boolean(loadingMoreByMessageId[message.id])}
+                                  previewLimit={10}
+                                  onViewAllInSidebar={() => handleViewAllInSidebar(message.id)}
+                                  onViewMore={
+                                    message.id === lastListMessageId
+                                      ? () => fetchAllResultsForMessage(message.id)
+                                      : undefined
+                                  }
+                                  className="mt-2 sm:mt-3"
+                                />
+                              )}
 
-                            {showTokenUsage && message.usage && (
-                              <div className="text-[10px] sm:text-xs text-muted-foreground">
-                                Tokens: in {message.usage.tokensIn ?? 'n/a'} out {message.usage.tokensOut ?? 'n/a'} total {message.usage.tokensTotal ?? 'n/a'}
-                                {message.usage.duration ? ` • ${message.usage.duration.toFixed(2)}s` : ''}
-                                {message.usage.model ? ` • ${message.usage.model}` : ''}
-                              </div>
-                            )}
-
-                            {/* Loading State - Shimmer animation */}
-                            {message.isStreaming && !message.content && currentTaskSteps.some(step => step.step === 'search_documents') && (
-                              <div className="flex items-center gap-2 sm:gap-3 p-3 sm:p-4 rounded-xl sm:rounded-2xl bg-muted/20 border border-border/30">
-                                <div className="flex gap-1.5">
-                                  <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-primary/60 animate-pulse" style={{ animationDelay: '0ms' }} />
-                                  <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-primary/60 animate-pulse" style={{ animationDelay: '150ms' }} />
-                                  <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-primary/60 animate-pulse" style={{ animationDelay: '300ms' }} />
+                              {showTokenUsage && message.usage && (
+                                <div className="text-[10px] sm:text-xs text-muted-foreground">
+                                  Tokens: in {message.usage.tokensIn ?? 'n/a'} out {message.usage.tokensOut ?? 'n/a'} total {message.usage.tokensTotal ?? 'n/a'}
+                                  {message.usage.duration ? ` • ${message.usage.duration.toFixed(2)}s` : ''}
+                                  {message.usage.model ? ` • ${message.usage.model}` : ''}
                                 </div>
-                                <Shimmer as="span" className="text-xs sm:text-sm" duration={2}>
-                                  Thinking...
-                                </Shimmer>
-                              </div>
-                            )}
+                              )}
 
-                            {message.citations && message.citations.length > 0 && (
-                              <div className={cn(
-                                "rounded-xl sm:rounded-2xl border border-border/40 p-3 sm:p-4",
-                                "bg-gradient-to-br from-muted/20 to-transparent",
-                                "flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4",
-                                "transition-all duration-300 hover:border-border/60 hover:shadow-sm"
-                              )}>
-                                <div className="flex items-center gap-2 sm:gap-3">
-                                  <div className={cn(
-                                    "w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center",
-                                    "bg-gradient-to-br from-primary/10 to-primary/5",
-                                    "border border-primary/20"
-                                  )}>
-                                    <FileText className={cn("h-3.5 w-3.5 sm:h-4 sm:w-4", themeColors.primary)} />
+                              {/* Loading State - Shimmer animation */}
+                              {message.isStreaming && !message.content && (
+                                <div className="flex items-center gap-2 sm:gap-3 p-3 sm:p-4 rounded-xl sm:rounded-2xl bg-muted/20 border border-border/30">
+                                  <div className="flex gap-1.5">
+                                    <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-primary/60 animate-pulse" style={{ animationDelay: '0ms' }} />
+                                    <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-primary/60 animate-pulse" style={{ animationDelay: '150ms' }} />
+                                    <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-primary/60 animate-pulse" style={{ animationDelay: '300ms' }} />
                                   </div>
-                                  <div>
-                                    <p className="text-xs sm:text-sm font-semibold text-foreground">Sources</p>
-                                    <p className="text-[10px] sm:text-xs text-muted-foreground">
-                                      {message.citations.length} reference{message.citations.length > 1 ? 's' : ''} cited in this response.
-                                    </p>
-                                  </div>
+                                  <Shimmer as="span" className="text-xs sm:text-sm" duration={2}>
+                                    Working...
+                                  </Shimmer>
                                 </div>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className={cn("rounded-full px-3 sm:px-4 text-xs sm:text-sm h-8 sm:h-9", themeColors.buttonHover)}
-                                  onClick={() => openActionCenter('sources', { citations: message.citations || [] })}
-                                >
-                                  <span className="hidden sm:inline">View in Action Center</span>
-                                  <span className="sm:hidden">View Sources</span>
-                                </Button>
-                              </div>
-                            )}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
+                              )}
 
-              </div>
-            </div>
-
-            {/* Input Area - Floating with elegant shadow */}
-            <div className={cn(
-              "sticky bottom-0 pt-2 sm:pt-3 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:pb-3 md:pb-4",
-              "bg-gradient-to-t from-background via-background to-transparent",
-              "transition-all duration-300 z-10 flex-shrink-0"
-            )}>
-              <div className="w-full max-w-5xl mx-auto px-2 sm:px-3 md:px-4">
-                <div className={cn(
-                  "animate-in fade-in slide-in-from-bottom-4 duration-500",
-                  "shadow-2xl shadow-black/10 dark:shadow-black/40",
-                  "rounded-2xl sm:rounded-3xl"
-                )}>
-                  <BrieflyChatBox
-                    folders={folderOptions}
-                    documents={documentOptions}
-                    defaultMode={chatContext.type === 'folder' ? 'folder' : chatContext.type === 'document' ? 'document' : 'all'}
-                    defaultWebSearch={webSearchEnabled}
-                    webSearch={webSearchEnabled}
-                    onWebSearchChange={handleWebSearchChange}
-                    defaultFolderId={selectedFolderId}
-                    defaultDocumentId={selectedDocumentId}
-                    pinnedDocIds={pinnedDocIds}
-                    onPinnedDocIdsChange={setPinnedDocIds}
-                    onRequestFilePicker={() => setFileNavigatorOpen(true)}
-                    placeholder={
-                      chatContext.type === 'document'
-                        ? `Ask about "${chatContext.name || 'this document'}"...`
-                        : chatContext.type === 'folder'
-                          ? `Ask about documents in "${chatContext.name || 'this folder'}"...`
-                          : 'Ask me about your documents or anything else...'
-                    }
-                    sending={isLoading}
-                    onSend={({ text, mode, folderId, documentId, webSearch }) => {
-                      let nextContext: ChatContext = { type: 'org' };
-                      if (mode === 'folder' && folderId) {
-                        const path = folderId.split('/').filter(Boolean);
-                        const meta = getFolderMetadata(path);
-                        nextContext = { type: 'folder', id: meta?.id, name: meta?.title || folderId, folderPath: path };
-                      } else if (mode === 'document' && documentId) {
-                        const doc = allDocs.find(d => d.id === documentId);
-                        nextContext = { type: 'document', id: documentId, name: doc?.title || doc?.name };
-                      }
-                      setChatContext(nextContext);
-                      setWebSearchEnabled(webSearch);
-                      handleSubmit(text, nextContext);
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          // Beautiful empty state with centered input
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            <div className="flex-1 flex items-center justify-center py-4 sm:py-8 overflow-y-auto pb-[calc(env(safe-area-inset-bottom)+5rem)] md:pb-8">
-              <div className="w-full max-w-5xl mx-auto px-2 sm:px-3 md:px-4">
-                {/* Welcome Message */}
-                <div className="mb-6 sm:mb-8 md:mb-12 text-center animate-in fade-in slide-in-from-top-4 duration-700">
-                  <div className="mb-4 sm:mb-6 inline-flex items-center justify-center">
-                    <div className={cn(
-                      "w-16 h-16 sm:w-20 sm:h-20 rounded-2xl sm:rounded-3xl flex items-center justify-center",
-                      "bg-gradient-to-br shadow-2xl shadow-primary/30 border-2 border-primary/30",
-                      "animate-in zoom-in duration-1000",
-                      themeColors.gradient.includes('blue') && "from-blue-500/20 via-indigo-500/20 to-purple-500/20",
-                      themeColors.gradient.includes('green') && "from-green-500/20 via-emerald-500/20 to-teal-500/20",
-                      themeColors.gradient.includes('purple') && "from-purple-500/20 via-fuchsia-500/20 to-pink-500/20",
-                      !themeColors.gradient.includes('blue') && !themeColors.gradient.includes('green') && !themeColors.gradient.includes('purple') && "from-primary/20 via-primary/10 to-primary/20"
-                    )}>
-                      <Sparkles className={cn("h-8 w-8 sm:h-10 sm:w-10", themeColors.primary)} />
-                    </div>
-                  </div>
-                  <h2 className="text-xl sm:text-2xl md:text-3xl font-bold text-foreground mb-2 sm:mb-3 tracking-tight px-2">
-                    What can I help you with?
-                  </h2>
-                  <p className="text-sm sm:text-base md:text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed px-2">
-                    Ask me anything about your documents. I can search, summarize, and provide insights.
-                  </p>
-
-                  {/* Quick action suggestions */}
-                  <div className="mt-6 sm:mt-8 flex flex-wrap justify-center gap-2 sm:gap-3 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-150 px-2">
-                    {[
-                      'Summarize recent documents',
-                      'Find information about...',
-                      'Compare documents',
-                    ].map((suggestion, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => setInputValue(suggestion)}
-                        className={cn(
-                          "px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg sm:rounded-xl text-xs sm:text-sm font-medium",
-                          "border border-border/50 bg-muted/30",
-                          "transition-all duration-300",
-                          "hover:border-primary/50 hover:bg-primary/5 hover:shadow-md hover:-translate-y-0.5",
-                          "active:translate-y-0"
+                              {message.citations && message.citations.length > 0 && (
+                                <div className={cn(
+                                  "rounded-xl sm:rounded-2xl border border-border/40 p-3 sm:p-4",
+                                  "bg-gradient-to-br from-muted/20 to-transparent",
+                                  "flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4",
+                                  "transition-all duration-300 hover:border-border/60 hover:shadow-sm"
+                                )}>
+                                  <div className="flex items-center gap-2 sm:gap-3">
+                                    <div className={cn(
+                                      "w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center",
+                                      "bg-gradient-to-br from-primary/10 to-primary/5",
+                                      "border border-primary/20"
+                                    )}>
+                                      <FileText className={cn("h-3.5 w-3.5 sm:h-4 sm:w-4", themeColors.primary)} />
+                                    </div>
+                                    <div>
+                                      <p className="text-xs sm:text-sm font-semibold text-foreground">Sources</p>
+                                      <p className="text-[10px] sm:text-xs text-muted-foreground">
+                                        {message.citations.length} reference{message.citations.length > 1 ? 's' : ''} cited in this response.
+                                        {typeof message.citationMetrics?.unresolved_anchor_count === 'number' && message.citationMetrics.unresolved_anchor_count > 0
+                                          ? ` ${message.citationMetrics.unresolved_anchor_count} unresolved anchor${message.citationMetrics.unresolved_anchor_count > 1 ? 's' : ''}.`
+                                          : ''}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className={cn("rounded-full px-3 sm:px-4 text-xs sm:text-sm h-8 sm:h-9", themeColors.buttonHover)}
+                                    onClick={() => openActionCenter('sources', { citations: message.citations || [] })}
+                                  >
+                                    <span className="hidden sm:inline">View in Action Center</span>
+                                    <span className="sm:hidden">View Sources</span>
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          </>
                         )}
-                      >
-                        {suggestion}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                      </div>
+                    );
+                  })}
 
-                {/* Input Box */}
-                <div className={cn(
-                  "animate-in fade-in slide-in-from-bottom-8 duration-700 delay-300",
-                  "shadow-2xl shadow-black/10 dark:shadow-black/40",
-                  "rounded-2xl sm:rounded-3xl"
-                )}>
-                  <BrieflyChatBox
-                    folders={folderOptions}
-                    documents={documentOptions}
-                    defaultMode={chatContext.type === 'folder' ? 'folder' : chatContext.type === 'document' ? 'document' : 'all'}
-                    defaultWebSearch={webSearchEnabled}
-                    webSearch={webSearchEnabled}
-                    onWebSearchChange={handleWebSearchChange}
-                    defaultFolderId={selectedFolderId}
-                    defaultDocumentId={selectedDocumentId}
-                    pinnedDocIds={pinnedDocIds}
-                    onPinnedDocIdsChange={setPinnedDocIds}
-                    onRequestFilePicker={() => setFileNavigatorOpen(true)}
-                    placeholder={
-                      chatContext.type === 'document'
-                        ? `Ask about "${chatContext.name || 'this document'}"...`
-                        : chatContext.type === 'folder'
-                          ? `Ask about documents in "${chatContext.name || 'this folder'}"...`
-                          : 'Type your question here...'
-                    }
-                    sending={isLoading}
-                    onSend={({ text, mode, folderId, documentId, webSearch }) => {
-                      let nextContext: ChatContext = { type: 'org' };
-                      if (mode === 'folder' && folderId) {
-                        const path = folderId.split('/').filter(Boolean);
-                        const meta = getFolderMetadata(path);
-                        nextContext = { type: 'folder', id: meta?.id, name: meta?.title || folderId, folderPath: path };
-                      } else if (mode === 'document' && documentId) {
-                        const doc = allDocs.find(d => d.id === documentId);
-                        nextContext = { type: 'document', id: documentId, name: doc?.title || doc?.name };
+                </div>
+              </div>
+
+              <div className="flex-shrink-0 z-20 bg-background pt-2 pb-[calc(env(safe-area-inset-bottom)+1rem)] relative">
+                {/* Gradient Fade Top */}
+                <div className="absolute -top-10 left-0 right-0 h-10 bg-gradient-to-t from-background to-transparent pointer-events-none" />
+
+                <div className="w-full max-w-4xl mx-auto px-2 sm:px-3 md:px-4">
+                  <div className={cn(
+                    "animate-in fade-in slide-in-from-bottom-4 duration-500",
+                    "shadow-2xl shadow-black/10 dark:shadow-black/40",
+                    "rounded-2xl sm:rounded-3xl"
+                  )}>
+                    <BrieflyChatBox
+                      folders={folderOptions}
+                      documents={documentOptions}
+                      defaultMode={chatContext.type === 'folder' ? 'folder' : chatContext.type === 'document' ? 'document' : 'all'}
+                      defaultWebSearch={webSearchEnabled}
+                      webSearch={webSearchEnabled}
+                      onWebSearchChange={handleWebSearchChange}
+                      defaultFolderId={selectedFolderId}
+                      defaultDocumentId={selectedDocumentId}
+                      pinnedDocIds={pinnedDocIds}
+                      onPinnedDocIdsChange={setPinnedDocIds}
+                      onRequestFilePicker={() => setFileNavigatorOpen(true)}
+                      placeholder={
+                        chatContext.type === 'document'
+                          ? `Ask about "${chatContext.name || 'this document'}"...`
+                          : chatContext.type === 'folder'
+                            ? `Ask about documents in "${chatContext.name || 'this folder'}"...`
+                            : 'Ask me about your documents or anything else...'
                       }
-                      setChatContext(nextContext);
-                      setWebSearchEnabled(webSearch);
-                      handleSubmit(text, nextContext);
-                    }}
-                  />
+                      sending={isLoading}
+                      onSend={({ text, mode, folderId, documentId, webSearch }) => {
+                        let nextContext: ChatContext = { type: 'org' };
+                        if (mode === 'folder' && folderId) {
+                          const path = folderId.split('/').filter(Boolean);
+                          const meta = getFolderMetadata(path);
+                          nextContext = { type: 'folder', id: meta?.id, name: meta?.title || folderId, folderPath: path };
+                        } else if (mode === 'document' && documentId) {
+                          const doc = allDocs.find(d => d.id === documentId);
+                          nextContext = { type: 'document', id: documentId, name: doc?.title || doc?.name };
+                        }
+                        setChatContext(nextContext);
+                        setWebSearchEnabled(webSearch);
+                        handleSubmit(text, nextContext);
+                      }}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          ) : (
+            // Beautiful empty state with centered input
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+              <div className="flex-1 flex items-center justify-center py-4 sm:py-8 overflow-y-auto pb-[calc(env(safe-area-inset-bottom)+5rem)] md:pb-8">
+                <div className="w-full max-w-5xl mx-auto px-2 sm:px-3 md:px-4">
+                  {/* Welcome Message */}
+                  <div className="mb-6 sm:mb-8 md:mb-12 text-center animate-in fade-in slide-in-from-top-4 duration-700">
+                    <div className="mb-4 sm:mb-6 inline-flex items-center justify-center">
+                      <div className={cn(
+                        "w-16 h-16 sm:w-20 sm:h-20 rounded-2xl sm:rounded-3xl flex items-center justify-center",
+                        "bg-gradient-to-br shadow-2xl shadow-primary/30 border-2 border-primary/30",
+                        "animate-in zoom-in duration-1000",
+                        themeColors.gradient.includes('blue') && "from-blue-500/20 via-indigo-500/20 to-purple-500/20",
+                        themeColors.gradient.includes('green') && "from-green-500/20 via-emerald-500/20 to-teal-500/20",
+                        themeColors.gradient.includes('purple') && "from-purple-500/20 via-fuchsia-500/20 to-pink-500/20",
+                        !themeColors.gradient.includes('blue') && !themeColors.gradient.includes('green') && !themeColors.gradient.includes('purple') && "from-primary/20 via-primary/10 to-primary/20"
+                      )}>
+                        <Sparkles className={cn("h-8 w-8 sm:h-10 sm:w-10", themeColors.primary)} />
+                      </div>
+                    </div>
+                    <h2 className="text-xl sm:text-2xl md:text-3xl font-bold text-foreground mb-2 sm:mb-3 tracking-tight px-2">
+                      What can I help you with?
+                    </h2>
+                    <p className="text-sm sm:text-base md:text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed px-2">
+                      Ask me anything about your documents. I can search, summarize, and provide insights.
+                    </p>
+
+                    {/* Quick action suggestions */}
+                    <div className="mt-6 sm:mt-8 flex flex-wrap justify-center gap-2 sm:gap-3 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-150 px-2">
+                      {[
+                        'Summarize recent documents',
+                        'Find information about...',
+                        'Compare documents',
+                      ].map((suggestion, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => setInputValue(suggestion)}
+                          className={cn(
+                            "px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg sm:rounded-xl text-xs sm:text-sm font-medium",
+                            "border border-border/50 bg-muted/30",
+                            "transition-all duration-300",
+                            "hover:border-primary/50 hover:bg-primary/5 hover:shadow-md hover:-translate-y-0.5",
+                            "active:translate-y-0"
+                          )}
+                        >
+                          {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Input Box */}
+                  <div className={cn(
+                    "animate-in fade-in slide-in-from-bottom-8 duration-700 delay-300",
+                    "shadow-2xl shadow-black/10 dark:shadow-black/40",
+                    "rounded-2xl sm:rounded-3xl"
+                  )}>
+                    <BrieflyChatBox
+                      folders={folderOptions}
+                      documents={documentOptions}
+                      defaultMode={chatContext.type === 'folder' ? 'folder' : chatContext.type === 'document' ? 'document' : 'all'}
+                      defaultWebSearch={webSearchEnabled}
+                      webSearch={webSearchEnabled}
+                      onWebSearchChange={handleWebSearchChange}
+                      defaultFolderId={selectedFolderId}
+                      defaultDocumentId={selectedDocumentId}
+                      pinnedDocIds={pinnedDocIds}
+                      onPinnedDocIdsChange={setPinnedDocIds}
+                      onRequestFilePicker={() => setFileNavigatorOpen(true)}
+                      placeholder={
+                        chatContext.type === 'document'
+                          ? `Ask about "${chatContext.name || 'this document'}"...`
+                          : chatContext.type === 'folder'
+                            ? `Ask about documents in "${chatContext.name || 'this folder'}"...`
+                            : 'Type your question here...'
+                      }
+                      sending={isLoading}
+                      onSend={({ text, mode, folderId, documentId, webSearch }) => {
+                        let nextContext: ChatContext = { type: 'org' };
+                        if (mode === 'folder' && folderId) {
+                          const path = folderId.split('/').filter(Boolean);
+                          const meta = getFolderMetadata(path);
+                          nextContext = { type: 'folder', id: meta?.id, name: meta?.title || folderId, folderPath: path };
+                        } else if (mode === 'document' && documentId) {
+                          const doc = allDocs.find(d => d.id === documentId);
+                          nextContext = { type: 'document', id: documentId, name: doc?.title || doc?.name };
+                        }
+                        setChatContext(nextContext);
+                        setWebSearchEnabled(webSearch);
+                        handleSubmit(text, nextContext);
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <Dialog
+          open={isWebSearchDialogOpen}
+          onOpenChange={(open) => {
+            if (!open) {
+              cancelWebSearchEnable();
+            } else {
+              setIsWebSearchDialogOpen(true);
+            }
+          }}
+        >
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Enable web search?</DialogTitle>
+              <DialogDescription>
+                Turning on web search starts a fresh chat session so the assistant can cite live articles.
+                Continue and reset the current conversation?
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2">
+              <Button variant="outline" onClick={cancelWebSearchEnable}>
+                Cancel
+              </Button>
+              <Button onClick={confirmWebSearchEnable}>
+                Enable web search
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <FinderPicker
+          open={fileNavigatorOpen}
+          onOpenChange={setFileNavigatorOpen}
+          mode="doc"
+          maxDocs={2}
+          initialSelectedDocIds={pinnedDocIds}
+          onConfirm={({ docs }) => {
+            const ids = (docs || []).map((d) => d.id).filter(Boolean).slice(0, 2);
+            setPinnedDocIds(ids);
+          }}
+        />
+
+        {/* Action Center - render in flex container when pinned */}
+        {isActionCenterPinned && (
+          <ActionCenter
+            open={true} // Always open when pinned
+            onOpenChange={(open) => {
+              if (!isActionCenterPinned) {
+                setIsActionCenterOpen(open);
+              }
+              if (!open) {
+                setPreviewDocId(null);
+                setPreviewDocPage(null);
+                setPreviewCitation(null);
+                setIsActionCenterPinned(false);
+              }
+            }}
+            isPinned={isActionCenterPinned}
+            onPinnedChange={(pinned) => {
+              setIsActionCenterPinned(pinned);
+              // When unpinning, keep the action center open in overlay mode
+              // Use setTimeout to ensure the overlay component mounts before setting open state
+              if (!pinned) {
+                setTimeout(() => setIsActionCenterOpen(true), 0);
+              }
+            }}
+            activeDocumentId={previewDocId}
+            activeDocumentPage={previewDocPage}
+            onSelectDocument={handlePreviewDocument}
+            onSelectCitation={setPreviewCitation}
+            activeCitation={previewCitation}
+            memoryDocIds={teamMemory}
+            citations={actionCenterCitations}
+            allDocuments={allDocs}
+            activeTab={actionCenterTab}
+            onTabChange={setActionCenterTab}
+            citationsMode={actionCenterCitationsMode}
+            onCitationsModeChange={handleSourcesModeChange}
+            hasMessageScopedCitations={messageScopedCitations.length > 0}
+          />
         )}
       </div>
 
-      <Dialog
-        open={isWebSearchDialogOpen}
-        onOpenChange={(open) => {
-          if (!open) {
-            cancelWebSearchEnable();
-          } else {
-            setIsWebSearchDialogOpen(true);
-          }
-        }}
-      >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Enable web search?</DialogTitle>
-            <DialogDescription>
-              Turning on web search starts a fresh chat session so the assistant can cite live articles.
-              Continue and reset the current conversation?
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2">
-            <Button variant="outline" onClick={cancelWebSearchEnable}>
-              Cancel
-            </Button>
-            <Button onClick={confirmWebSearchEnable}>
-              Enable web search
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <FinderPicker
-        open={fileNavigatorOpen}
-        onOpenChange={setFileNavigatorOpen}
-        mode="doc"
-        maxDocs={2}
-        initialSelectedDocIds={pinnedDocIds}
-        onConfirm={({ docs }) => {
-          const ids = (docs || []).map((d) => d.id).filter(Boolean).slice(0, 2);
-          setPinnedDocIds(ids);
-        }}
-      />
-
-      <ActionCenter
-        open={isSidebarOpen}
-        onOpenChange={(open) => {
-          setIsActionCenterOpen(open);
-          if (!open) {
-            setPreviewDocId(null);
-            setPreviewDocPage(null);
-            setPreviewCitation(null);
-          }
-        }}
-        activeDocumentId={previewDocId}
-        activeDocumentPage={previewDocPage}
-        onSelectDocument={handlePreviewDocument}
-        onSelectCitation={setPreviewCitation}
-        activeCitation={previewCitation}
-        memoryDocIds={teamMemory}
-        citations={actionCenterCitations}
-        allDocuments={allDocs}
-        activeTab={actionCenterTab}
-        onTabChange={setActionCenterTab}
-        citationsMode={actionCenterCitationsMode}
-        onCitationsModeChange={handleSourcesModeChange}
-        hasMessageScopedCitations={messageScopedCitations.length > 0}
-      />
-      {resultsSidebarData && (
-        <ResultsSidebar
-          open={resultsSidebarOpen}
-          onOpenChange={setResultsSidebarOpen}
-          columns={resultsSidebarData.columns}
-          rows={resultsSidebarData.rows}
-          totalCount={resultsSidebarData.totalCount}
-          docType={resultsSidebarData.docType}
+      {/* Action Center - overlay mode when not pinned */}
+      {!isActionCenterPinned && (
+        <ActionCenter
+          open={isSidebarOpen}
+          onOpenChange={(open) => {
+            if (!isActionCenterPinned) {
+              setIsActionCenterOpen(open);
+            }
+            if (!open) {
+              setPreviewDocId(null);
+              setPreviewDocPage(null);
+              setPreviewCitation(null);
+              setIsActionCenterPinned(false);
+            }
+          }}
+          isPinned={isActionCenterPinned}
+          onPinnedChange={(pinned) => {
+            setIsActionCenterPinned(pinned);
+            // When pinning from overlay, close the overlay
+            if (pinned) {
+              setIsActionCenterOpen(false);
+            }
+          }}
+          activeDocumentId={previewDocId}
+          activeDocumentPage={previewDocPage}
+          onSelectDocument={handlePreviewDocument}
+          onSelectCitation={setPreviewCitation}
+          activeCitation={previewCitation}
+          memoryDocIds={teamMemory}
+          citations={actionCenterCitations}
+          allDocuments={allDocs}
+          activeTab={actionCenterTab}
+          onTabChange={setActionCenterTab}
+          citationsMode={actionCenterCitationsMode}
+          onCitationsModeChange={handleSourcesModeChange}
+          hasMessageScopedCitations={messageScopedCitations.length > 0}
         />
       )}
-    </AppLayout>
+      {
+        resultsSidebarData && (
+          <ResultsSidebar
+            open={resultsSidebarOpen}
+            onOpenChange={setResultsSidebarOpen}
+            columns={resultsSidebarData.columns}
+            rows={resultsSidebarData.rows}
+            totalCount={resultsSidebarData.totalCount}
+            docType={resultsSidebarData.docType}
+          />
+        )
+      }
+    </AppLayout >
   );
 }

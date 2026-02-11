@@ -135,14 +135,26 @@ async function performFetch<T = any>(
     if (token && !headers['Authorization']) headers['Authorization'] = `Bearer ${token}`;
   } catch { }
 
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: opts.body !== undefined
-      ? (headers['Content-Type'] === 'application/json' ? JSON.stringify(opts.body) : (opts.body as any))
-      : undefined,
-    signal: opts.signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method,
+      headers,
+      body: opts.body !== undefined
+        ? (headers['Content-Type'] === 'application/json' ? JSON.stringify(opts.body) : (opts.body as any))
+        : undefined,
+      signal: opts.signal,
+    });
+  } catch (e: any) {
+    const err = new Error(
+      `API ${method} ${path} failed: could not reach server at ${BASE_URL}. ` +
+      `Make sure briefly-api is running and reachable (try ${BASE_URL}/health).`
+    );
+    (err as any).cause = e;
+    (err as any).isNetworkError = true;
+    (err as any).url = url;
+    throw err;
+  }
 
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;

@@ -8,9 +8,9 @@ import { useSettings } from '@/hooks/use-settings';
 import type { StoredDocument } from '@/lib/types';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import { Grid2X2, List, Grid3X3, Folder as FolderIcon, FileText, Trash2, ArrowLeft, X, FileImage, FileSpreadsheet, FileType, File, Home, ChevronRight } from 'lucide-react';
+import { Grid2X2, List, Grid3X3, Folder as FolderIcon, FileText, Trash2, ArrowLeft, X, FileImage, FileSpreadsheet, FileType, File, Home, ChevronRight, Share2, Copy, Check, Lock } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
@@ -23,7 +23,7 @@ import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDepartments } from '@/hooks/use-departments';
 import { Badge } from '@/components/ui/badge';
-import { Dialog as UiDialog, DialogContent as UiDialogContent, DialogFooter as UiDialogFooter, DialogHeader as UiDialogHeader, DialogTitle as UiDialogTitle } from '@/components/ui/dialog';
+import { Dialog as UiDialog, DialogContent as UiDialogContent, DialogDescription as UiDialogDescription, DialogFooter as UiDialogFooter, DialogHeader as UiDialogHeader, DialogTitle as UiDialogTitle } from '@/components/ui/dialog';
 import { Checkbox } from '@/components/ui/checkbox';
 import { apiFetch, getApiContext } from '@/lib/api';
 import { MobileFilterButton, FilterSection } from '@/components/mobile-filter-button';
@@ -31,8 +31,27 @@ import { FolderPickerDialog } from '@/components/folder-picker-dialog';
 import { useFolders as useFolderExplorer } from '@/hooks/use-folders';
 import { Plus, Upload } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 type ViewMode = 'grid' | 'list' | 'cards';
+type FolderShareRow = {
+  id: string;
+  folder_path: string[];
+  created_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  views_count: number | null;
+  allow_download: boolean;
+  allow_zip_download: boolean;
+  requires_password: boolean;
+  last_accessed_at?: string | null;
+};
+
+function isFolderShareLinkActive(link: FolderShareRow) {
+  if (link.revoked_at) return false;
+  if (!link.expires_at) return true;
+  return new Date(link.expires_at).getTime() > Date.now();
+}
 
 // Helper to get file type icon and color based on mime type or filename
 function getFileTypeIcon(mimeType?: string, filename?: string): { icon: React.ElementType; color: string; bg: string } {
@@ -425,20 +444,40 @@ function DocumentsPageContent() {
   const [editingTitle, setEditingTitle] = useState('');
   const [shareOpen, setShareOpen] = useState(false);
   const [sharePath, setSharePath] = useState<string[]>([]);
+  const [shareModalTab, setShareModalTab] = useState<'internal' | 'external'>('internal');
   const [shareDeptIds, setShareDeptIds] = useState<string[]>([]);
+  const [ownerShareDeptId, setOwnerShareDeptId] = useState<string | null>(null);
+  const [folderLinkExpiresInDays, setFolderLinkExpiresInDays] = useState('7');
+  const [folderLinkPassword, setFolderLinkPassword] = useState('');
+  const [folderLinkAllowZip, setFolderLinkAllowZip] = useState(true);
+  const [folderLinkLoading, setFolderLinkLoading] = useState(false);
+  const [folderLinkError, setFolderLinkError] = useState<string | null>(null);
+  const [folderLinkUrl, setFolderLinkUrl] = useState<string | null>(null);
+  const [folderLinkCopied, setFolderLinkCopied] = useState(false);
+  const [folderShareLinks, setFolderShareLinks] = useState<FolderShareRow[]>([]);
+  const [folderShareLinksLoading, setFolderShareLinksLoading] = useState(false);
+  const [folderShareLinksError, setFolderShareLinksError] = useState<string | null>(null);
+  const [revokingShareId, setRevokingShareId] = useState<string | null>(null);
   const [folderAccess, setFolderAccess] = useState<Record<string, string[]>>({});
+  const [externalFolderShares, setExternalFolderShares] = useState<Record<string, { count: number; requiresPassword: boolean }>>({});
   const isAdmin = hasPermission('org.manage_members');
   const canShare = hasPermission('documents.share');
 
   // Track which folder paths have been fetched to avoid re-fetching
   const fetchedFolderPathsRef = useRef<Set<string>>(new Set());
+  const fetchedExternalFolderPathsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!canShare) return;
     const orgId = getApiContext().orgId || '';
     if (!orgId) return;
 
-    const missing = currentFolders
+    const pathsToInspect = [
+      ...currentFolders,
+      ...(path.length > 0 ? [path] : []),
+    ];
+
+    const missing = pathsToInspect
       .map(p => p.filter(Boolean))
       .filter(p => p.length > 0)
       .filter(p => {
@@ -461,7 +500,50 @@ function DocumentsPageContent() {
         setFolderAccess(prev => ({ ...prev, ...map }));
       } catch { }
     })();
-  }, [currentFolders, canShare]);
+  }, [currentFolders, path, canShare]);
+
+  useEffect(() => {
+    if (!canShare || !isAdmin) return;
+    const orgId = getApiContext().orgId || '';
+    if (!orgId) return;
+
+    const pathsToInspect = [
+      ...currentFolders,
+      ...(path.length > 0 ? [path] : []),
+    ];
+    const missing = pathsToInspect
+      .map((p) => p.filter(Boolean))
+      .filter((p) => p.length > 0)
+      .filter((p) => {
+        const key = p.join('/');
+        return !fetchedExternalFolderPathsRef.current.has(key);
+      });
+
+    if (missing.length === 0) return;
+    missing.forEach((p) => fetchedExternalFolderPathsRef.current.add(p.join('/')));
+
+    (async () => {
+      try {
+        const rows = await apiFetch<any[]>(`/orgs/${orgId}/folder-shares`, { skipCache: true });
+        const missingSet = new Set(missing.map((p) => p.join('/')));
+        const patch: Record<string, { count: number; requiresPassword: boolean }> = {};
+        for (const key of missingSet) patch[key] = { count: 0, requiresPassword: false };
+        for (const row of rows || []) {
+          const pathArr = Array.isArray(row?.folder_path) ? row.folder_path : [];
+          const key = pathArr.join('/');
+          if (!missingSet.has(key)) continue;
+          const prev = patch[key] || { count: 0, requiresPassword: false };
+          patch[key] = {
+            count: prev.count + 1,
+            requiresPassword: prev.requiresPassword || row?.requires_password === true,
+          };
+        }
+        setExternalFolderShares((prev) => ({ ...prev, ...patch }));
+      } catch {
+        missing.forEach((p) => fetchedExternalFolderPathsRef.current.delete(p.join('/')));
+      }
+    })();
+  }, [currentFolders, path, canShare, isAdmin]);
 
   const renderDepartmentBadge = useCallback((deptId: string | null | undefined) => {
     const id = deptId || null;
@@ -486,6 +568,18 @@ function DocumentsPageContent() {
       </span>
     );
   }, [departments]);
+
+  const getFolderShareSummary = useCallback((folderPath: string[]) => {
+    const key = folderPath.join('/');
+    const accessIds = folderAccess[key] || [];
+    const internalTeams = Math.max(0, accessIds.length - 1);
+    const external = externalFolderShares[key] || { count: 0, requiresPassword: false };
+    return {
+      internalTeams,
+      externalCount: external.count,
+      externalPasswordProtected: external.requiresPassword,
+    };
+  }, [folderAccess, externalFolderShares]);
 
   // Helper to get the display name for a document
   // Prioritizes: filename → name → title → subject
@@ -764,28 +858,162 @@ function DocumentsPageContent() {
     setDragOverFolderIdx(null);
   };
 
+  const loadFolderShareLinks = useCallback(async (pathArr: string[]) => {
+    if (!isAdmin) {
+      setFolderShareLinks([]);
+      setFolderShareLinksError(null);
+      return;
+    }
+    const orgId = getApiContext().orgId || '';
+    if (!orgId || pathArr.length === 0) {
+      setFolderShareLinks([]);
+      setFolderShareLinksError(null);
+      return;
+    }
+    setFolderShareLinksLoading(true);
+    setFolderShareLinksError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set('path', pathArr.join('/'));
+      const rows = await apiFetch<FolderShareRow[]>(`/orgs/${orgId}/folder-shares?${params.toString()}`, { skipCache: true });
+      const activeRows = Array.isArray(rows) ? rows.filter(isFolderShareLinkActive) : [];
+      setFolderShareLinks(activeRows);
+    } catch (error: any) {
+      setFolderShareLinks([]);
+      setFolderShareLinksError(error?.message || 'Unable to load existing external links');
+    } finally {
+      setFolderShareLinksLoading(false);
+    }
+  }, [isAdmin]);
+
+  const revokeFolderShareLink = useCallback(async (shareId: string) => {
+    const orgId = getApiContext().orgId || '';
+    if (!orgId || !shareId) return;
+    setRevokingShareId(shareId);
+    setFolderLinkError(null);
+    try {
+      await apiFetch(`/orgs/${orgId}/folder-shares/${shareId}`, { method: 'DELETE' });
+      await loadFolderShareLinks(sharePath);
+      const folderKey = sharePath.join('/');
+      if (folderKey) {
+        setExternalFolderShares((prev) => {
+          const current = prev[folderKey];
+          if (!current) return prev;
+          const nextCount = Math.max(0, current.count - 1);
+          return {
+            ...prev,
+            [folderKey]: {
+              count: nextCount,
+              requiresPassword: nextCount > 0 ? current.requiresPassword : false,
+            },
+          };
+        });
+      }
+    } catch (error: any) {
+      setFolderLinkError(error?.message || 'Failed to revoke link');
+    } finally {
+      setRevokingShareId(null);
+    }
+  }, [sharePath, loadFolderShareLinks]);
+
   const openShare = async (pathArr: string[]) => {
     setSharePath(pathArr);
     setShareOpen(true);
+    setShareModalTab('internal');
+    setFolderLinkError(null);
+    setFolderLinkUrl(null);
+    setFolderLinkCopied(false);
+    setFolderLinkPassword('');
+    setFolderLinkExpiresInDays('7');
+    setFolderLinkAllowZip(true);
+    setOwnerShareDeptId(null);
+    setFolderShareLinks([]);
+    setFolderShareLinksError(null);
+    setRevokingShareId(null);
+    void loadFolderShareLinks(pathArr);
     try {
       const orgId = getApiContext().orgId || '';
       const params = new URLSearchParams();
       params.set('path', pathArr.join('/'));
-      const data = await apiFetch<{ path: string[]; departments: string[] }>(`/orgs/${orgId}/folder-access?${params.toString()}`);
-      setShareDeptIds(data.departments || []);
+      const data = await apiFetch<{ path: string[]; ownerDepartmentId?: string | null; departments: string[] }>(`/orgs/${orgId}/folder-access?${params.toString()}`);
+      const ownerDeptId = data.ownerDepartmentId || null;
+      setOwnerShareDeptId(ownerDeptId);
+      const uniqueDepts = Array.from(new Set([
+        ...(data.departments || []),
+        ...(ownerDeptId ? [ownerDeptId] : []),
+      ]));
+      setShareDeptIds(uniqueDepts);
     } catch {
+      setOwnerShareDeptId(null);
       setShareDeptIds([]);
     }
   };
   const toggleShareDept = (id: string, checked: boolean) => {
+    if (ownerShareDeptId && id === ownerShareDeptId) return;
     setShareDeptIds(prev => checked ? Array.from(new Set([...prev, id])) : prev.filter(x => x !== id));
   };
   const saveShare = async () => {
     try {
       const orgId = getApiContext().orgId || '';
-      await apiFetch(`/orgs/${orgId}/folder-access`, { method: 'PUT', body: { path: sharePath, departmentIds: shareDeptIds } });
+      const finalDepartmentIds = Array.from(new Set([
+        ...shareDeptIds,
+        ...(ownerShareDeptId ? [ownerShareDeptId] : []),
+      ]));
+      await apiFetch(`/orgs/${orgId}/folder-access`, { method: 'PUT', body: { path: sharePath, departmentIds: finalDepartmentIds } });
       setShareOpen(false);
     } catch { }
+  };
+  const createFolderShareLink = async () => {
+    const orgId = getApiContext().orgId || '';
+    if (!orgId || sharePath.length === 0) return;
+    setFolderLinkLoading(true);
+    setFolderLinkError(null);
+    try {
+      const payload: any = {
+        folderPath: sharePath,
+        expiresInDays: Math.max(1, Number(folderLinkExpiresInDays) || 7),
+        allowDownload: true,
+        allowZipDownload: folderLinkAllowZip,
+      };
+      if (folderLinkPassword.trim()) payload.password = folderLinkPassword.trim();
+      const data: any = await apiFetch(`/orgs/${orgId}/folder-shares`, {
+        method: 'POST',
+        body: payload,
+      });
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      const url = origin ? `${origin}/folder-share/${data.token}` : `/folder-share/${data.token}`;
+      setFolderLinkUrl(url);
+      const folderKey = sharePath.join('/');
+      if (folderKey) {
+        setExternalFolderShares((prev) => {
+          const current = prev[folderKey] || { count: 0, requiresPassword: false };
+          return {
+            ...prev,
+            [folderKey]: {
+              count: current.count + 1,
+              requiresPassword: current.requiresPassword || !!payload.password,
+            },
+          };
+        });
+        fetchedExternalFolderPathsRef.current.add(folderKey);
+      }
+      await loadFolderShareLinks(sharePath);
+      setFolderLinkPassword('');
+    } catch (error: any) {
+      setFolderLinkError(error?.message || 'Failed to create folder link');
+    } finally {
+      setFolderLinkLoading(false);
+    }
+  };
+  const copyFolderShareLink = async () => {
+    if (!folderLinkUrl) return;
+    try {
+      await navigator.clipboard.writeText(folderLinkUrl);
+      setFolderLinkCopied(true);
+      setTimeout(() => setFolderLinkCopied(false), 1500);
+    } catch {
+      setFolderLinkError('Failed to copy link');
+    }
   };
 
   if (isLoading || authLoading) {
@@ -826,6 +1054,13 @@ function DocumentsPageContent() {
     );
   }
 
+  const currentFolderShare = path.length > 0
+    ? getFolderShareSummary(path)
+    : { internalTeams: 0, externalCount: 0, externalPasswordProtected: false };
+  const sharePathSummary = sharePath.length > 0
+    ? getFolderShareSummary(sharePath)
+    : { internalTeams: 0, externalCount: 0, externalPasswordProtected: false };
+
   return (
     <AppLayout>
       <div className="min-h-screen flex flex-col">
@@ -859,6 +1094,21 @@ function DocumentsPageContent() {
                       </span>
                     ))}
                   </nav>
+                  {path.length > 0 && canShare && (currentFolderShare.internalTeams > 0 || currentFolderShare.externalCount > 0) && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {currentFolderShare.internalTeams > 0 && (
+                        <Badge variant="outline" className="text-[10px] font-normal">
+                          Shared with {currentFolderShare.internalTeams} team{currentFolderShare.internalTeams === 1 ? '' : 's'}
+                        </Badge>
+                      )}
+                      {currentFolderShare.externalCount > 0 && (
+                        <Badge variant="outline" className="text-[10px] font-normal">
+                          {currentFolderShare.externalCount} external link{currentFolderShare.externalCount === 1 ? '' : 's'}
+                          {currentFolderShare.externalPasswordProtected ? ' (password)' : ''}
+                        </Badge>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -877,6 +1127,17 @@ function DocumentsPageContent() {
                 </span>
                 {canCreateDocuments && (
                   <div className="hidden md:flex items-center gap-2">
+                    {canShare && path.length > 0 && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => { void openShare(path); }}
+                        className="h-8 gap-1.5"
+                      >
+                        <Share2 className="h-3.5 w-3.5" />
+                        <span className="hidden lg:inline">Share Folder</span>
+                      </Button>
+                    )}
                     <Button size="sm" variant="outline" onClick={() => setNewFolderOpen(true)} className="h-8 gap-1.5">
                       <Plus className="h-3.5 w-3.5" />
                       <span className="hidden lg:inline">Folder</span>
@@ -1078,6 +1339,26 @@ function DocumentsPageContent() {
                         </div>
                       </div>
                     </button>
+                    {canShare && path.length > 0 && (
+                      <button
+                        onClick={() => {
+                          setFabOpen(false);
+                          void openShare(path);
+                        }}
+                        className="group relative overflow-hidden rounded-[2rem] p-5 text-left transition-all active:scale-95 bg-[#E8EEF8] dark:bg-[#1A222D] border border-border/10 shadow-sm col-span-2"
+                      >
+                        <Share2 className="absolute -bottom-4 -right-4 h-24 w-24 -rotate-12 opacity-[0.05] dark:opacity-[0.03]" />
+                        <div className="relative z-10">
+                          <div className="h-10 w-10 rounded-full bg-white/80 dark:bg-black/20 flex items-center justify-center mb-6 shadow-sm">
+                            <Share2 className="h-5 w-5 text-foreground/70" />
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60 mb-1">Manage Access</p>
+                            <h3 className="text-base font-bold text-foreground">Share This Folder</h3>
+                          </div>
+                        </div>
+                      </button>
+                    )}
                   </div>
                   <div className="mt-6 text-center">
                     <p className="text-[11px] text-muted-foreground font-medium">
@@ -1102,6 +1383,7 @@ function DocumentsPageContent() {
                   const firstDept = accessIds.length > 0 ? departments.find(d => d.id === accessIds[0]) : null;
                   const deptName = folderMetadata?.departmentName || firstDept?.name || (accessIds.length === 0 ? 'General' : null);
                   const extraDepts = accessIds.length > 1 ? accessIds.length - 1 : 0;
+                  const externalShare = externalFolderShares[folderKey] || { count: 0, requiresPassword: false };
 
                   return (
                     <Card
@@ -1146,11 +1428,40 @@ function DocumentsPageContent() {
                           <div className="text-xs text-muted-foreground">
                             {getFolderItemCount(p)} items
                           </div>
+                          {canShare && (extraDepts > 0 || externalShare.count > 0) && (
+                            <div className="mt-1 flex flex-wrap items-center gap-1">
+                              {extraDepts > 0 && (
+                                <Badge variant="outline" className="px-1.5 py-0 text-[9px] font-normal">
+                                  +{extraDepts} team{extraDepts === 1 ? '' : 's'}
+                                </Badge>
+                              )}
+                              {externalShare.count > 0 && (
+                                <Badge variant="outline" className="px-1.5 py-0 text-[9px] font-normal">
+                                  {externalShare.count} external
+                                  {externalShare.requiresPassword ? ' (pwd)' : ''}
+                                </Badge>
+                              )}
+                            </div>
+                          )}
                         </div>
 
                         {/* Delete button - bottom right on hover */}
-                        {hasPermission('documents.delete') && (
+                        {(canShare || hasPermission('documents.delete')) && (
                           <div className="flex justify-end mt-2 -mb-1">
+                            {canShare && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void openShare(p);
+                                }}
+                                title="Share folder access"
+                              >
+                                <Share2 className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
                             <Button
                               variant="ghost"
                               size="icon"
@@ -1232,9 +1543,12 @@ function DocumentsPageContent() {
                 {/* List Content */}
                 <div>
                   {/* Folders */}
-                  {!query.trim() && currentFolders.map((p, idx) => (
+                  {!query.trim() && currentFolders.map((p, idx) => {
+                    const folderKey = p.join('/');
+                    const shareSummary = getFolderShareSummary(p);
+                    return (
                     <div
-                      key={`folder-${p.join('/')}`}
+                      key={`folder-${folderKey}`}
                       className="group flex items-center gap-4 px-4 py-3 border-b border-border/20 bg-muted/10 hover:bg-muted/30 cursor-pointer transition-colors"
                       onClick={() => setPath(p)}
                       onDragOver={onFolderDragOver}
@@ -1257,6 +1571,16 @@ function DocumentsPageContent() {
                           <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-normal shrink-0">
                             {getFolderItemCount(p)} items
                           </Badge>
+                          {canShare && shareSummary.internalTeams > 0 && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-normal shrink-0">
+                              +{shareSummary.internalTeams} team{shareSummary.internalTeams === 1 ? '' : 's'}
+                            </Badge>
+                          )}
+                          {canShare && shareSummary.externalCount > 0 && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-normal shrink-0">
+                              {shareSummary.externalCount} external{shareSummary.externalPasswordProtected ? ' (pwd)' : ''}
+                            </Badge>
+                          )}
                         </div>
                       </div>
 
@@ -1286,6 +1610,20 @@ function DocumentsPageContent() {
                         >
                           Open
                         </Button>
+                        {canShare && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void openShare(p);
+                            }}
+                            title="Share folder access"
+                          >
+                            <Share2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
                         {hasPermission('documents.delete') && (
                           <Button
                             variant="ghost"
@@ -1302,7 +1640,8 @@ function DocumentsPageContent() {
                         )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
 
                   {/* Separator between folders and documents */}
                   {!query.trim() && currentFolders.length > 0 && filteredDocs.length > 0 && (
@@ -1626,21 +1965,188 @@ function DocumentsPageContent() {
         }
 
         {/* Folder Deletion Confirmation Dialog */}
-        <UiDialog open={shareOpen} onOpenChange={setShareOpen}>
+        <UiDialog
+          open={shareOpen}
+          onOpenChange={(open) => {
+            setShareOpen(open);
+            if (!open) setShareModalTab('internal');
+          }}
+        >
           <UiDialogContent>
             <UiDialogHeader>
               <UiDialogTitle>Share folder {sharePath.join(' / ') || '/'}</UiDialogTitle>
+              <UiDialogDescription>
+                Configure internal team access and optional external read/download link for this folder.
+              </UiDialogDescription>
             </UiDialogHeader>
-            <div className="space-y-2">
-              <p className="text-sm text-muted-foreground">Select teams that should access this folder and its subfolders.</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
-                {departments.map(d => (
-                  <label key={d.id} className="flex items-center gap-2 text-sm">
-                    <Checkbox checked={shareDeptIds.includes(d.id)} onCheckedChange={(v: any) => toggleShareDept(d.id, !!v)} />
-                    <span className="capitalize" data-color={d.color || 'default'}>{d.name}</span>
-                  </label>
-                ))}
-              </div>
+            <div className="space-y-5">
+              {sharePath.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  {sharePathSummary.internalTeams > 0 ? (
+                    <Badge variant="outline" className="text-[11px] font-normal">
+                      Shared with {sharePathSummary.internalTeams} team{sharePathSummary.internalTeams === 1 ? '' : 's'}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[11px] font-normal">Not shared with other teams</Badge>
+                  )}
+                  {sharePathSummary.externalCount > 0 ? (
+                    <Badge variant="outline" className="text-[11px] font-normal">
+                      {sharePathSummary.externalCount} external link{sharePathSummary.externalCount === 1 ? '' : 's'}
+                      {sharePathSummary.externalPasswordProtected ? ' (password)' : ''}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[11px] font-normal">No external links</Badge>
+                  )}
+                </div>
+              )}
+              <Tabs value={shareModalTab} onValueChange={(value) => setShareModalTab(value as 'internal' | 'external')}>
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="internal">Internal</TabsTrigger>
+                  <TabsTrigger value="external">External</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="internal" className="mt-4 space-y-2">
+                  <p className="text-sm text-muted-foreground">Select teams that should access this folder and its subfolders.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                    {departments.map(d => {
+                      const isOwnerDept = ownerShareDeptId === d.id;
+                      const isChecked = isOwnerDept || shareDeptIds.includes(d.id);
+                      return (
+                        <label
+                          key={d.id}
+                          className={`flex items-center gap-2 text-sm ${isOwnerDept ? 'opacity-90' : ''}`}
+                        >
+                          <Checkbox
+                            checked={isChecked}
+                            disabled={isOwnerDept}
+                            onCheckedChange={(v: any) => toggleShareDept(d.id, !!v)}
+                          />
+                          <span className="capitalize" data-color={d.color || 'default'}>{d.name}</span>
+                          {isOwnerDept && (
+                            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                              <Lock className="h-3 w-3" />
+                              Owner
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="external" className="mt-4 space-y-4">
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-sm font-medium">Create external folder link</p>
+                      <p className="text-xs text-muted-foreground">Read and download access only.</p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-muted-foreground">Expires in</label>
+                        <Select value={folderLinkExpiresInDays} onValueChange={setFolderLinkExpiresInDays}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select expiry" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="1">1 day</SelectItem>
+                            <SelectItem value="7">7 days</SelectItem>
+                            <SelectItem value="30">30 days</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-muted-foreground">Password (optional)</label>
+                        <Input
+                          type="password"
+                          value={folderLinkPassword}
+                          onChange={(e) => setFolderLinkPassword(e.target.value)}
+                          placeholder="Add password"
+                        />
+                      </div>
+                    </div>
+                    <label className="inline-flex items-center gap-2 text-sm">
+                      <Checkbox checked={folderLinkAllowZip} onCheckedChange={(v: any) => setFolderLinkAllowZip(!!v)} />
+                      <span>Allow zip download</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <Button onClick={createFolderShareLink} disabled={folderLinkLoading || sharePath.length === 0}>
+                        {folderLinkLoading ? 'Creating...' : 'Create link'}
+                      </Button>
+                      {folderLinkUrl && (
+                        <Button variant="outline" onClick={copyFolderShareLink} className="gap-1.5">
+                          {folderLinkCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                          {folderLinkCopied ? 'Copied' : 'Copy'}
+                        </Button>
+                      )}
+                    </div>
+                    {folderLinkError && (
+                      <p className="text-xs text-destructive">{folderLinkError}</p>
+                    )}
+                    {folderLinkUrl && (
+                      <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-2 text-xs break-all">
+                        {folderLinkUrl}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border-t border-border/40 pt-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-medium">Active external links</p>
+                      {isAdmin && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => { void loadFolderShareLinks(sharePath); }}
+                          disabled={folderShareLinksLoading}
+                        >
+                          {folderShareLinksLoading ? 'Loading...' : 'Refresh'}
+                        </Button>
+                      )}
+                    </div>
+                    {!isAdmin ? (
+                      <p className="text-xs text-muted-foreground">Only org admins can view active external links.</p>
+                    ) : folderShareLinksError ? (
+                      <p className="text-xs text-destructive">{folderShareLinksError}</p>
+                    ) : folderShareLinksLoading ? (
+                      <p className="text-xs text-muted-foreground">Loading external links...</p>
+                    ) : folderShareLinks.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No active external links found for this folder.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {folderShareLinks.map((link) => (
+                          <div key={link.id} className="rounded-md border border-border/50 px-3 py-2">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="space-y-1 min-w-0">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {link.requires_password && (
+                                    <Badge variant="outline" className="text-[10px]">Password</Badge>
+                                  )}
+                                  {link.allow_zip_download && (
+                                    <Badge variant="outline" className="text-[10px]">ZIP</Badge>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-muted-foreground">
+                                  Created {formatAppDateTime(link.created_at)}
+                                  {link.expires_at ? ` • Expires ${formatAppDateTime(link.expires_at)}` : ''}
+                                  {link.views_count ? ` • ${link.views_count} views` : ''}
+                                </p>
+                              </div>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => { void revokeFolderShareLink(link.id); }}
+                                disabled={revokingShareId === link.id}
+                              >
+                                {revokingShareId === link.id ? 'Revoking...' : 'Revoke'}
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </TabsContent>
+              </Tabs>
             </div>
             <UiDialogFooter>
               <Button variant="outline" onClick={() => setShareOpen(false)}>Cancel</Button>
@@ -1653,6 +2159,9 @@ function DocumentsPageContent() {
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
               <DialogTitle>Delete Folder</DialogTitle>
+              <DialogDescription>
+                Choose how to handle documents currently inside this folder.
+              </DialogDescription>
             </DialogHeader>
 
             {folderToDelete && (

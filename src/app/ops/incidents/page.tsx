@@ -382,7 +382,7 @@ export default function IncidentsPage() {
           </CardContent>
         </Card>
       </div>
-      <IncidentDialog incident={selected} onClose={() => setSelected(null)} orgNameMap={orgNameMap} />
+      <IncidentDialog incident={selected} onClose={() => setSelected(null)} orgNameMap={orgNameMap} usersById={usersById} />
     </SimpleOpsLayout>
   );
 }
@@ -400,10 +400,12 @@ function IncidentDialog({
   incident,
   onClose,
   orgNameMap,
+  usersById,
 }: {
   incident: Incident | null;
   onClose: () => void;
   orgNameMap: Map<string, string>;
+  usersById: Record<string, { name: string | null; role: string | null }>;
 }) {
   if (!incident) return null;
   const severity = deriveSeverity(incident.type);

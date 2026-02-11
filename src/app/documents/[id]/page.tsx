@@ -207,6 +207,25 @@ type DocumentActor = {
   role?: string | null;
 };
 
+type DocumentShareRow = {
+  id: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  max_views: number | null;
+  views_count: number | null;
+  allow_download: boolean;
+  allow_preview: boolean;
+  requires_password: boolean;
+  created_at: string;
+  last_accessed_at?: string | null;
+};
+
+function isDocumentShareActive(share: DocumentShareRow) {
+  if (share.revoked_at) return false;
+  if (!share.expires_at) return true;
+  return new Date(share.expires_at).getTime() > Date.now();
+}
+
 const ROLE_LABELS: Record<string, string> = {
   systemadmin: 'Admin',
   orgadmin: 'Admin',
@@ -232,6 +251,7 @@ const ACCESS_REASON_LABELS: Record<string, string> = {
   explicit_deny: 'Explicit deny override',
   permission: 'Missing required permission',
   share: 'Granted by share',
+  department_grant: 'Granted by team access',
   admin: 'Organization admin access',
   department: 'Department member access',
   folder_access: 'Folder share/access',
@@ -273,9 +293,17 @@ function renderActor(actor?: DocumentActor | null) {
 function ShareContent({
   expiresInDays,
   setExpiresInDays,
+  shareTab,
+  setShareTab,
   sharePassword,
   setSharePassword,
   createShareLink,
+  refreshActiveShareLinks,
+  activeShareLinks,
+  activeShareLinksLoading,
+  activeShareLinksError,
+  revokeActiveShareLink,
+  revokingShareId,
   shareLoading,
   shareError,
   shareUrl,
@@ -288,9 +316,17 @@ function ShareContent({
 }: {
   expiresInDays: string;
   setExpiresInDays: (v: string) => void;
+  shareTab: 'create' | 'active';
+  setShareTab: (v: 'create' | 'active') => void;
   sharePassword: string;
   setSharePassword: (v: string) => void;
   createShareLink: () => void;
+  refreshActiveShareLinks: () => void;
+  activeShareLinks: DocumentShareRow[];
+  activeShareLinksLoading: boolean;
+  activeShareLinksError: string | null;
+  revokeActiveShareLink: (shareId: string) => void;
+  revokingShareId: string | null;
   shareLoading: boolean;
   shareError: string | null;
   shareUrl: string | null;
@@ -303,85 +339,149 @@ function ShareContent({
 }) {
   return (
     <div className="space-y-6">
-      <div className="space-y-4">
-        <div className="space-y-2">
-          <label className="text-sm font-semibold text-foreground">Expires in</label>
-          <Select value={expiresInDays} onValueChange={setExpiresInDays}>
-            <SelectTrigger className={cn("w-full h-11", isMobile ? "rounded-xl" : "")}>
-              <SelectValue placeholder="Select expiry" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="1">1 day</SelectItem>
-              <SelectItem value="7">7 days</SelectItem>
-              <SelectItem value="30">30 days</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+      <Tabs value={shareTab} onValueChange={(value) => setShareTab(value as 'create' | 'active')}>
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="create">Create link</TabsTrigger>
+          <TabsTrigger value="active">Active links</TabsTrigger>
+        </TabsList>
 
-        <div className="space-y-2">
-          <label className="text-sm font-semibold text-foreground">Password (optional)</label>
-          <Input
-            type="password"
-            placeholder="Add a password for this link"
-            value={sharePassword}
-            onChange={(e) => setSharePassword(e.target.value)}
-            className={cn("h-11", isMobile ? "rounded-xl" : "")}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Button onClick={createShareLink} disabled={shareLoading} className={cn("h-11 font-semibold", isMobile ? "rounded-xl w-full" : "w-fit")}>
-            {shareLoading ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Creating...
-              </>
-            ) : (
-              <>
-                <Share2 className="h-4 w-4 mr-2" />
-                Create link
-              </>
-            )}
-          </Button>
-          {shareError && (
-            <span className="text-sm text-destructive">{shareError}</span>
-          )}
-        </div>
-
-        {shareUrl && (
-          <div className={cn("space-y-4 rounded-2xl border border-border/40 bg-muted/20 p-4", isMobile ? "mt-2" : "")}>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Share link</div>
-                {shareExpiresAt && (
-                  <div className="text-[11px] text-muted-foreground mt-0.5">
-                    Expires {formatAppDateTime(new Date(shareExpiresAt))}
-                  </div>
-                )}
-              </div>
-              <Button variant="ghost" size="icon" onClick={copyShareLink} className="h-8 w-8 rounded-full">
-                {shareCopied ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
-              </Button>
-            </div>
-            <Input readOnly value={shareUrl} className={cn("h-10 text-xs bg-muted/30", isMobile ? "rounded-xl" : "")} />
-            <div className="flex items-center gap-2">
-              <Button variant="outline" onClick={shareOnWhatsApp} className={cn("flex-1 h-10 gap-2 font-medium text-xs", isMobile ? "rounded-xl" : "")}>
-                <MessageCircle className="h-3.5 w-3.5 text-emerald-500 fill-emerald-500/20" />
-                WhatsApp
-              </Button>
-              <Button
-                variant="outline"
-                className={cn("flex-1 h-10 gap-2 font-medium text-xs", isMobile ? "rounded-xl" : "")}
-                onClick={() => {
-                  if (typeof window !== 'undefined') window.open(shareUrl, '_blank', 'noopener');
-                }}
-              >
-                Open link
-              </Button>
-            </div>
+        <TabsContent value="create" className="mt-4 space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-foreground">Expires in</label>
+            <Select value={expiresInDays} onValueChange={setExpiresInDays}>
+              <SelectTrigger className={cn("w-full h-11", isMobile ? "rounded-xl" : "")}>
+                <SelectValue placeholder="Select expiry" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="1">1 day</SelectItem>
+                <SelectItem value="7">7 days</SelectItem>
+                <SelectItem value="30">30 days</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-        )}
-      </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-foreground">Password (optional)</label>
+            <Input
+              type="password"
+              placeholder="Add a password for this link"
+              value={sharePassword}
+              onChange={(e) => setSharePassword(e.target.value)}
+              className={cn("h-11", isMobile ? "rounded-xl" : "")}
+            />
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Button onClick={createShareLink} disabled={shareLoading} className={cn("h-11 font-semibold", isMobile ? "rounded-xl w-full" : "w-fit")}>
+              {shareLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                <>
+                  <Share2 className="h-4 w-4 mr-2" />
+                  Create link
+                </>
+              )}
+            </Button>
+            {shareError && (
+              <span className="text-sm text-destructive">{shareError}</span>
+            )}
+          </div>
+
+          {shareUrl && (
+            <div className={cn("space-y-4 rounded-2xl border border-border/40 bg-muted/20 p-4", isMobile ? "mt-2" : "")}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Share link</div>
+                  {shareExpiresAt && (
+                    <div className="text-[11px] text-muted-foreground mt-0.5">
+                      Expires {formatAppDateTime(new Date(shareExpiresAt))}
+                    </div>
+                  )}
+                </div>
+                <Button variant="ghost" size="icon" onClick={copyShareLink} className="h-8 w-8 rounded-full">
+                  {shareCopied ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+              <Input readOnly value={shareUrl} className={cn("h-10 text-xs bg-muted/30", isMobile ? "rounded-xl" : "")} />
+              <div className="flex items-center gap-2">
+                <Button variant="outline" onClick={shareOnWhatsApp} className={cn("flex-1 h-10 gap-2 font-medium text-xs", isMobile ? "rounded-xl" : "")}>
+                  <MessageCircle className="h-3.5 w-3.5 text-emerald-500 fill-emerald-500/20" />
+                  WhatsApp
+                </Button>
+                <Button
+                  variant="outline"
+                  className={cn("flex-1 h-10 gap-2 font-medium text-xs", isMobile ? "rounded-xl" : "")}
+                  onClick={() => {
+                    if (typeof window !== 'undefined') window.open(shareUrl, '_blank', 'noopener');
+                  }}
+                >
+                  Open link
+                </Button>
+              </div>
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="active" className="mt-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-foreground">Active document links</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={refreshActiveShareLinks}
+              disabled={activeShareLinksLoading}
+            >
+              {activeShareLinksLoading ? 'Loading...' : 'Refresh'}
+            </Button>
+          </div>
+
+          {activeShareLinksError ? (
+            <p className="text-sm text-destructive">{activeShareLinksError}</p>
+          ) : activeShareLinksLoading ? (
+            <p className="text-sm text-muted-foreground">Loading active links...</p>
+          ) : activeShareLinks.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No active links for this document.</p>
+          ) : (
+            <div className="space-y-2">
+              {activeShareLinks.map((link) => (
+                <div key={link.id} className="rounded-xl border border-border/40 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1 min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {link.requires_password && (
+                          <Badge variant="outline" className="text-[10px]">Password</Badge>
+                        )}
+                        {link.allow_download && (
+                          <Badge variant="outline" className="text-[10px]">Download</Badge>
+                        )}
+                        {link.allow_preview && (
+                          <Badge variant="outline" className="text-[10px]">Preview</Badge>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        Created {formatAppDateTime(link.created_at)}
+                        {link.expires_at ? ` • Expires ${formatAppDateTime(link.expires_at)}` : ''}
+                        {typeof link.views_count === 'number' ? ` • ${link.views_count} views` : ''}
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => revokeActiveShareLink(link.id)}
+                      disabled={revokingShareId === link.id}
+                    >
+                      {revokingShareId === link.id ? 'Revoking...' : 'Revoke'}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
       {!isMobile && (
         <div className="flex justify-end pt-2">
           <Button variant="outline" onClick={onClose} className="rounded-xl h-10 px-6">Done</Button>
@@ -405,7 +505,7 @@ function ShareModal({
             <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-muted" />
             <SheetTitle className="text-2xl font-bold tracking-tight">Share document</SheetTitle>
             <SheetDescription className="text-muted-foreground">
-              Create a temporary link to share this document.
+              Create and manage external links for this document.
             </SheetDescription>
           </SheetHeader>
           <div className="mt-8">
@@ -466,8 +566,13 @@ export default function DocumentDetailPage() {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [shareExpiresAt, setShareExpiresAt] = useState<string | null>(null);
   const [shareCopied, setShareCopied] = useState(false);
+  const [shareTab, setShareTab] = useState<'create' | 'active'>('create');
   const [sharePassword, setSharePassword] = useState('');
   const [expiresInDays, setExpiresInDays] = useState('7');
+  const [activeShareLinks, setActiveShareLinks] = useState<DocumentShareRow[]>([]);
+  const [activeShareLinksLoading, setActiveShareLinksLoading] = useState(false);
+  const [activeShareLinksError, setActiveShareLinksError] = useState<string | null>(null);
+  const [revokingShareId, setRevokingShareId] = useState<string | null>(null);
   const [accessExplainOpen, setAccessExplainOpen] = useState(false);
   const [accessExplainLoading, setAccessExplainLoading] = useState(false);
   const [accessExplainError, setAccessExplainError] = useState<string | null>(null);
@@ -686,8 +791,12 @@ export default function DocumentDetailPage() {
       setShareUrl(null);
       setShareExpiresAt(null);
       setShareCopied(false);
+      setShareTab('create');
       setSharePassword('');
       setExpiresInDays('7');
+      setActiveShareLinks([]);
+      setActiveShareLinksError(null);
+      setRevokingShareId(null);
     }
   }, [shareOpen, doc?.id]);
 
@@ -864,6 +973,32 @@ export default function DocumentDetailPage() {
   const folderPath = doc.folderPath || (doc as any).folder_path || [];
   const myDeptIds = new Set((departments || []).map((d: any) => d.id));
   const docDeptId = (doc as any).departmentId || (doc as any).department_id || null;
+  const departmentAccess = (doc as any).departmentAccess || null;
+  const ownerDepartmentId = departmentAccess?.ownerDepartmentId || docDeptId || null;
+  const departmentMetaMap = new Map<string, { id: string; name: string; color: string | null }>();
+  (departments || []).forEach((dept: any) => {
+    if (!dept?.id) return;
+    departmentMetaMap.set(dept.id, {
+      id: dept.id,
+      name: dept.name || 'Unknown team',
+      color: dept.color || null,
+    });
+  });
+  if (Array.isArray(departmentAccess?.departments)) {
+    for (const dept of departmentAccess.departments) {
+      if (!dept?.id) continue;
+      departmentMetaMap.set(dept.id, {
+        id: dept.id,
+        name: dept.name || departmentMetaMap.get(dept.id)?.name || 'Unknown team',
+        color: dept.color ?? departmentMetaMap.get(dept.id)?.color ?? null,
+      });
+    }
+  }
+  const rawSharedDepartmentIds: string[] = Array.isArray(departmentAccess?.sharedDepartmentIds)
+    ? departmentAccess.sharedDepartmentIds.map((deptId: any) => String(deptId)).filter(Boolean)
+    : [];
+  const sharedDepartmentIds = Array.from(new Set(rawSharedDepartmentIds)).filter((deptId) => deptId !== ownerDepartmentId);
+  const getDepartmentLabel = (deptId: string) => departmentMetaMap.get(deptId)?.name || `Team ${String(deptId).slice(0, 8)}`;
   const deletedAt = doc.deletedAt || (doc as any).deleted_at || null;
   const isDeleted = Boolean(deletedAt);
   const deletedAtDate = deletedAt ? new Date(deletedAt) : null;
@@ -945,6 +1080,48 @@ export default function DocumentDetailPage() {
     }
   };
 
+  const loadActiveShareLinks = async () => {
+    if (!doc?.id) return;
+    const { orgId } = getApiContext();
+    if (!orgId) return;
+    setActiveShareLinksLoading(true);
+    setActiveShareLinksError(null);
+    try {
+      const rows = await apiFetch<DocumentShareRow[]>(`/orgs/${orgId}/documents/${doc.id}/shares`, { skipCache: true });
+      const activeRows = Array.isArray(rows) ? rows.filter(isDocumentShareActive) : [];
+      setActiveShareLinks(activeRows);
+    } catch (error: any) {
+      setActiveShareLinks([]);
+      setActiveShareLinksError(error?.message || 'Failed to load active links');
+    } finally {
+      setActiveShareLinksLoading(false);
+    }
+  };
+
+  const revokeActiveShareLink = async (shareId: string) => {
+    if (!doc?.id || !shareId) return;
+    const { orgId } = getApiContext();
+    if (!orgId) return;
+    setRevokingShareId(shareId);
+    setActiveShareLinksError(null);
+    try {
+      await apiFetch(`/orgs/${orgId}/documents/${doc.id}/shares/${shareId}`, {
+        method: 'DELETE',
+      });
+      await loadActiveShareLinks();
+    } catch (error: any) {
+      setActiveShareLinksError(error?.message || 'Failed to revoke link');
+    } finally {
+      setRevokingShareId(null);
+    }
+  };
+
+  const openShareModal = () => {
+    setShareTab('create');
+    setShareOpen(true);
+    void loadActiveShareLinks();
+  };
+
   const createShareLink = async () => {
     if (!doc) return;
     setShareLoading(true);
@@ -972,6 +1149,8 @@ export default function DocumentDetailPage() {
       setShareUrl(url);
       setShareExpiresAt(data.expiresAt || null);
       setSharePassword('');
+      setShareTab('active');
+      void loadActiveShareLinks();
     } catch (error: any) {
       setShareError(error?.message || 'Failed to create share link');
     } finally {
@@ -1030,7 +1209,7 @@ export default function DocumentDetailPage() {
                   Download File
                 </DropdownMenuItem>
                 {canShare && (
-                  <DropdownMenuItem onClick={() => setShareOpen(true)} className="rounded-2xl h-11 focus:bg-white/10 text-white">
+                  <DropdownMenuItem onClick={openShareModal} className="rounded-2xl h-11 focus:bg-white/10 text-white">
                     <Share2 className="h-4 w-4 mr-3" />
                     Share Link
                   </DropdownMenuItem>
@@ -1170,7 +1349,7 @@ export default function DocumentDetailPage() {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                            onClick={() => setShareOpen(true)}
+                            onClick={openShareModal}
                           >
                             <Share2 className="h-4 w-4" />
                           </Button>
@@ -1910,6 +2089,30 @@ export default function DocumentDetailPage() {
                       <DetailRow icon={HardDrive} label="File Size" value={formatSize(doc.fileSizeBytes)} />
                     )}
                     <DetailRow icon={Tag} label="Type" value={doc.documentType || doc.type} />
+                    <DetailRow
+                      icon={MapPin}
+                      label="Team Access"
+                      className="sm:col-span-2"
+                      value={(
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {ownerDepartmentId && (
+                            <Badge variant="outline" className="text-xs border-amber-300/50 bg-amber-500/10 text-amber-700 gap-1">
+                              <Crown className="h-3 w-3" />
+                              {getDepartmentLabel(ownerDepartmentId)}
+                            </Badge>
+                          )}
+                          {sharedDepartmentIds.map((deptId) => (
+                            <Badge key={deptId} variant="outline" className="text-xs gap-1">
+                              <Share2 className="h-3 w-3" />
+                              {getDepartmentLabel(deptId)}
+                            </Badge>
+                          ))}
+                          {!ownerDepartmentId && sharedDepartmentIds.length === 0 && (
+                            <span className="text-muted-foreground">No team access data</span>
+                          )}
+                        </div>
+                      )}
+                    />
                   </div>
                 </Section>
               </div>
@@ -1937,9 +2140,17 @@ export default function DocumentDetailPage() {
         isMobile={isMobile}
         expiresInDays={expiresInDays}
         setExpiresInDays={setExpiresInDays}
+        shareTab={shareTab}
+        setShareTab={setShareTab}
         sharePassword={sharePassword}
         setSharePassword={setSharePassword}
         createShareLink={createShareLink}
+        refreshActiveShareLinks={loadActiveShareLinks}
+        activeShareLinks={activeShareLinks}
+        activeShareLinksLoading={activeShareLinksLoading}
+        activeShareLinksError={activeShareLinksError}
+        revokeActiveShareLink={revokeActiveShareLink}
+        revokingShareId={revokingShareId}
         shareLoading={shareLoading}
         shareError={shareError}
         shareUrl={shareUrl}

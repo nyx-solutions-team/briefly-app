@@ -31,7 +31,7 @@ export const InlineCitation = ({
   ...props
 }: InlineCitationProps) => (
   <span
-    className={cn("group inline-flex items-center gap-1 align-baseline", className)}
+    className={cn("inline align-baseline", className)}
     {...props}
   />
 );
@@ -69,7 +69,10 @@ export const InlineCitationCardTrigger = ({
 }: InlineCitationCardTriggerProps) => (
   <PopoverTrigger asChild>
     <Badge
-      className={cn("ml-1 rounded-full inline-flex", className)}
+      className={cn(
+        "ml-0.5 mr-0.5 rounded-md inline-flex cursor-pointer hover:border-primary/50 transition-colors align-baseline",
+        className
+      )}
       variant="secondary"
       {...props}
     >
@@ -106,12 +109,12 @@ const getSourceBadgeLabel = (source: string): string => {
   return trimmed;
 };
 
-const CitationSourceBadge = ({ 
-  sources, 
-  title, 
-  extraCount 
-}: { 
-  sources: string[]; 
+const CitationSourceBadge = ({
+  sources,
+  title,
+  extraCount
+}: {
+  sources: string[];
   title?: string;
   extraCount?: number;
 }) => {

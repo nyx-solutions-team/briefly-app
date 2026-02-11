@@ -40,7 +40,7 @@ import { useSettings } from '@/hooks/use-settings';
 import { MobileTabBar } from '@/components/mobile-tab-bar';
 import { cn } from '@/lib/utils';
 
-export default function AppLayout({ children }: { children: React.ReactNode }) {
+export default function AppLayout({ children, collapseSidebar = false }: { children: React.ReactNode; collapseSidebar?: boolean }) {
   const { documents } = useDocuments();
   const { isAuthenticated, user, signOut, isLoading } = useAuth();
   const { settings, updateSettings } = useSettings();
@@ -77,7 +77,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <SidebarProvider>
+    <SidebarProvider defaultOpen={!collapseSidebar} open={collapseSidebar ? false : undefined}>
       <Sidebar variant="inset" collapsible="icon" className="border-r-0">
         {/* Linear-style Header - Workspace/Logo */}
         <SidebarHeader className="p-0">

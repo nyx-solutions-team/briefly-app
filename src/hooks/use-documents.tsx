@@ -27,7 +27,7 @@ type DocumentsContextValue = {
   getDocumentById: (id: string) => StoredDocument | undefined;
   clearAll: () => void;
   // folders
-  createFolder: (parentPath: string[], name: string) => Promise<any>;
+  createFolder: (parentPath: string[], name: string, additionalDepartmentIds?: string[]) => Promise<any>;
   deleteFolder: (path: string[], mode?: 'move_to_root' | 'delete_all') => Promise<any>;
   listFolders: (path: string[]) => string[][];
   getFolderMetadata: (path: string[]) => { departmentId?: string; departmentName?: string; id?: string; title?: string } | undefined;
@@ -457,7 +457,7 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
     }
   }, [getOrgId]);
 
-  const createFolder = useCallback(async (parentPath: string[], name: string) => {
+  const createFolder = useCallback(async (parentPath: string[], name: string, additionalDepartmentIds: string[] = []) => {
     const clean = name.trim();
     if (!clean) throw new Error('Folder name cannot be empty');
     const orgId = getOrgId(); if (!orgId) throw new Error('No organization selected');
@@ -469,6 +469,10 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
         console.log(`Creating folder with explicit department: ${selectedDepartmentId}`);
       } else {
         console.log('Creating folder without explicit department - backend will determine');
+      }
+      const extra = Array.from(new Set((additionalDepartmentIds || []).filter(Boolean))).filter((id) => id !== selectedDepartmentId);
+      if (extra.length > 0) {
+        body.additionalDepartmentIds = extra;
       }
 
       const result = await apiFetch(`/orgs/${orgId}/folders`, {

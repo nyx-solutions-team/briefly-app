@@ -144,9 +144,7 @@ export default function VespaViewerPage() {
     return (
       <AppLayout>
         <div className="px-3 pt-2 pb-24 md:px-0 md:pb-0 space-y-6">
-          <PageHeader>
-            <H1>Vespa Data Viewer</H1>
-          </PageHeader>
+          <PageHeader title="Vespa Data Viewer" />
           <div className="px-1 sm:px-4 md:px-6 space-y-4">
             <Skeleton className="h-32 w-full" />
             <Skeleton className="h-64 w-full" />
@@ -160,15 +158,7 @@ export default function VespaViewerPage() {
     return (
       <AppLayout>
         <div className="px-3 pt-2 pb-24 md:px-0 md:pb-0 space-y-6">
-          <PageHeader>
-            <div className="flex items-center gap-4">
-              <Button variant="ghost" size="sm" onClick={() => router.back()}>
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Back
-              </Button>
-              <H1>Vespa Data Viewer</H1>
-            </div>
-          </PageHeader>
+          <PageHeader title="Vespa Data Viewer" backHref={`/documents/${docId}`} />
           <div className="px-1 sm:px-4 md:px-6">
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
@@ -195,14 +185,20 @@ export default function VespaViewerPage() {
   const totalChunks = data.total_chunks || chunks.length;
   const hasEmbedding = (embedding: VespaEmbedding | undefined | null) => {
     if (Array.isArray(embedding) && embedding.length > 0) return true;
-    if (embedding && Array.isArray(embedding.values) && embedding.values.length > 0) return true;
-    if (embedding && Array.isArray(embedding.cells) && embedding.cells.length > 0) return true;
+    if (embedding && typeof embedding === 'object') {
+      const obj: any = embedding;
+      if (Array.isArray(obj.values) && obj.values.length > 0) return true;
+      if (Array.isArray(obj.cells) && obj.cells.length > 0) return true;
+    }
     return false;
   };
   const embeddingDim = (embedding: VespaEmbedding | undefined | null) => {
     if (Array.isArray(embedding)) return embedding.length;
-    if (embedding && Array.isArray(embedding.values)) return embedding.values.length;
-    if (embedding && Array.isArray(embedding.cells)) return embedding.cells.length;
+    if (embedding && typeof embedding === 'object') {
+      const obj: any = embedding;
+      if (Array.isArray(obj.values)) return obj.values.length;
+      if (Array.isArray(obj.cells)) return obj.cells.length;
+    }
     return 0;
   };
   const hasLayout = (fields: VespaChunk['fields']) =>
@@ -279,19 +275,16 @@ export default function VespaViewerPage() {
   return (
     <AppLayout>
       <div className="px-3 pt-2 pb-24 md:px-0 md:pb-0 space-y-6">
-        <PageHeader>
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="sm" onClick={() => router.back()}>
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back
-            </Button>
-            <H1>Vespa Data Viewer</H1>
+        <PageHeader
+          title="Vespa Data Viewer"
+          backHref={`/documents/${docId}`}
+          actions={(
             <Button onClick={handleRefresh} variant="outline" size="sm" disabled={refreshing}>
               <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
-          </div>
-        </PageHeader>
+          )}
+        />
 
         <div className="px-1 sm:px-4 md:px-6 space-y-6">
           {/* Document Info */}
@@ -480,7 +473,10 @@ export default function VespaViewerPage() {
 
               {/* Sync Status Warning */}
               {data.sync_status && !data.sync_status.in_sync && (
-                <Alert variant="warning">
+                <Alert
+                  variant="default"
+                  className="border-amber-500/30 [&>svg]:text-amber-600"
+                >
                   <AlertCircle className="h-4 w-4" />
                   <AlertTitle>Sync Mismatch Detected</AlertTitle>
                   <AlertDescription>
