@@ -42,6 +42,13 @@ type DocumentsContextValue = {
 
 const DocumentsContext = createContext<DocumentsContextValue | undefined>(undefined);
 
+function isAbortLikeError(error: any): boolean {
+  if (!error) return false;
+  if (error?.name === 'AbortError') return true;
+  if (error?.cause && isAbortLikeError(error.cause)) return true;
+  return false;
+}
+
 export function DocumentsProvider({ children }: { children: React.ReactNode }) {
   const [documents, setDocuments] = useState<StoredDocument[]>([]);
   const [folders, setFolders] = useState<string[][]>([]);
@@ -167,7 +174,7 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
       });
       setHasLoadedAll(false);
     } catch (error: any) {
-      if (error?.name === 'AbortError') {
+      if (isAbortLikeError(error)) {
         console.debug('Documents load aborted');
       } else {
         console.error('Failed to load documents:', error);
@@ -252,7 +259,7 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
       });
       setHasLoadedAll(true);
     } catch (error: any) {
-      if (error?.name === 'AbortError') {
+      if (isAbortLikeError(error)) {
         console.debug('Load-all aborted');
       } else {
         console.error('Failed to load all documents:', error);

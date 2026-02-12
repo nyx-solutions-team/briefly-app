@@ -5,19 +5,24 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Check, ChevronRight, FileText, Folder, Search } from 'lucide-react';
 import { useFolders, type FolderNode } from '@/hooks/use-folders';
-import { useDocuments } from '@/hooks/use-documents';
 import type { StoredDocument } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { apiFetch, getApiContext } from '@/lib/api';
 
 type Mode = 'folder' | 'doc';
+type DocListFilter = 'all' | 'folders' | 'files';
 type PickerItem =
   | { kind: 'folder'; id: string; name: string; path: string[] }
-  | { kind: 'doc'; id: string; title: string; subtitle: string; folderPath: string[]; doc: StoredDocument };
+  | { kind: 'doc'; id: string; filename: string; title: string; folderPath: string[]; doc: StoredDocument };
 
 const EMPTY_PATH: string[] = [];
 const EMPTY_DOC_IDS: string[] = [];
+const SEARCH_DEBOUNCE_MS = 250;
+const SEARCH_LIMIT = 120;
+const PATH_DOCS_LIMIT = 250;
 
 function sameStringArray(a: string[], b: string[]) {
   if (a === b) return true;
@@ -43,8 +48,99 @@ function docFolderPath(doc: StoredDocument) {
   return ((doc.folderPath || (doc as any).folder_path || []) as string[]).filter(Boolean);
 }
 
-function docTitle(doc: StoredDocument) {
-  return String(doc.title || doc.name || (doc as any).filename || 'Untitled');
+function pathKey(path: string[]) {
+  return path.join('/') || '__root__';
+}
+
+function docFilename(doc?: Partial<StoredDocument> | null) {
+  return String(doc?.filename || doc?.name || doc?.title || 'Untitled');
+}
+
+function docTitle(doc?: Partial<StoredDocument> | null) {
+  if (!doc?.title) return '';
+  const title = String(doc.title).trim();
+  const filename = docFilename(doc).trim();
+  if (!title) return '';
+  if (title.toLowerCase() === filename.toLowerCase()) return '';
+  return title;
+}
+
+function folderName(path: string[]) {
+  if (!Array.isArray(path) || path.length === 0) return 'Root';
+  return path[path.length - 1] || 'Root';
+}
+
+function compactText(value: string, max = 30) {
+  const text = String(value || '');
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(1, max - 1))}…`;
+}
+
+function normalizeDocument(raw: any): StoredDocument {
+  return {
+    ...raw,
+    uploadedAt: new Date(raw?.uploadedAt || raw?.uploaded_at || Date.now()),
+    departmentId: raw?.departmentId || raw?.department_id,
+    department_id: raw?.department_id || raw?.departmentId,
+  } as StoredDocument;
+}
+
+function PickerListSkeleton({ mode }: { mode: Mode }) {
+  if (mode === 'folder') {
+    return (
+      <div className="p-2 space-y-1.5">
+        {Array.from({ length: 8 }).map((_, idx) => (
+          <div key={`folder-skeleton-${idx}`} className="flex items-center justify-between rounded-md px-2.5 py-2 border border-transparent bg-amber-500/[0.06]">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Skeleton className="h-[18px] w-[18px] rounded-sm" />
+              <div className="space-y-1 min-w-0">
+                <Skeleton className="h-3 w-28" />
+                <Skeleton className="h-2.5 w-12" />
+              </div>
+            </div>
+            <Skeleton className="h-3 w-3 rounded" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-2 space-y-1.5">
+      <div className="px-2 py-1">
+        <Skeleton className="h-3 w-14" />
+      </div>
+      {Array.from({ length: 3 }).map((_, idx) => (
+        <div key={`doc-folder-skeleton-${idx}`} className="flex items-center justify-between rounded-md px-2.5 py-2 border border-transparent bg-amber-500/[0.06]">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Skeleton className="h-[18px] w-[18px] rounded-sm" />
+            <div className="space-y-1 min-w-0">
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="h-2.5 w-11" />
+            </div>
+          </div>
+          <Skeleton className="h-3 w-3 rounded" />
+        </div>
+      ))}
+
+      <div className="mt-2 px-2 py-1">
+        <Skeleton className="h-3 w-10" />
+      </div>
+      {Array.from({ length: 6 }).map((_, idx) => (
+        <div key={`file-skeleton-${idx}`} className="flex items-center justify-between rounded-md px-2.5 py-2 border border-transparent">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Skeleton className="h-[18px] w-[18px] rounded-sm" />
+            <div className="space-y-1 min-w-0">
+              <Skeleton className="h-3 w-40" />
+              <Skeleton className="h-2.5 w-28" />
+              <Skeleton className="h-4 w-16 rounded-md" />
+            </div>
+          </div>
+          <Skeleton className="h-3.5 w-3.5 rounded" />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function FinderPicker({
@@ -64,7 +160,7 @@ export function FinderPicker({
   initialSelectedDocIds?: string[];
   onConfirm: (payload: { path?: string[]; docs?: StoredDocument[] }) => void;
 }) {
-  const { documents: allDocuments } = useDocuments();
+  const { orgId } = getApiContext();
   const folderExplorer = useFolders();
 
   const [query, setQuery] = useState('');
@@ -73,8 +169,15 @@ export function FinderPicker({
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>(
     (initialSelectedDocIds || []).filter(Boolean).slice(0, Math.max(1, maxDocs))
   );
+  const [listFilter, setListFilter] = useState<DocListFilter>('all');
+  const [pathDocuments, setPathDocuments] = useState<StoredDocument[]>([]);
+  const [searchDocuments, setSearchDocuments] = useState<StoredDocument[]>([]);
+  const [pathLoading, setPathLoading] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [selectedDocsById, setSelectedDocsById] = useState<Map<string, StoredDocument>>(new Map());
   const listRef = useRef<HTMLDivElement>(null);
   const loadFoldersRef = useRef(folderExplorer.load);
+  const docsCacheRef = useRef<Map<string, StoredDocument[]>>(new Map());
 
   useEffect(() => {
     loadFoldersRef.current = folderExplorer.load;
@@ -99,6 +202,8 @@ export function FinderPicker({
 
     setQuery('');
     setSelectedIndex(0);
+    setSearchDocuments([]);
+    setListFilter('all');
     setViewingPath((prev) => (sameStringArray(prev, normalizedPath) ? prev : normalizedPath));
     setSelectedDocIds((prev) =>
       sameStringArray(prev, normalizedSelectedDocIds) ? prev : normalizedSelectedDocIds
@@ -107,6 +212,133 @@ export function FinderPicker({
     void loadFoldersRef.current([]);
     void loadFoldersRef.current(normalizedPath);
   }, [open, initialPath, initialSelectedDocIds, maxDocs]);
+
+  const loadPathDocuments = React.useCallback(async (targetPath: string[]) => {
+    if (mode !== 'doc') return;
+    if (!orgId) {
+      setPathDocuments([]);
+      return;
+    }
+    const key = pathKey(targetPath);
+    const cached = docsCacheRef.current.get(key);
+    if (cached) {
+      setPathDocuments(cached);
+      return;
+    }
+
+    setPathLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('limit', String(PATH_DOCS_LIMIT));
+      if (targetPath.length > 0) params.set('path', targetPath.join('/'));
+
+      const data = await apiFetch<{ documents?: any[] }>(
+        `/orgs/${orgId}/folder-contents?${params.toString()}`,
+        { skipCache: true }
+      );
+      const docs = Array.isArray(data?.documents) ? data.documents.map(normalizeDocument) : [];
+      docsCacheRef.current.set(key, docs);
+      setPathDocuments(docs);
+      setSelectedDocsById((prev) => {
+        const next = new Map(prev);
+        for (const d of docs) next.set(d.id, d);
+        return next;
+      });
+    } catch {
+      setPathDocuments([]);
+    } finally {
+      setPathLoading(false);
+    }
+  }, [mode, orgId]);
+
+  useEffect(() => {
+    if (!open || mode !== 'doc') return;
+    if (query.trim()) return;
+    void loadPathDocuments(viewingPath);
+  }, [open, mode, query, viewingPath, loadPathDocuments]);
+
+  useEffect(() => {
+    if (!open || mode !== 'doc') return;
+    if (!orgId) return;
+
+    const q = query.trim();
+    if (!q) {
+      setSearchDocuments([]);
+      setSearchLoading(false);
+      return;
+    }
+
+    setSearchLoading(true);
+    const controller = new AbortController();
+    const timeout = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams();
+        params.set('q', q);
+        params.set('limit', String(SEARCH_LIMIT));
+        params.set('field', 'all'); // includes filename + title and related metadata
+        params.set('includeSubfolders', '1');
+        if (viewingPath.length > 0) {
+          params.set('path', viewingPath.join('/'));
+        }
+
+        const data = await apiFetch<{ items?: any[] }>(
+          `/orgs/${orgId}/documents/search-v2?${params.toString()}`,
+          { signal: controller.signal, skipCache: true }
+        );
+        if (controller.signal.aborted) return;
+        const docs = Array.isArray(data?.items) ? data.items.map(normalizeDocument) : [];
+        setSearchDocuments(docs);
+        setSelectedDocsById((prev) => {
+          const next = new Map(prev);
+          for (const d of docs) next.set(d.id, d);
+          return next;
+        });
+      } catch (error: any) {
+        if (error?.name === 'AbortError') return;
+        setSearchDocuments([]);
+      } finally {
+        if (!controller.signal.aborted) setSearchLoading(false);
+      }
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [open, mode, orgId, query, viewingPath]);
+
+  useEffect(() => {
+    if (!open || mode !== 'doc') return;
+    if (!orgId) return;
+    const missingIds = selectedDocIds.filter((id) => !selectedDocsById.has(id));
+    if (missingIds.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const results = await Promise.all(missingIds.map(async (id) => {
+        try {
+          const raw = await apiFetch<any>(`/orgs/${orgId}/documents/${id}`, { skipCache: true });
+          return normalizeDocument(raw);
+        } catch {
+          return null;
+        }
+      }));
+      if (cancelled) return;
+      setSelectedDocsById((prev) => {
+        let next: Map<string, StoredDocument> | null = null;
+        for (const d of results) {
+          if (!d?.id || prev.has(d.id)) continue;
+          if (!next) next = new Map(prev);
+          next.set(d.id, d);
+        }
+        return next ?? prev;
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, mode, orgId, selectedDocIds, selectedDocsById]);
 
   const currentFolders = useMemo(() => {
     const seen = new Set<string>();
@@ -131,45 +363,67 @@ export function FinderPicker({
     return mapped;
   }, [folderExplorer, viewingPath]);
 
-  const docsInCurrentPath = useMemo(() => {
-    const isRootView = viewingPath.length === 0;
-    return allDocuments
-      .filter((doc) => {
-        if (doc.type === 'folder') return false;
-        if (isRootView) return true;
-        return sameStringArray(docFolderPath(doc), viewingPath);
-      })
-      .map((doc) => ({
-        kind: 'doc' as const,
-        id: doc.id,
-        title: docTitle(doc),
-        subtitle: String(doc.sender || doc.receiver || doc.documentType || doc.category || ''),
-        folderPath: docFolderPath(doc),
-        doc,
-      }))
-      .sort((a, b) => a.title.localeCompare(b.title));
-  }, [allDocuments, viewingPath]);
+  const docsInCurrentPath = useMemo(
+    () =>
+      pathDocuments
+        .filter((doc) => doc.type !== 'folder')
+        .map((doc) => ({
+          kind: 'doc' as const,
+          id: doc.id,
+          filename: docFilename(doc),
+          title: docTitle(doc),
+          folderPath: docFolderPath(doc),
+          doc,
+        }))
+        .sort((a, b) => a.filename.localeCompare(b.filename)),
+    [pathDocuments]
+  );
 
-  const visibleItems = useMemo<PickerItem[]>(() => {
-    const sourceItems: PickerItem[] =
-      mode === 'doc'
-        ? viewingPath.length === 0
-          ? [...docsInCurrentPath, ...currentFolders]
-          : [...currentFolders, ...docsInCurrentPath]
-        : currentFolders;
+  const docsFromSearch = useMemo(
+    () =>
+      searchDocuments
+        .filter((doc) => doc.type !== 'folder')
+        .map((doc) => ({
+          kind: 'doc' as const,
+          id: doc.id,
+          filename: docFilename(doc),
+          title: docTitle(doc),
+          folderPath: docFolderPath(doc),
+          doc,
+        }))
+        .sort((a, b) => a.filename.localeCompare(b.filename)),
+    [searchDocuments]
+  );
+
+  const availableFolderItems = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return sourceItems;
-    return sourceItems.filter((item) => {
-      if (item.kind === 'folder') {
-        return item.name.toLowerCase().includes(q) || item.path.join('/').toLowerCase().includes(q);
-      }
-      return (
-        item.title.toLowerCase().includes(q) ||
-        item.subtitle.toLowerCase().includes(q) ||
-        item.folderPath.join('/').toLowerCase().includes(q)
-      );
-    });
-  }, [mode, currentFolders, docsInCurrentPath, query]);
+    if (!q) return currentFolders;
+    return currentFolders.filter((item) =>
+      item.name.toLowerCase().includes(q) || item.path.join('/').toLowerCase().includes(q)
+    );
+  }, [currentFolders, query]);
+
+  const availableDocItems = useMemo(
+    () => (query.trim() ? docsFromSearch : docsInCurrentPath),
+    [query, docsFromSearch, docsInCurrentPath]
+  );
+
+  const visibleFolders = useMemo(() => {
+    if (mode !== 'doc') return availableFolderItems;
+    if (listFilter === 'files') return [];
+    return availableFolderItems;
+  }, [mode, listFilter, availableFolderItems]);
+
+  const visibleDocs = useMemo(() => {
+    if (mode !== 'doc') return [];
+    if (listFilter === 'folders') return [];
+    return availableDocItems;
+  }, [mode, listFilter, availableDocItems]);
+
+  const visibleItems = useMemo<PickerItem[]>(
+    () => (mode !== 'doc' ? visibleFolders : [...visibleFolders, ...visibleDocs]),
+    [mode, visibleFolders, visibleDocs]
+  );
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -180,13 +434,27 @@ export function FinderPicker({
     selectedEl?.scrollIntoView({ block: 'nearest' });
   }, [selectedIndex]);
 
-  const selectedDocs = useMemo(() => {
-    const byId = new Map(allDocuments.map((d) => [d.id, d]));
-    return selectedDocIds.map((id) => byId.get(id)).filter(Boolean) as StoredDocument[];
-  }, [selectedDocIds, allDocuments]);
+  const visibleDocsById = useMemo(() => {
+    const map = new Map<string, StoredDocument>();
+    for (const item of docsInCurrentPath) map.set(item.id, item.doc);
+    for (const item of docsFromSearch) map.set(item.id, item.doc);
+    return map;
+  }, [docsInCurrentPath, docsFromSearch]);
+
+  const selectedDocs = useMemo(
+    () => selectedDocIds.map((id) => selectedDocsById.get(id) || visibleDocsById.get(id)).filter(Boolean) as StoredDocument[],
+    [selectedDocIds, selectedDocsById, visibleDocsById]
+  );
 
   const toggleDoc = React.useCallback(
-    (docId: string) => {
+    (docId: string, doc?: StoredDocument) => {
+      if (doc) {
+        setSelectedDocsById((prev) => {
+          const next = new Map(prev);
+          next.set(docId, doc);
+          return next;
+        });
+      }
       setSelectedDocIds((prev) => {
         if (prev.includes(docId)) return prev.filter((id) => id !== docId);
         if (prev.length >= Math.max(1, maxDocs)) return prev;
@@ -223,7 +491,7 @@ export function FinderPicker({
           return;
         }
         if (mode === 'doc') {
-          toggleDoc(item.id);
+          toggleDoc(item.id, item.doc);
         }
       }
     };
@@ -246,19 +514,25 @@ export function FinderPicker({
       onOpenChange(false);
       return;
     }
-    onConfirm({ docs: selectedDocs });
+    const docsForConfirm = selectedDocIds.map((id) => selectedDocsById.get(id) || visibleDocsById.get(id) || ({ id } as StoredDocument));
+    onConfirm({ docs: docsForConfirm });
     onOpenChange(false);
   };
 
   const selectedSummary =
-    selectedDocs.length === 0
+    selectedDocIds.length === 0
       ? 'None'
-      : selectedDocs
-          .map((doc) => docTitle(doc))
+      : selectedDocIds
+          .map((id) => compactText(docFilename(selectedDocsById.get(id) || visibleDocsById.get(id)), 28))
           .slice(0, 1)
           .join(', ');
 
   const maxSelectable = Math.max(1, maxDocs);
+  const folderLoadingForCurrentPath = folderExplorer.loading === pathKey(viewingPath);
+  const isBusy =
+    mode === 'doc'
+      ? folderLoadingForCurrentPath || (query.trim() ? searchLoading : pathLoading)
+      : folderLoadingForCurrentPath;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -304,8 +578,42 @@ export function FinderPicker({
           </div>
         </div>
 
+        {mode === 'doc' ? (
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-border/30 bg-muted/10">
+            <Button
+              type="button"
+              variant={listFilter === 'all' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => setListFilter('all')}
+            >
+              All ({availableFolderItems.length + availableDocItems.length})
+            </Button>
+            <Button
+              type="button"
+              variant={listFilter === 'folders' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => setListFilter('folders')}
+            >
+              Folders ({availableFolderItems.length})
+            </Button>
+            <Button
+              type="button"
+              variant={listFilter === 'files' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => setListFilter('files')}
+            >
+              Files ({availableDocItems.length})
+            </Button>
+          </div>
+        ) : null}
+
         <div ref={listRef} className="h-[360px] overflow-y-auto">
-          {visibleItems.length === 0 ? (
+          {isBusy ? (
+            <PickerListSkeleton mode={mode} />
+          ) : visibleItems.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
               <Folder className="h-10 w-10 mb-3 opacity-30" />
               <span className="text-sm">
@@ -318,29 +626,47 @@ export function FinderPicker({
             </div>
           ) : (
             <ul className="p-1.5 space-y-0.5">
-              {visibleItems.map((item, index) => {
+              {mode === 'doc' && visibleFolders.length > 0 ? (
+                <li className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+                  Folders
+                </li>
+              ) : null}
+              {visibleFolders.map((item, index) => {
                 const isFocused = selectedIndex === index;
-                if (item.kind === 'folder') {
-                  return (
-                    <li
-                      key={`folder-${item.id}`}
-                      data-index={index}
-                      onMouseEnter={() => setSelectedIndex(index)}
-                      onClick={() => navigateToPath(item.path)}
-                      className={cn(
-                        'flex items-center justify-between px-2.5 py-2 rounded-md cursor-pointer select-none transition-colors text-sm leading-5',
-                        isFocused && 'bg-muted/60'
-                      )}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <Folder className="h-[18px] w-[18px] text-muted-foreground shrink-0" />
-                        <span className="truncate">{item.name}</span>
+                return (
+                  <li
+                    key={`folder-${item.id}`}
+                    data-index={index}
+                    onMouseEnter={() => setSelectedIndex(index)}
+                    onClick={() => navigateToPath(item.path)}
+                    className={cn(
+                      'flex items-center justify-between rounded-md px-2.5 py-2 text-sm leading-5 select-none transition-colors',
+                      'cursor-pointer border border-transparent bg-amber-500/[0.06]',
+                      isFocused && 'bg-amber-500/[0.14] border-amber-500/20'
+                    )}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="h-[18px] w-[18px] rounded-sm bg-amber-500/20 flex items-center justify-center shrink-0">
+                        <Folder className="h-3.5 w-3.5 text-amber-700 dark:text-amber-300" />
                       </div>
-                      <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0" />
-                    </li>
-                  );
-                }
+                      <div className="min-w-0">
+                        <div className="truncate font-medium">{item.name}</div>
+                        <div className="text-[11px] text-muted-foreground truncate">Folder</div>
+                      </div>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-muted-foreground/50 shrink-0" />
+                  </li>
+                );
+              })}
 
+              {mode === 'doc' && visibleDocs.length > 0 ? (
+                <li className="mt-2 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+                  Files
+                </li>
+              ) : null}
+              {visibleDocs.map((item, offset) => {
+                const index = visibleFolders.length + offset;
+                const isFocused = selectedIndex === index;
                 const isSelected = selectedDocIds.includes(item.id);
                 const isAtLimit = !isSelected && selectedDocIds.length >= maxSelectable;
                 return (
@@ -350,26 +676,33 @@ export function FinderPicker({
                     onMouseEnter={() => setSelectedIndex(index)}
                     onClick={() => {
                       if (mode !== 'doc' || isAtLimit) return;
-                      toggleDoc(item.id);
+                      toggleDoc(item.id, item.doc);
                     }}
                     className={cn(
-                      'flex items-center justify-between px-2.5 py-2 rounded-md select-none transition-colors text-sm leading-5',
+                      'flex items-center justify-between rounded-md px-2.5 py-2 text-sm leading-5 select-none transition-colors',
+                      'border border-transparent',
                       mode === 'doc' && !isAtLimit ? 'cursor-pointer' : 'cursor-default',
-                      isFocused && 'bg-muted/60',
+                      isFocused && 'bg-muted/60 border-border/60',
+                      isSelected && 'bg-primary/5 border-primary/30',
                       isAtLimit && 'opacity-45'
                     )}
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <FileText className="h-[18px] w-[18px] text-muted-foreground shrink-0" />
+                      <div className="h-[18px] w-[18px] rounded-sm bg-blue-500/15 flex items-center justify-center shrink-0">
+                        <FileText className="h-3.5 w-3.5 text-blue-700 dark:text-blue-300" />
+                      </div>
                       <div className="min-w-0">
-                        <div className="truncate text-sm leading-5">{item.title}</div>
-                        <div className="text-xs text-muted-foreground/70 truncate leading-4">
-                          {item.folderPath.length ? `/${item.folderPath.join('/')}` : '/Root'}
-                          {item.subtitle ? ` • ${item.subtitle}` : ''}
+                        <div className="truncate font-medium">{item.filename}</div>
+                        {item.title ? (
+                          <div className="text-xs text-muted-foreground truncate leading-4">{item.title}</div>
+                        ) : null}
+                        <div className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                          <Folder className="h-2.5 w-2.5" />
+                          <span className="truncate">{folderName(item.folderPath)}</span>
                         </div>
                       </div>
                     </div>
-                    {isSelected ? <Check className="h-4 w-4 text-muted-foreground shrink-0" /> : null}
+                    {isSelected ? <Check className="h-4 w-4 text-primary shrink-0" /> : null}
                   </li>
                 );
               })}
@@ -378,17 +711,17 @@ export function FinderPicker({
         </div>
 
         <div className="flex items-center justify-between px-4 py-3 border-t border-border/40 bg-muted/20">
-          <div className="min-w-0 flex-1 pr-3 text-xs text-muted-foreground/80 truncate">
+          <div className="min-w-0 flex-1 pr-3 text-xs text-muted-foreground/80 overflow-hidden text-ellipsis whitespace-nowrap">
             {mode === 'folder' ? (
-              <>Selected: {viewingPath.length ? `/${viewingPath.join('/')}` : '/Root'}</>
+              <>Selected: {viewingPath.length ? compactText(`/${viewingPath.join('/')}`, 36) : 'Root'}</>
             ) : (
               <>
-                Selected {selectedDocs.length}/{maxSelectable}
-                {selectedSummary !== 'None' ? ` • ${selectedSummary}${selectedDocs.length > 1 ? '…' : ''}` : ''}
+                Selected {selectedDocIds.length}/{maxSelectable} files
+                {selectedSummary !== 'None' ? ` • ${selectedSummary}${selectedDocIds.length > 1 ? '…' : ''}` : ''}
               </>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
@@ -396,7 +729,7 @@ export function FinderPicker({
               type="button"
               size="sm"
               className="h-8"
-              disabled={mode === 'doc' && selectedDocs.length === 0}
+              disabled={mode === 'doc' && selectedDocIds.length === 0}
               onClick={handleChoose}
             >
               Choose

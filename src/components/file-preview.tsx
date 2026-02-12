@@ -21,6 +21,7 @@ import {
 import { apiFetch, getApiContext } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
+import TabularPreview from '@/components/tabular-preview';
 import {
   Tooltip,
   TooltipContent,
@@ -31,6 +32,7 @@ import {
 interface FilePreviewProps {
   documentId: string;
   mimeType?: string;
+  filename?: string;
   extractedContent?: string;
   className?: string;
   showTitle?: boolean;
@@ -49,9 +51,51 @@ interface FileMetadata {
   expires: string;
 }
 
+const TEXT_EXTENSIONS = new Set(['txt', 'md', 'markdown', 'json', 'log', 'xml', 'yaml', 'yml']);
+const TABULAR_EXTENSIONS = new Set(['csv', 'xls', 'xlsx']);
+
+function getFileExtension(filename?: string) {
+  if (!filename) return '';
+  const index = filename.lastIndexOf('.');
+  if (index < 0) return '';
+  return filename.slice(index + 1).toLowerCase();
+}
+
+function isTextLikeMime(mimeType?: string) {
+  const value = (mimeType || '').toLowerCase();
+  if (value.includes('csv')) return false;
+  return (
+    value.startsWith('text/') ||
+    value.includes('markdown') ||
+    value === 'application/json' ||
+    value === 'application/xml' ||
+    value === 'application/x-yaml'
+  );
+}
+
+function isTextLikeFile(mimeType?: string, filename?: string) {
+  if (isTextLikeMime(mimeType)) return true;
+  return TEXT_EXTENSIONS.has(getFileExtension(filename));
+}
+
+function isTabularMime(mimeType?: string) {
+  const value = (mimeType || '').toLowerCase();
+  return (
+    value.includes('csv') ||
+    value.includes('spreadsheetml') ||
+    value.includes('application/vnd.ms-excel')
+  );
+}
+
+function isTabularFile(mimeType?: string, filename?: string) {
+  if (isTabularMime(mimeType)) return true;
+  return TABULAR_EXTENSIONS.has(getFileExtension(filename));
+}
+
 export default function FilePreview({
   documentId,
   mimeType,
+  filename,
   extractedContent,
   className = "",
   showTitle = true,
@@ -64,11 +108,26 @@ export default function FilePreview({
   const [fileMetadata, setFileMetadata] = useState<FileMetadata | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const isPreviewable = mimeType === 'application/pdf' || mimeType?.startsWith('image/');
+  const [rawTextContent, setRawTextContent] = useState('');
+  const [rawTextLoading, setRawTextLoading] = useState(false);
+  const [rawTextError, setRawTextError] = useState<string | null>(null);
+  const [tabularData, setTabularData] = useState<any | null>(null);
+  const [tabularLoading, setTabularLoading] = useState(false);
+  const [tabularError, setTabularError] = useState<string | null>(null);
+  const [tabularLoadAttempted, setTabularLoadAttempted] = useState(false);
+  const isPreviewable = (
+    mimeType === 'application/pdf' ||
+    mimeType?.startsWith('image/') ||
+    isTabularFile(mimeType, filename)
+  );
   const [showExtracted, setShowExtracted] = useState(!isPreviewable);
   const [previewError, setPreviewError] = useState(false);
   const [copied, setCopied] = useState(false);
   const { toast } = useToast();
+
+  useEffect(() => {
+    setShowExtracted(!isPreviewable);
+  }, [documentId, isPreviewable]);
 
   const loadFileMetadata = async () => {
     setLoading(true);
@@ -110,9 +169,10 @@ export default function FilePreview({
   };
 
   const copyExtractedContent = async () => {
-    if (!extractedContent) return;
+    const content = (extractedContent && extractedContent.trim()) ? extractedContent : rawTextContent;
+    if (!content) return;
     try {
-      await navigator.clipboard.writeText(extractedContent);
+      await navigator.clipboard.writeText(content);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       toast({ title: 'Copied', description: 'Content copied to clipboard' });
@@ -121,21 +181,113 @@ export default function FilePreview({
     }
   };
 
-  const isPDF = fileMetadata?.mimeType === 'application/pdf' || mimeType === 'application/pdf';
-  const isImage = fileMetadata?.mimeType?.startsWith('image/') || mimeType?.startsWith('image/');
+  const resolvedMime = fileMetadata?.mimeType || mimeType;
+  const resolvedFilename = fileMetadata?.filename || filename;
+  const isPDF = resolvedMime === 'application/pdf';
+  const isImage = Boolean(resolvedMime?.startsWith('image/'));
+  const isTabular = isTabularFile(resolvedMime, resolvedFilename);
+  const isTextFile = isTextLikeFile(resolvedMime, resolvedFilename);
   const canPreview = isPDF || isImage;
+  const canRichPreview = canPreview || isTabular;
+  const textContent = (extractedContent && extractedContent.trim()) ? extractedContent : rawTextContent;
+  const shouldLoadMetadata = canRichPreview || isTextFile;
 
   useEffect(() => {
-    if (canPreview && !fileMetadata && !loading && !error) {
+    if (shouldLoadMetadata && !fileMetadata && !loading && !error) {
       loadFileMetadata();
     }
-  }, [canPreview, fileMetadata, loading, error]);
+  }, [shouldLoadMetadata, fileMetadata, loading, error]);
 
   useEffect(() => {
-    if (!canPreview && extractedContent) {
+    if (!canRichPreview && textContent) {
       setShowExtracted(true);
     }
-  }, [canPreview, extractedContent]);
+  }, [canRichPreview, textContent]);
+
+  useEffect(() => {
+    setTabularData(null);
+    setTabularError(null);
+    setTabularLoading(false);
+    setTabularLoadAttempted(false);
+  }, [documentId]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadRawText = async () => {
+      if (!isTextFile || !fileMetadata?.url || textContent) return;
+      setRawTextLoading(true);
+      setRawTextError(null);
+      try {
+        const response = await fetch(fileMetadata.url);
+        if (!response.ok) throw new Error('Failed to fetch text content');
+        const raw = await response.text();
+        if (!isCancelled) setRawTextContent(raw || '');
+      } catch (err: any) {
+        if (!isCancelled) {
+          setRawTextError(err?.message || 'Failed to load text preview');
+        }
+      } finally {
+        if (!isCancelled) setRawTextLoading(false);
+      }
+    };
+
+    void loadRawText();
+    return () => { isCancelled = true; };
+  }, [isTextFile, fileMetadata?.url, textContent]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadTabularData = async () => {
+      if (!isTabular || tabularData || tabularLoading || tabularLoadAttempted) return;
+
+      setTabularLoading(true);
+      setTabularLoadAttempted(true);
+      setTabularError(null);
+      try {
+        const { orgId } = getApiContext();
+        if (!orgId) return;
+
+        let nextTabular: any = null;
+
+        try {
+          const preview = await apiFetch<any>(`/orgs/${orgId}/documents/${documentId}/tabular-preview`);
+          if (preview && Array.isArray(preview.sheets)) {
+            nextTabular = preview;
+          }
+        } catch { }
+
+        if (!nextTabular) {
+          try {
+            const extraction = await apiFetch<any>(`/orgs/${orgId}/documents/${documentId}/extraction`);
+            nextTabular = extraction?.tabular || null;
+          } catch { }
+        }
+
+        if (!isCancelled) {
+          setTabularData(nextTabular);
+          if (!nextTabular) {
+            setTabularError(null);
+          }
+        }
+      } catch (err: any) {
+        if (!isCancelled) {
+          if (err?.status === 404) {
+            setTabularData(null);
+            setTabularError(null);
+          } else {
+            setTabularError(err?.message || 'Failed to load tabular preview');
+          }
+        }
+      } finally {
+        if (!isCancelled) setTabularLoading(false);
+      }
+    };
+
+    void loadTabularData();
+    return () => { isCancelled = true; };
+  }, [isTabular, documentId]);
 
   const normalizedPage = typeof initialPage === 'number' && initialPage > 0 ? Math.floor(initialPage) : null;
 
@@ -143,6 +295,13 @@ export default function FilePreview({
     if (!fileMetadata || previewError) return null;
 
     if (isPDF) {
+      if (!fileMetadata) {
+        return (
+          <div className={cn("flex items-center justify-center text-muted-foreground text-sm", className)}>
+            Unable to load preview
+          </div>
+        );
+      }
       const baseUrl = fileMetadata.url.split('#')[0];
       const hashParts = [] as string[];
       if (normalizedPage) hashParts.push(`page=${normalizedPage}`);
@@ -182,6 +341,19 @@ export default function FilePreview({
     }
 
     return null;
+  };
+
+  const renderTabularContent = () => {
+    if (!tabularData && !tabularLoading && !tabularError && textContent) {
+      return renderExtractedContent();
+    }
+    return (
+      <TabularPreview
+        tabular={tabularData}
+        loading={tabularLoading}
+        error={tabularError}
+      />
+    );
   };
 
   const formatExtractedContent = (content: string) => {
@@ -260,14 +432,28 @@ export default function FilePreview({
   };
 
   const renderExtractedContent = () => {
-    if (!extractedContent) {
+    if (rawTextLoading && !textContent) {
+      return (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading text preview...
+          </div>
+          <Skeleton className="h-[50vh] w-full rounded-lg" />
+        </div>
+      );
+    }
+
+    if (!textContent) {
       return (
         <div className="flex flex-col items-center justify-center py-12 text-center">
           <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-muted/30 mb-4">
             <FileText className="h-6 w-6 text-muted-foreground/50" />
           </div>
           <p className="text-sm font-medium text-foreground mb-1">No extracted content</p>
-          <p className="text-xs text-muted-foreground">Content extraction may not be available for this file type</p>
+          <p className="text-xs text-muted-foreground">
+            {rawTextError || 'Content extraction may not be available for this file type'}
+          </p>
         </div>
       );
     }
@@ -279,7 +465,7 @@ export default function FilePreview({
           isMobile ? "max-h-[50vh]" : "max-h-[70vh]"
         )}>
           <div className="prose-preview">
-            {formatExtractedContent(extractedContent)}
+            {formatExtractedContent(textContent)}
           </div>
         </div>
         {/* Fade overlay at bottom */}
@@ -290,17 +476,24 @@ export default function FilePreview({
 
   // Embedded mode: render just the raw preview without any wrapper UI
   if (embedded) {
-    if (loading) {
+    if (loading && !textContent) {
       return <Skeleton className={cn("w-full h-full", className)} />;
     }
-    if (error || !fileMetadata) {
+    if (error && !textContent) {
       return (
         <div className={cn("flex items-center justify-center text-muted-foreground text-sm", className)}>
-          {error || 'Unable to load preview'}
+          {error}
         </div>
       );
     }
     if (isPDF) {
+      if (!fileMetadata) {
+        return (
+          <div className={cn("flex items-center justify-center text-muted-foreground text-sm", className)}>
+            Unable to load preview
+          </div>
+        );
+      }
       const baseUrl = fileMetadata.url.split('#')[0];
       const hashParts = [] as string[];
       if (normalizedPage) hashParts.push(`page=${normalizedPage}`);
@@ -317,6 +510,13 @@ export default function FilePreview({
       );
     }
     if (isImage) {
+      if (!fileMetadata) {
+        return (
+          <div className={cn("flex items-center justify-center text-muted-foreground text-sm", className)}>
+            Unable to load preview
+          </div>
+        );
+      }
       return (
         <img
           src={fileMetadata.url}
@@ -326,7 +526,40 @@ export default function FilePreview({
         />
       );
     }
-    return null;
+    if (isTabular) {
+      return (
+        <div className={cn("w-full h-full overflow-auto p-3 bg-background", className)}>
+          <TabularPreview
+            tabular={tabularData}
+            loading={tabularLoading}
+            error={tabularError}
+            className="h-full"
+          />
+        </div>
+      );
+    }
+    if (isTextFile) {
+      if (!textContent && rawTextLoading) {
+        return <Skeleton className={cn("w-full h-full", className)} />;
+      }
+      if (!textContent) {
+        return (
+          <div className={cn("flex items-center justify-center text-muted-foreground text-sm", className)}>
+            {rawTextError || 'No text preview available'}
+          </div>
+        );
+      }
+      return (
+        <div className={cn("w-full h-full overflow-auto p-4 bg-background text-foreground", className)}>
+          <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed font-mono">{textContent}</pre>
+        </div>
+      );
+    }
+    return (
+      <div className={cn("flex items-center justify-center text-muted-foreground text-sm", className)}>
+        Unable to load preview
+      </div>
+    );
   }
 
   return (
@@ -335,7 +568,7 @@ export default function FilePreview({
       <div className="flex items-center justify-between px-5 py-3 border-b border-border/30">
         <div className="flex items-center gap-2">
           <div className="flex h-7 w-7 items-center justify-center rounded-md bg-muted/50">
-            {canPreview ? (
+            {canRichPreview ? (
               <Eye className="h-3.5 w-3.5 text-muted-foreground" />
             ) : (
               <FileText className="h-3.5 w-3.5 text-muted-foreground" />
@@ -344,14 +577,14 @@ export default function FilePreview({
           <span className="text-sm font-semibold text-foreground">Preview</span>
           {fileMetadata && (
             <Badge variant="outline" className="text-xs font-normal ml-1">
-              {isPDF ? 'PDF' : isImage ? 'Image' : fileMetadata.mimeType.split('/')[1]?.toUpperCase()}
+              {isPDF ? 'PDF' : isImage ? 'Image' : isTabular ? 'TABLE' : fileMetadata.mimeType.split('/')[1]?.toUpperCase()}
             </Badge>
           )}
         </div>
 
         <div className="flex items-center gap-1">
           {/* Toggle between file and extracted content */}
-          {canPreview && extractedContent && (
+          {canRichPreview && textContent && (
             <div className="flex items-center p-0.5 rounded-lg bg-muted/30 mr-2">
               <button
                 className={cn(
@@ -362,7 +595,7 @@ export default function FilePreview({
                 disabled={loading}
               >
                 <Eye className="h-3 w-3" />
-                Original
+                {isTabular ? 'Table' : 'Original'}
               </button>
               <button
                 className={cn(
@@ -378,7 +611,7 @@ export default function FilePreview({
           )}
 
           {/* Copy button for extracted content */}
-          {showExtracted && extractedContent && (
+          {showExtracted && textContent && (
             <TooltipProvider delayDuration={300}>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -483,7 +716,9 @@ export default function FilePreview({
 
         {!loading && !error && (
           <>
-            {!showExtracted && fileMetadata && canPreview ? (
+            {!showExtracted && isTabular ? (
+              renderTabularContent()
+            ) : !showExtracted && fileMetadata && canPreview ? (
               <>
                 {previewError ? (
                   <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -493,7 +728,7 @@ export default function FilePreview({
                     <p className="text-sm font-medium text-foreground mb-1">Preview unavailable</p>
                     <p className="text-xs text-muted-foreground mb-4">Unable to display this file type</p>
                     <div className="flex gap-2">
-                      {extractedContent && (
+                      {textContent && (
                         <Button size="sm" onClick={() => setShowExtracted(true)} variant="outline" className="gap-1.5">
                           <FileText className="h-3.5 w-3.5" />
                           View Text
@@ -514,14 +749,14 @@ export default function FilePreview({
             )}
 
             {/* No preview available state */}
-            {!canPreview && !loading && !fileMetadata && !extractedContent && (
+            {!canRichPreview && !loading && !fileMetadata && !textContent && (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-muted/30 mb-4">
                   <FileType className="h-6 w-6 text-muted-foreground/50" />
                 </div>
                 <p className="text-sm font-medium text-foreground mb-1">Preview not available</p>
                 <p className="text-xs text-muted-foreground mb-4">
-                  {mimeType ? `File type: ${mimeType}` : 'Only PDFs and images can be previewed'}
+                  {mimeType ? `File type: ${mimeType}` : 'Only PDFs, images, CSV, and Excel can be previewed'}
                 </p>
                 <Button size="sm" onClick={loadFileMetadata} variant="outline" className="gap-1.5">
                   <Download className="h-3.5 w-3.5" />

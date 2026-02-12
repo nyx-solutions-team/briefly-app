@@ -16,7 +16,7 @@ type AuthUser = {
 
 type BootstrapData = {
   user: { id: string; displayName: string | null };
-  orgs: Array<{ orgId: string; role: string; name: string; expiresAt?: string }>;
+  orgs: Array<{ orgId: string; role: string; name: string; expiresAt?: string; joinedAt?: string }>;
   selectedOrgId: string;
   orgSettings: any;
   userSettings: any;

@@ -53,6 +53,7 @@ interface Props {
     job: IngestionJob | null;
     steps: IngestionStep[];
     onRetry?: (stepKey?: string) => void;
+    onStop?: () => void;
     isRetrying?: boolean;
     className?: string;
 }
@@ -122,7 +123,7 @@ function getJobStatusBadge(status: IngestionJob['status']) {
     }
 }
 
-export function IngestionPipelineProgress({ job, steps, onRetry, isRetrying, className }: Props) {
+export function IngestionPipelineProgress({ job, steps, onRetry, onStop, isRetrying, className }: Props) {
     const sortedSteps = useMemo(() => {
         return [...steps].sort((a, b) => a.step_sequence - b.step_sequence);
     }, [steps]);
@@ -153,6 +154,15 @@ export function IngestionPipelineProgress({ job, steps, onRetry, isRetrying, cla
     }, [steps]);
 
     const failedStep = useMemo(() => steps.find(s => s.status === 'failed'), [steps]);
+    const hasActiveRun = useMemo(
+        () => (
+            job?.status === 'running' ||
+            job?.status === 'queued' ||
+            steps.some((step) => step.status === 'running' || step.status === 'pending')
+        ),
+        [job?.status, steps]
+    );
+    const canRetryPipeline = useMemo(() => job?.status !== 'completed', [job?.status]);
 
     if (!job) {
         return (
@@ -182,7 +192,18 @@ export function IngestionPipelineProgress({ job, steps, onRetry, isRetrying, cla
                             <div className="h-1 w-1 rounded-full bg-border" />
                             <span className="text-[11px] font-mono text-muted-foreground">{stats.completed}/{stats.total} stages</span>
                         </div>
-                        {failedStep && onRetry && (
+                        {hasActiveRun && onStop ? (
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-[10px] font-bold uppercase tracking-tight text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                                onClick={onStop}
+                                disabled={isRetrying}
+                            >
+                                <RefreshCw className={cn("h-3 w-3 mr-1.5", isRetrying && "animate-spin")} />
+                                Stop
+                            </Button>
+                        ) : canRetryPipeline && onRetry && (
                             <Button
                                 variant="ghost"
                                 size="sm"

@@ -1434,6 +1434,7 @@ export default function DocumentDetailPage() {
                 <FilePreview
                   documentId={doc.id}
                   mimeType={doc.mimeType}
+                  filename={doc.filename}
                   extractedContent={doc.content || ocrText || undefined}
                   isMobile={true}
                   embedded={true}
@@ -2125,6 +2126,7 @@ export default function DocumentDetailPage() {
                 <FilePreview
                   documentId={doc.id}
                   mimeType={doc.mimeType}
+                  filename={doc.filename}
                   extractedContent={doc.content || ocrText || undefined}
                   isMobile={isMobile}
                 />
@@ -2362,6 +2364,7 @@ export default function DocumentDetailPage() {
               <FilePreview
                 documentId={doc.id}
                 mimeType={doc.mimeType}
+                filename={doc.filename}
                 extractedContent={doc.content || ocrText || undefined}
                 isMobile={true}
                 embedded={true}

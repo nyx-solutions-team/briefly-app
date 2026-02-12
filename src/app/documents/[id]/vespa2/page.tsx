@@ -327,6 +327,39 @@ export default function VespaOCRMapPage() {
     }
   };
 
+  const handleStop = async () => {
+    if (!v2Job) return;
+    const hasActiveSteps = v2Steps.some((step) => step.status === 'running' || step.status === 'pending');
+    if (v2Job.status === 'completed' && !hasActiveSteps) {
+      toast({
+        title: 'Job already completed',
+        description: 'This ingestion run is already completed, so stop is not applicable.',
+      });
+      return;
+    }
+    setIsRetrying(true);
+    try {
+      const { orgId } = getApiContext();
+      await apiFetch(`/orgs/${orgId}/ingestion-v2/${v2Job.id}/stop`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'stopped by user' }),
+      });
+      toast({
+        title: 'Job stopped',
+        description: 'Ingestion was stopped. You can retry it when ready.',
+      });
+      await fetchV2JobData();
+    } catch (err: any) {
+      toast({
+        title: 'Stop failed',
+        description: err.message || 'Failed to stop job',
+        variant: 'destructive'
+      });
+    } finally {
+      setIsRetrying(false);
+    }
+  };
+
   const coordinates = doclingData?.coordinates || [];
   const ocrText = extraction?.ocrText || '';
   const evidencePayload = extraction?.evidence_spans;
@@ -744,6 +777,7 @@ export default function VespaOCRMapPage() {
                       job={v2Job}
                       steps={v2Steps}
                       onRetry={handleRetryJob}
+                      onStop={handleStop}
                       isRetrying={isRetrying}
                       className="border-none bg-transparent p-0 shadow-none"
                     />

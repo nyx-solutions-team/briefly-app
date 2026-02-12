@@ -32,8 +32,8 @@ import { useCategories } from '@/hooks/use-categories';
 import { useUserDepartmentCategories } from '@/hooks/use-department-categories';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import UploadFilePreview from '@/components/upload-file-preview';
-import CsvPreview from '@/components/csv-preview';
 import FilePreview from '@/components/file-preview';
+import TabularPreview from '@/components/tabular-preview';
 import JSZip from 'jszip';
 import {
   CommandDialog,
@@ -104,20 +104,29 @@ type QueueDocumentPrefill = {
 
 type IngestionStatus = 'idle' | 'uploading' | 'processing' | 'ready' | 'saving' | 'success' | 'error';
 
+type TabularSheetPreview = {
+  name: string;
+  headers: string[];
+  rows: string[][];
+};
+
+type TabularPreviewPayload = {
+  format: 'csv' | 'excel';
+  sheets: TabularSheetPreview[];
+  rowCount: number;
+  indexedRowCount: number;
+  isSampled: boolean;
+};
+
 type TabularPreviewState =
   | {
-    type: 'csv';
     loading: true;
   }
   | {
-    type: 'csv';
     loading: false;
-    headers: string[];
-    rows: string[][];
-    truncated: boolean;
+    data: TabularPreviewPayload;
   }
   | {
-    type: 'csv';
     loading: false;
     error: string;
   };
@@ -224,29 +233,58 @@ const extractDirectorySegments = (relativePath: string) => {
   return sanitized.split('/').filter(Boolean).map(normalizeSegment);
 };
 
-const CSV_PREVIEW_MAX_BYTES = 250_000;
-const CSV_PREVIEW_MAX_ROWS = 30;
-const CSV_PREVIEW_MAX_COLUMNS = 12;
-
 const isCsvFile = (file: File) => {
   const name = file.name?.toLowerCase() || '';
   const mime = file.type?.toLowerCase() || '';
   return name.endsWith('.csv') || mime === 'text/csv' || mime === 'application/csv';
 };
 
-type CsvParseResult = { rows: string[][]; truncated: boolean };
+const isXlsxFile = (file: File) => {
+  const name = file.name?.toLowerCase() || '';
+  const mime = file.type?.toLowerCase() || '';
+  return (
+    name.endsWith('.xlsx') ||
+    mime.includes('spreadsheetml')
+  );
+};
 
-const parseCsvText = (input: string, maxRows: number, maxColumns: number): CsvParseResult => {
+const isExcelFile = (file: File) => {
+  const name = file.name?.toLowerCase() || '';
+  const mime = file.type?.toLowerCase() || '';
+  return (
+    name.endsWith('.xls') ||
+    name.endsWith('.xlsx') ||
+    mime.includes('spreadsheetml') ||
+    mime.includes('application/vnd.ms-excel')
+  );
+};
+
+const detectCsvDelimiter = (text: string) => {
+  const firstLine = (text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0) || '';
+  const candidates = [',', ';', '\t', '|'];
+  let best = ',';
+  let bestCount = -1;
+  for (const candidate of candidates) {
+    const count = firstLine.split(candidate).length - 1;
+    if (count > bestCount) {
+      best = candidate;
+      bestCount = count;
+    }
+  }
+  return best;
+};
+
+const parseDelimitedText = (input: string, delimiter: string) => {
   const rows: string[][] = [];
   let currentRow: string[] = [];
   let currentCell = '';
   let inQuotes = false;
-  let truncated = false;
 
   const pushCell = () => {
-    if (currentRow.length < maxColumns) {
-      currentRow.push(currentCell);
-    }
+    currentRow.push(currentCell);
     currentCell = '';
   };
 
@@ -269,7 +307,7 @@ const parseCsvText = (input: string, maxRows: number, maxColumns: number): CsvPa
       continue;
     }
 
-    if (!inQuotes && (char === ',' || char === ';' || char === '\t')) {
+    if (!inQuotes && char === delimiter) {
       pushCell();
       continue;
     }
@@ -280,37 +318,197 @@ const parseCsvText = (input: string, maxRows: number, maxColumns: number): CsvPa
       }
       pushCell();
       pushRow();
-      if (rows.length >= maxRows) {
-        truncated = true;
-        break;
-      }
       continue;
     }
 
     currentCell += char;
   }
 
-  if (!truncated) {
-    pushCell();
-    if (currentRow.length) {
-      pushRow();
+  pushCell();
+  if (currentRow.length > 1 || (currentRow.length === 1 && currentRow[0] !== '')) {
+    pushRow();
+  }
+
+  return rows;
+};
+
+const buildHeaders = (row: string[]) =>
+  row.map((value, idx) => {
+    const trimmed = String(value || '').trim();
+    return trimmed || `Column ${idx + 1}`;
+  });
+
+const normalizeTableRows = (rows: string[][], width: number) =>
+  rows.map((row) => Array.from({ length: width }, (_, idx) => String(row?.[idx] ?? '')));
+
+const buildCsvTabularPayload = (text: string): TabularPreviewPayload => {
+  const normalizedText = (text || '').replace(/^\uFEFF/, '');
+  const delimiter = detectCsvDelimiter(normalizedText);
+  const parsedRows = parseDelimitedText(normalizedText, delimiter);
+
+  if (!parsedRows.length) {
+    return {
+      format: 'csv',
+      sheets: [{ name: 'CSV', headers: [], rows: [] }],
+      rowCount: 0,
+      indexedRowCount: 0,
+      isSampled: false,
+    };
+  }
+
+  const firstRow = parsedRows[0] || [];
+  const maxCols = parsedRows.reduce((max, row) => Math.max(max, row.length), firstRow.length);
+  const headerSeed = firstRow.length ? firstRow : Array.from({ length: maxCols }, (_, idx) => `Column ${idx + 1}`);
+  const headers = buildHeaders(headerSeed);
+  const dataRows = parsedRows.slice(1);
+  const normalizedRows = normalizeTableRows(dataRows, headers.length || maxCols);
+
+  return {
+    format: 'csv',
+    sheets: [{ name: 'CSV', headers, rows: normalizedRows }],
+    rowCount: normalizedRows.length,
+    indexedRowCount: normalizedRows.length,
+    isSampled: false,
+  };
+};
+
+const getColumnIndexFromRef = (ref: string) => {
+  const letters = (ref.match(/[A-Z]+/i)?.[0] || '').toUpperCase();
+  if (!letters) return 0;
+  let index = 0;
+  for (let i = 0; i < letters.length; i += 1) {
+    index = index * 26 + (letters.charCodeAt(i) - 64);
+  }
+  return Math.max(0, index - 1);
+};
+
+const extractNodeText = (node: Element | null | undefined) => {
+  if (!node) return '';
+  return Array.from(node.childNodes)
+    .map((child: any) => child?.textContent || '')
+    .join('');
+};
+
+const parseXlsxPreview = async (file: File): Promise<TabularPreviewPayload> => {
+  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+
+  const workbookXml = await zip.file('xl/workbook.xml')?.async('string');
+  const workbookRelsXml = await zip.file('xl/_rels/workbook.xml.rels')?.async('string');
+  if (!workbookXml || !workbookRelsXml) {
+    throw new Error('Unsupported Excel file format');
+  }
+
+  const parser = new DOMParser();
+  const workbookDoc = parser.parseFromString(workbookXml, 'application/xml');
+  const workbookRelsDoc = parser.parseFromString(workbookRelsXml, 'application/xml');
+
+  const sharedStringsXml = await zip.file('xl/sharedStrings.xml')?.async('string');
+  const sharedStrings: string[] = [];
+  if (sharedStringsXml) {
+    const sharedDoc = parser.parseFromString(sharedStringsXml, 'application/xml');
+    const siNodes = Array.from(sharedDoc.getElementsByTagName('si'));
+    for (const siNode of siNodes) {
+      const richTextNodes = Array.from(siNode.getElementsByTagName('t'));
+      if (richTextNodes.length > 0) {
+        sharedStrings.push(richTextNodes.map((entry) => entry.textContent || '').join(''));
+      } else {
+        sharedStrings.push(siNode.textContent || '');
+      }
     }
   }
 
-  return { rows, truncated };
+  const relById = new Map<string, string>();
+  const relationNodes = Array.from(workbookRelsDoc.getElementsByTagName('Relationship'));
+  for (const relation of relationNodes) {
+    const id = relation.getAttribute('Id') || '';
+    const target = relation.getAttribute('Target') || '';
+    if (id && target) relById.set(id, target);
+  }
+
+  const sheetNodes = Array.from(workbookDoc.getElementsByTagName('sheet'));
+  const sheets: TabularSheetPreview[] = [];
+  let totalRows = 0;
+
+  for (const sheetNode of sheetNodes) {
+    const relId = sheetNode.getAttribute('r:id') || sheetNode.getAttribute('id') || '';
+    const sheetName = sheetNode.getAttribute('name') || `Sheet ${sheets.length + 1}`;
+    const rawTarget = relById.get(relId);
+    if (!rawTarget) continue;
+
+    const targetPath = rawTarget.startsWith('/')
+      ? rawTarget.replace(/^\/+/, '')
+      : `xl/${rawTarget.replace(/^\.?\/+/, '')}`;
+
+    const worksheetXml = await zip.file(targetPath)?.async('string');
+    if (!worksheetXml) continue;
+
+    const worksheetDoc = parser.parseFromString(worksheetXml, 'application/xml');
+    const rowNodes = Array.from(worksheetDoc.getElementsByTagName('row'));
+
+    const parsedRows: string[][] = [];
+    let maxCols = 0;
+
+    for (const rowNode of rowNodes) {
+      const cellNodes = Array.from(rowNode.getElementsByTagName('c'));
+      if (!cellNodes.length) continue;
+
+      const sparseRow: string[] = [];
+      for (const cellNode of cellNodes) {
+        const ref = cellNode.getAttribute('r') || '';
+        const type = (cellNode.getAttribute('t') || '').toLowerCase();
+        const valueNode = cellNode.getElementsByTagName('v')[0];
+        const inlineNode = cellNode.getElementsByTagName('is')[0];
+        const rawValue = valueNode?.textContent || '';
+        let value = '';
+
+        if (type === 's') {
+          const sharedIdx = Number(rawValue);
+          value = Number.isFinite(sharedIdx) ? (sharedStrings[sharedIdx] || '') : '';
+        } else if (type === 'inlinestr') {
+          value = extractNodeText(inlineNode);
+        } else if (type === 'b') {
+          value = rawValue === '1' ? 'TRUE' : 'FALSE';
+        } else {
+          value = rawValue;
+        }
+
+        const colIndex = getColumnIndexFromRef(ref);
+        sparseRow[colIndex] = String(value || '');
+      }
+
+      const normalizedRow = sparseRow.map((cell) => String(cell ?? ''));
+      const hasValue = normalizedRow.some((cell) => cell.trim().length > 0);
+      if (!hasValue) continue;
+      parsedRows.push(normalizedRow);
+      maxCols = Math.max(maxCols, normalizedRow.length);
+    }
+
+    if (!parsedRows.length) continue;
+
+    const headerSeed = parsedRows[0]?.length ? parsedRows[0] : Array.from({ length: maxCols }, (_, idx) => `Column ${idx + 1}`);
+    const headers = buildHeaders(headerSeed);
+    const dataRows = normalizeTableRows(parsedRows.slice(1), Math.max(headers.length, maxCols));
+    totalRows += dataRows.length;
+    sheets.push({ name: sheetName, headers, rows: dataRows });
+  }
+
+  return {
+    format: 'excel',
+    sheets,
+    rowCount: totalRows,
+    indexedRowCount: totalRows,
+    isSampled: false,
+  };
 };
 
-const generateCsvPreview = async (file: File) => {
-  const slice = file.slice(0, CSV_PREVIEW_MAX_BYTES);
-  const text = await slice.text();
-  const { rows, truncated } = parseCsvText(text, CSV_PREVIEW_MAX_ROWS + 1, CSV_PREVIEW_MAX_COLUMNS);
-  const headers = rows[0] || [];
-  const dataRows = rows.slice(1);
-  return {
-    headers,
-    rows: dataRows,
-    truncated: truncated || file.size > CSV_PREVIEW_MAX_BYTES,
-  };
+const generateTabularPreview = async (file: File): Promise<TabularPreviewPayload> => {
+  if (isCsvFile(file)) {
+    return buildCsvTabularPayload(await file.text());
+  }
+  if (isXlsxFile(file)) {
+    return parseXlsxPreview(file);
+  }
+  throw new Error('Local preview is supported for CSV and .xlsx files.');
 };
 
 const GB_BYTES = 1024 ** 3;
@@ -836,7 +1034,7 @@ function UploadContent() {
     }
     const queueHashes = new Set(queue.map((q) => q.hash).filter(Boolean));
     const entries = await Promise.all(limited.map(async ({ file, folderPathOverride }) => {
-      const wantsCsvPreview = isCsvFile(file);
+      const wantsTabularPreview = isCsvFile(file) || isXlsxFile(file);
       return {
         file,
         folderPathOverride,
@@ -846,7 +1044,7 @@ function UploadContent() {
         previewUrl: URL.createObjectURL(file),
         rotation: 0,
         linkMode: 'new' as const,
-        tabularPreview: wantsCsvPreview ? { type: 'csv', loading: true } : undefined,
+        tabularPreview: wantsTabularPreview ? { loading: true } : undefined,
       } as UploadQueueItem;
     }));
     const deduped: typeof entries = [];
@@ -861,15 +1059,15 @@ function UploadContent() {
     if (deduped.length) {
       setQueue((prev) => [...prev, ...deduped]);
       deduped.forEach((entry) => {
-        if (entry.tabularPreview?.type === 'csv') {
+        if (entry.tabularPreview?.loading) {
           const targetHash = entry.hash;
           const matcher = (item: UploadQueueItem) =>
             (targetHash ? item.hash === targetHash : item === entry);
-          generateCsvPreview(entry.file)
+          generateTabularPreview(entry.file)
             .then((preview) => {
               setQueue((prev) =>
                 prev.map((item) =>
-                  matcher(item) ? { ...item, tabularPreview: { type: 'csv', loading: false, ...preview } } : item,
+                  matcher(item) ? { ...item, tabularPreview: { loading: false, data: preview } } : item,
                 ),
               );
             })
@@ -877,7 +1075,7 @@ function UploadContent() {
               setQueue((prev) =>
                 prev.map((item) =>
                   matcher(item)
-                    ? { ...item, tabularPreview: { type: 'csv', loading: false, error: error.message || 'Unable to build preview' } }
+                    ? { ...item, tabularPreview: { loading: false, error: error.message || 'Unable to build preview' } }
                     : item,
                 ),
               );
@@ -2997,8 +3195,12 @@ function UploadContent() {
                           const targetFolderPath = item.folderPathOverride && item.folderPathOverride.length > 0
                             ? item.folderPathOverride
                             : folderPath;
-                          const shouldUseRemotePreview = Boolean(item.docId) && (!item.previewUrl || item.prefilledFromQueue);
-                          const isCsvPreview = !shouldUseRemotePreview && isCsvFile(item.file);
+                          const shouldUseRemotePreview = Boolean(item.docId) && (
+                            !item.previewUrl ||
+                            item.prefilledFromQueue ||
+                            isExcelFile(item.file)
+                          );
+                          const useLocalTabularPreview = !shouldUseRemotePreview && (isCsvFile(item.file) || isXlsxFile(item.file));
 
                           return (
                             <div className="space-y-6">
@@ -3380,15 +3582,22 @@ function UploadContent() {
                                     {shouldUseRemotePreview ? (
                                       <FilePreview
                                         documentId={item.docId as string}
-                                        mimeType={item.file.type || 'application/pdf'}
+                                        mimeType={item.file.type || guessMimeFromName(item.file.name)}
+                                        filename={item.file.name}
                                         extractedContent={item.extracted?.ocrText}
                                       />
-                                    ) : isCsvPreview ? (
-                                      <CsvPreview
-                                        fileName={item.file.name}
-                                        fileSize={item.file.size}
-                                        preview={item.tabularPreview}
-                                      />
+                                    ) : useLocalTabularPreview ? (
+                                      <div className="space-y-2">
+                                        <div className="flex items-center justify-between text-[11px] sm:text-xs text-muted-foreground">
+                                          <span className="font-medium truncate max-w-[70%]" title={item.file.name}>{item.file.name}</span>
+                                          <span>{formatBytes(item.file.size)}</span>
+                                        </div>
+                                        <TabularPreview
+                                          tabular={item.tabularPreview && 'data' in item.tabularPreview ? item.tabularPreview.data : null}
+                                          loading={Boolean(item.tabularPreview?.loading)}
+                                          error={item.tabularPreview && 'error' in item.tabularPreview ? item.tabularPreview.error : null}
+                                        />
+                                      </div>
                                     ) : (
                                       <UploadFilePreview
                                         file={item.file}

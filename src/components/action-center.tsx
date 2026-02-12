@@ -618,6 +618,7 @@ export function ActionCenter({
                         <FilePreview
                             documentId={docRecord.id}
                             mimeType={(docRecord as any).mimeType}
+                            filename={(docRecord as any).filename}
                             extractedContent={docRecord.content || (docRecord as any).extractedContent}
                             className="border-0 shadow-none"
                             showTitle={false}

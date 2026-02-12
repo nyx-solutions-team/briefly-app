@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from 'react';
+import { format as formatDateFns } from 'date-fns';
 import { useAuth } from '@/hooks/use-auth';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -60,6 +61,17 @@ function InfoRow({ label, value, icon: Icon }: { label: string; value: React.Rea
     );
 }
 
+function formatDateSafe(value?: string | Date | null) {
+    if (!value) return null;
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    try {
+        return formatDateFns(date, 'd MMM yyyy');
+    } catch {
+        return null;
+    }
+}
+
 export default function ProfilePage() {
     const { user, bootstrapData } = useAuth();
     const { toast } = useToast();
@@ -69,9 +81,14 @@ export default function ProfilePage() {
 
     React.useEffect(() => {
         if (user) {
-            setDisplayName(user.username || user.email?.split('@')[0] || '');
+            setDisplayName(
+                bootstrapData?.user?.displayName ||
+                user.username ||
+                user.email?.split('@')[0] ||
+                ''
+            );
         }
-    }, [user]);
+    }, [user, bootstrapData?.user?.displayName]);
 
     const handleSave = async () => {
         if (!displayName.trim()) {
@@ -122,11 +139,11 @@ export default function ProfilePage() {
     const roleLabel = humanizeRole(user?.role) || 'Unknown';
 
     const departments = bootstrapData?.departments || [];
-    const userDepts = (user as any)?.departmentIds || [];
-    const userDeptNames = departments
-        .filter((d: any) => userDepts.includes(d.id))
-        .map((d: any) => d.name)
-        .join(', ');
+    const legacyUserDepts = (user as any)?.departmentIds || [];
+    const myDepartments = departments.filter((d: any) => d?.is_member || legacyUserDepts.includes(d.id));
+    const userDeptNames = myDepartments.map((d: any) => d.name).join(', ');
+    const currentOrg = bootstrapData?.orgs?.find(o => o.orgId === bootstrapData?.selectedOrgId);
+    const memberSinceLabel = currentOrg?.joinedAt ? formatDateSafe(currentOrg.joinedAt) : null;
 
     return (
         <div className="min-h-screen bg-background/30">
@@ -160,12 +177,12 @@ export default function ProfilePage() {
                     <User className="md:hidden absolute -bottom-4 -right-4 h-24 w-24 -rotate-12 opacity-[0.03] pointer-events-none" />
 
                     <div className="flex flex-row items-center gap-5">
-                        <Avatar className="h-16 w-16 md:h-16 md:w-16 rounded-2xl md:rounded-xl border border-white dark:border-border/10 shadow-lg md:shadow-none">
-                            <AvatarImage src="" />
-                            <AvatarFallback className="rounded-2xl md:rounded-xl bg-primary md:bg-primary/15 text-primary-foreground md:text-primary text-xl md:text-xl font-bold md:font-semibold">
-                                {user?.username?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || 'U'}
-                            </AvatarFallback>
-                        </Avatar>
+                            <Avatar className="h-16 w-16 md:h-16 md:w-16 rounded-2xl md:rounded-xl border border-white dark:border-border/10 shadow-lg md:shadow-none">
+                                <AvatarImage src="" />
+                                <AvatarFallback className="rounded-2xl md:rounded-xl bg-primary md:bg-primary/15 text-primary-foreground md:text-primary text-xl md:text-xl font-bold md:font-semibold">
+                                {displayName?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || 'U'}
+                                </AvatarFallback>
+                            </Avatar>
 
                         <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
@@ -218,38 +235,33 @@ export default function ProfilePage() {
                         <div className="space-y-0.5">
                             <InfoRow label="Email Address" value={user?.email} icon={Mail} />
                             <InfoRow label="Access Level" value={roleLabel} icon={Shield} />
-                            <InfoRow
-                                label="Member Since"
-                                value={'—'}
-                                icon={Calendar}
-                            />
+                            {memberSinceLabel && (
+                                <InfoRow
+                                    label="Member Since"
+                                    value={memberSinceLabel}
+                                    icon={Calendar}
+                                />
+                            )}
                         </div>
                     </Section>
 
                     {/* Workspace */}
                     <Section icon={Building2} title="Workspace">
                         <div className="space-y-0.5">
-                            {(() => {
-                                const currentOrg = bootstrapData?.orgs?.find(o => o.orgId === bootstrapData?.selectedOrgId);
-                                return (
-                                    <>
-                                        <InfoRow label="Organization Name" value={currentOrg?.name || '—'} />
-                                        <InfoRow
-                                            label="My Teams"
-                                            value={
-                                                <div className="flex flex-wrap gap-1.5 justify-end">
-                                                    {departments.filter((d: any) => userDepts.includes(d.id)).map((d: any) => (
-                                                        <Badge key={d.id} variant="secondary" className="text-[10px] font-medium px-2 h-4.5 bg-muted/60 text-muted-foreground border-none">
-                                                            {d.name}
-                                                        </Badge>
-                                                    ))}
-                                                    {userDepts.length === 0 && <span className="text-muted-foreground font-normal">No teams</span>}
-                                                </div>
-                                            }
-                                        />
-                                    </>
-                                );
-                            })()}
+                            <InfoRow label="Organization Name" value={currentOrg?.name || '—'} />
+                            <InfoRow
+                                label="My Teams"
+                                value={
+                                    <div className="flex flex-wrap gap-1.5 justify-end">
+                                        {myDepartments.map((d: any) => (
+                                            <Badge key={d.id} variant="secondary" className="text-[10px] font-medium px-2 h-4.5 bg-muted/60 text-muted-foreground border-none">
+                                                {d.name}
+                                            </Badge>
+                                        ))}
+                                        {myDepartments.length === 0 && <span className="text-muted-foreground font-normal">No teams</span>}
+                                    </div>
+                                }
+                            />
                         </div>
                     </Section>
                 </div>

@@ -177,6 +177,33 @@ function getCitationIcon(citation: any, className?: string) {
   }
 }
 
+function getDocPrimaryName(doc?: DocLike | null): string {
+  const filename = String(doc?.filename || '').trim();
+  if (filename) return filename;
+  const name = String(doc?.name || '').trim();
+  if (name) return name;
+  const title = String(doc?.title || '').trim();
+  if (title) return title;
+  return 'Untitled';
+}
+
+function getDocSecondaryTitle(doc?: DocLike | null): string {
+  const title = String(doc?.title || '').trim();
+  if (!title) return '';
+  const primary = getDocPrimaryName(doc);
+  return title.toLowerCase() === primary.toLowerCase() ? '' : title;
+}
+
+function getDocFolderPath(doc?: DocLike | null): string[] {
+  const raw = (doc?.folderPath || doc?.folder_path || []) as string[];
+  return Array.isArray(raw) ? raw.filter(Boolean) : [];
+}
+
+function formatDocPathLabel(path?: string[] | null): string {
+  const cleaned = Array.isArray(path) ? path.filter(Boolean) : [];
+  return cleaned.length > 0 ? `/${cleaned.join('/')}` : '/Root';
+}
+
 function dedupeCitations(citations: CitationMeta[] = []): CitationMeta[] {
   const seenIndex = new Map<string, number>();
   const result: CitationMeta[] = [];
@@ -1192,6 +1219,21 @@ type ChatResultsMetadata = {
   query_type?: string | null;
 };
 
+type AttachedDocMeta = {
+  id: string;
+  filename: string;
+  title?: string;
+  folderPath?: string[];
+};
+
+type DocLike = {
+  filename?: string | null;
+  name?: string | null;
+  title?: string | null;
+  folderPath?: string[] | null;
+  folder_path?: string[] | null;
+};
+
 interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -1212,16 +1254,38 @@ interface Message {
   streamStartedAtMs?: number;
   streamLastEventSeq?: number;
   streamLastEventTs?: number;
+  attachedDocIds?: string[];
+  attachedDocs?: AttachedDocMeta[];
 }
 
-const INITIAL_ASSISTANT_TEXT = "Hello! I'm your Briefly Agent with enhanced AI-powered capabilities! 🚀";
-
-const buildInitialMessages = (): Message[] => [
+const buildInitialMessages = (): Message[] => [];
+const EMPTY_STATE_VARIANT_KEY = 'briefly.chat.empty_state_variant_idx.v1';
+const EMPTY_STATE_VARIANTS = [
   {
-    id: `initial_${Date.now()}`,
-    role: 'assistant',
-    content: INITIAL_ASSISTANT_TEXT
-  }
+    headline: 'Find the answer hidden in your docs',
+    subline: 'Drop files in and ask one sharp question.',
+    suggestions: ['Summarize file', 'Compare docs', 'Check compliance'],
+  },
+  {
+    headline: 'Turn document clutter into clarity',
+    subline: 'Ask for facts, gaps, and decisions.',
+    suggestions: ['Extract key dates', 'List obligations', 'Find risks'],
+  },
+  {
+    headline: 'Cross-check docs in one shot',
+    subline: 'I can compare rules vs your plan with citations.',
+    suggestions: ['Rule vs dossier', 'What is missing?', 'Where not compliant?'],
+  },
+  {
+    headline: 'Ask less. Decide faster.',
+    subline: 'Get concise answers grounded in your files.',
+    suggestions: ['Top 5 takeaways', 'What changed?', 'Action items'],
+  },
+  {
+    headline: 'From files to findings',
+    subline: 'Search, summarize, and verify instantly.',
+    suggestions: ['Find clause', 'Summarize section', 'Who is mentioned?'],
+  },
 ];
 
 export default function TestAgentEnhancedPage() {
@@ -1233,6 +1297,7 @@ export default function TestAgentEnhancedPage() {
   const [inputValue, setInputValue] = useState('');
   const [chatContext, setChatContext] = useState<ChatContext>({ type: 'org' });
   const [pinnedDocIds, setPinnedDocIds] = useState<string[]>([]);
+  const [pinnedDocMetaById, setPinnedDocMetaById] = useState<Record<string, AttachedDocMeta>>({});
   const [fileNavigatorOpen, setFileNavigatorOpen] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [isWebSearchDialogOpen, setIsWebSearchDialogOpen] = useState(false);
@@ -1245,14 +1310,36 @@ export default function TestAgentEnhancedPage() {
   const themeColors = getThemeColors(settings.accent_color);
   const showTokenUsage = process.env.NEXT_PUBLIC_CHAT_USAGE_DEBUG === 'true';
   const hasUserMessage = messages.some(m => m.role === 'user');
-  const { documents: allDocs, folders: allFolders, getFolderMetadata, loadAllDocuments, hasLoadedAll } = useDocuments();
+  const { documents: allDocs, folders: allFolders, getFolderMetadata } = useDocuments();
   const { bootstrapData } = useAuth();
   const [loadingMoreByMessageId, setLoadingMoreByMessageId] = useState<Record<string, boolean>>({});
+  const [emptyStateVariantIndex, setEmptyStateVariantIndex] = useState(0);
 
   const lastListMessageId = useMemo(() => {
     const listMessages = messages.filter(m => m.metadata?.list_mode && Array.isArray(m.metadata?.results_data));
     return listMessages.length ? listMessages[listMessages.length - 1].id : null;
   }, [messages]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const variantsCount = EMPTY_STATE_VARIANTS.length;
+    if (variantsCount <= 1) {
+      setEmptyStateVariantIndex(0);
+      return;
+    }
+
+    const prevRaw = window.sessionStorage.getItem(EMPTY_STATE_VARIANT_KEY);
+    const prev = Number.isFinite(Number(prevRaw)) ? Number(prevRaw) : -1;
+    const candidates: number[] = [];
+    for (let i = 0; i < variantsCount; i += 1) {
+      if (i !== prev) candidates.push(i);
+    }
+    const next = candidates[Math.floor(Math.random() * candidates.length)] ?? 0;
+    setEmptyStateVariantIndex(next);
+    window.sessionStorage.setItem(EMPTY_STATE_VARIANT_KEY, String(next));
+  }, []);
+
+  const emptyStateVariant = EMPTY_STATE_VARIANTS[emptyStateVariantIndex] || EMPTY_STATE_VARIANTS[0];
 
   const fetchAllResultsForMessage = useCallback(async (messageId: string) => {
     const { orgId } = getApiContext();
@@ -1477,6 +1564,7 @@ export default function TestAgentEnhancedPage() {
     setIsLoading(false);
     setInputValue('');
     setPinnedDocIds([]);
+    setPinnedDocMetaById({});
     setFileNavigatorOpen(false);
     setPreviewDocId(null);
     setPreviewDocPage(null);
@@ -1561,7 +1649,64 @@ export default function TestAgentEnhancedPage() {
       const meta = getFolderMetadata(p);
       return { id, name: meta?.title || p[p.length - 1] || id, path: p };
     });
-  const documentOptions = allDocs.map(d => ({ id: d.id, name: d.title || d.name || 'Untitled' }));
+  const allDocMetaById = useMemo(() => {
+    const map = new Map<string, AttachedDocMeta>();
+    for (const doc of allDocs) {
+      if (!doc?.id) continue;
+      map.set(doc.id, {
+        id: doc.id,
+        filename: getDocPrimaryName(doc),
+        title: getDocSecondaryTitle(doc) || undefined,
+        folderPath: getDocFolderPath(doc),
+      });
+    }
+    return map;
+  }, [allDocs]);
+
+  const resolveAttachedDocMeta = useCallback(
+    (docId: string): AttachedDocMeta | undefined => {
+      return pinnedDocMetaById[docId] || allDocMetaById.get(docId);
+    },
+    [allDocMetaById, pinnedDocMetaById]
+  );
+
+  const documentOptions = useMemo(() => {
+    const merged = new Map<string, { id: string; name: string; subtitle?: string; pathLabel?: string }>();
+
+    for (const [id, meta] of allDocMetaById.entries()) {
+      merged.set(id, {
+        id,
+        name: meta.filename,
+        subtitle: meta.title,
+        pathLabel: formatDocPathLabel(meta.folderPath),
+      });
+    }
+
+    for (const [id, meta] of Object.entries(pinnedDocMetaById)) {
+      if (merged.has(id)) continue;
+      merged.set(id, {
+        id,
+        name: meta.filename || `Document ${id.slice(0, 8)}`,
+        subtitle: meta.title,
+        pathLabel: formatDocPathLabel(meta.folderPath),
+      });
+    }
+
+    return Array.from(merged.values());
+  }, [allDocMetaById, pinnedDocMetaById]);
+
+  const handlePinnedDocIdsChange = useCallback((ids: string[]) => {
+    const normalized = (ids || []).filter(Boolean).slice(0, 2);
+    setPinnedDocIds(normalized);
+    setPinnedDocMetaById((prev) => {
+      const next: Record<string, AttachedDocMeta> = {};
+      for (const id of normalized) {
+        if (prev[id]) next[id] = prev[id];
+      }
+      return next;
+    });
+  }, []);
+
   const selectedFolderId =
     chatContext.type === 'folder'
       ? chatContext.folderPath?.join('/') || chatContext.path?.join('/') || null
@@ -1582,12 +1727,6 @@ export default function TestAgentEnhancedPage() {
   useEffect(() => {
     setSessionId(crypto.randomUUID());
   }, []);
-
-  useEffect(() => {
-    if (!fileNavigatorOpen) return;
-    if (hasLoadedAll) return;
-    void loadAllDocuments();
-  }, [fileNavigatorOpen, hasLoadedAll, loadAllDocuments]);
 
   const handleSubmit = async (input: string, overrideContext?: ChatContext) => {
     if (!input.trim() || isLoading) return;
@@ -1642,14 +1781,29 @@ export default function TestAgentEnhancedPage() {
       const endpoint = await createFolderChatEndpoint(endpointContext);
       console.log('✅ Using endpoint:', endpoint);
 
-      // Add user message
+      const attachedDocsSnapshot: AttachedDocMeta[] = normalizedPinnedDocIds
+        .map((docId) => {
+          const meta = resolveAttachedDocMeta(docId);
+          return {
+            id: docId,
+            filename: meta?.filename || `Document ${docId.slice(0, 8)}`,
+            title: meta?.title,
+            folderPath: meta?.folderPath || [],
+          };
+        })
+        .filter((item) => Boolean(item.id));
+
+      // Add user message (capture attached docs at send time)
       const userMessage: Message = {
         id: `user_${Date.now()}`,
         role: 'user',
-        content: input
+        content: input,
+        attachedDocIds: normalizedPinnedDocIds.length > 0 ? [...normalizedPinnedDocIds] : undefined,
+        attachedDocs: attachedDocsSnapshot.length > 0 ? attachedDocsSnapshot : undefined,
       };
 
       setMessages(prev => [...prev, userMessage]);
+      handlePinnedDocIdsChange([]); // Clear from input box — docs now live in the sent message
       setIsLoading(true);
 
       // Add assistant message placeholder
@@ -1999,17 +2153,7 @@ export default function TestAgentEnhancedPage() {
           )}
         >
           {/* Minimal Header */}
-          <div className="flex items-center justify-between py-2 sm:py-3 md:py-4 border-b border-border/40 flex-shrink-0">
-            <div className="w-6 sm:w-8" /> {/* Spacer for centering */}
-            <div className="flex items-center gap-2 sm:gap-3">
-              <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg ${themeColors.iconBg} flex items-center justify-center flex-shrink-0`}>
-                <Bot className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${themeColors.primary}`} />
-              </div>
-              <div className="text-center min-w-0">
-                <h1 className="text-base sm:text-lg font-semibold text-foreground truncate">Briefly Agent</h1>
-                <p className="text-[10px] sm:text-xs text-muted-foreground hidden sm:block">AI-powered document assistant</p>
-              </div>
-            </div>
+          <div className="flex items-center justify-end py-2 sm:py-3 md:py-4 border-b border-border/40 flex-shrink-0">
             <Button
               variant="ghost"
               size="icon"
@@ -2052,7 +2196,46 @@ export default function TestAgentEnhancedPage() {
                         {message.role === 'user' ? (
                           <>
                             {/* User Message - Right aligned */}
-                            <div className="flex-1 flex justify-end">
+                            <div className="flex-1 flex flex-col items-end gap-2">
+                              {/* Attached document cards — shown above the message text */}
+                              {message.attachedDocIds && message.attachedDocIds.length > 0 && (
+                                <div className="flex flex-wrap justify-end gap-2 max-w-[90%] sm:max-w-[85%] md:max-w-[75%]">
+                                  {message.attachedDocIds.map((docId) => {
+                                    const attachedMeta = message.attachedDocs?.find((d) => d.id === docId);
+                                    const resolvedMeta = attachedMeta || resolveAttachedDocMeta(docId);
+                                    const filename = attachedMeta?.filename || resolvedMeta?.filename || `Document ${docId.slice(0, 8)}`;
+                                    const title = getDocSecondaryTitle({
+                                      filename,
+                                      title: attachedMeta?.title || resolvedMeta?.title || '',
+                                    });
+                                    const ext = filename.includes('.') ? filename.split('.').pop()?.toUpperCase().slice(0, 4) || 'FILE' : 'FILE';
+                                    return (
+                                      <div
+                                        key={docId}
+                                        className={cn(
+                                          "flex items-start gap-2 rounded-xl border border-border bg-muted/80 px-3 py-2",
+                                          "shadow-sm transition-all hover:bg-muted"
+                                        )}
+                                      >
+                                        <FileText className="h-4 w-4 text-primary shrink-0" />
+                                        <div className="min-w-0 flex-1">
+                                          <div className="text-xs font-medium text-foreground truncate max-w-[180px]">
+                                            {filename}
+                                          </div>
+                                          {title ? (
+                                            <div className="text-[11px] text-muted-foreground truncate max-w-[180px]">
+                                              {title}
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                        <span className="text-[9px] font-bold tracking-wider text-muted-foreground bg-background/60 px-1.5 py-0.5 rounded border border-border/50 uppercase">
+                                          {ext}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
                               <div className={cn(
                                 "max-w-[90%] sm:max-w-[85%] md:max-w-[75%]",
                                 "rounded-2xl rounded-tr-md px-3 sm:px-4 py-2.5 sm:py-3.5",
@@ -2328,26 +2511,30 @@ export default function TestAgentEnhancedPage() {
                       onWebSearchChange={handleWebSearchChange}
                       defaultFolderId={selectedFolderId}
                       defaultDocumentId={selectedDocumentId}
+                      defaultDocumentName={chatContext.type === 'document' ? chatContext.name || null : null}
                       pinnedDocIds={pinnedDocIds}
-                      onPinnedDocIdsChange={setPinnedDocIds}
+                      onPinnedDocIdsChange={handlePinnedDocIdsChange}
                       onRequestFilePicker={() => setFileNavigatorOpen(true)}
                       placeholder={
                         chatContext.type === 'document'
                           ? `Ask about "${chatContext.name || 'this document'}"...`
                           : chatContext.type === 'folder'
                             ? `Ask about documents in "${chatContext.name || 'this folder'}"...`
-                            : 'Ask me about your documents or anything else...'
+                            : 'Ask about clauses, dates, people, risks, or compliance...'
                       }
                       sending={isLoading}
-                      onSend={({ text, mode, folderId, documentId, webSearch }) => {
+                      onSend={({ text, mode, folderId, documentId, folderName, documentName, webSearch }) => {
                         let nextContext: ChatContext = { type: 'org' };
                         if (mode === 'folder' && folderId) {
                           const path = folderId.split('/').filter(Boolean);
                           const meta = getFolderMetadata(path);
-                          nextContext = { type: 'folder', id: meta?.id, name: meta?.title || folderId, folderPath: path };
+                          nextContext = { type: 'folder', id: meta?.id, name: meta?.title || folderName || folderId, folderPath: path };
                         } else if (mode === 'document' && documentId) {
                           const doc = allDocs.find(d => d.id === documentId);
-                          nextContext = { type: 'document', id: documentId, name: doc?.title || doc?.name };
+                          const resolvedDocName = doc
+                            ? getDocPrimaryName(doc)
+                            : documentName || chatContext.name || `Document ${documentId.slice(0, 8)}`;
+                          nextContext = { type: 'document', id: documentId, name: resolvedDocName };
                         }
                         setChatContext(nextContext);
                         setWebSearchEnabled(webSearch);
@@ -2379,19 +2566,15 @@ export default function TestAgentEnhancedPage() {
                       </div>
                     </div>
                     <h2 className="text-xl sm:text-2xl md:text-3xl font-bold text-foreground mb-2 sm:mb-3 tracking-tight px-2">
-                      What can I help you with?
+                      {emptyStateVariant.headline}
                     </h2>
                     <p className="text-sm sm:text-base md:text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed px-2">
-                      Ask me anything about your documents. I can search, summarize, and provide insights.
+                      {emptyStateVariant.subline}
                     </p>
 
                     {/* Quick action suggestions */}
                     <div className="mt-6 sm:mt-8 flex flex-wrap justify-center gap-2 sm:gap-3 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-150 px-2">
-                      {[
-                        'Summarize recent documents',
-                        'Find information about...',
-                        'Compare documents',
-                      ].map((suggestion, idx) => (
+                      {emptyStateVariant.suggestions.map((suggestion, idx) => (
                         <button
                           key={idx}
                           onClick={() => setInputValue(suggestion)}
@@ -2424,26 +2607,30 @@ export default function TestAgentEnhancedPage() {
                       onWebSearchChange={handleWebSearchChange}
                       defaultFolderId={selectedFolderId}
                       defaultDocumentId={selectedDocumentId}
+                      defaultDocumentName={chatContext.type === 'document' ? chatContext.name || null : null}
                       pinnedDocIds={pinnedDocIds}
-                      onPinnedDocIdsChange={setPinnedDocIds}
+                      onPinnedDocIdsChange={handlePinnedDocIdsChange}
                       onRequestFilePicker={() => setFileNavigatorOpen(true)}
                       placeholder={
                         chatContext.type === 'document'
                           ? `Ask about "${chatContext.name || 'this document'}"...`
                           : chatContext.type === 'folder'
                             ? `Ask about documents in "${chatContext.name || 'this folder'}"...`
-                            : 'Type your question here...'
+                            : 'Ask about clauses, dates, people, risks, or compliance...'
                       }
                       sending={isLoading}
-                      onSend={({ text, mode, folderId, documentId, webSearch }) => {
+                      onSend={({ text, mode, folderId, documentId, folderName, documentName, webSearch }) => {
                         let nextContext: ChatContext = { type: 'org' };
                         if (mode === 'folder' && folderId) {
                           const path = folderId.split('/').filter(Boolean);
                           const meta = getFolderMetadata(path);
-                          nextContext = { type: 'folder', id: meta?.id, name: meta?.title || folderId, folderPath: path };
+                          nextContext = { type: 'folder', id: meta?.id, name: meta?.title || folderName || folderId, folderPath: path };
                         } else if (mode === 'document' && documentId) {
                           const doc = allDocs.find(d => d.id === documentId);
-                          nextContext = { type: 'document', id: documentId, name: doc?.title || doc?.name };
+                          const resolvedDocName = doc
+                            ? getDocPrimaryName(doc)
+                            : documentName || chatContext.name || `Document ${documentId.slice(0, 8)}`;
+                          nextContext = { type: 'document', id: documentId, name: resolvedDocName };
                         }
                         setChatContext(nextContext);
                         setWebSearchEnabled(webSearch);
@@ -2493,8 +2680,22 @@ export default function TestAgentEnhancedPage() {
           maxDocs={2}
           initialSelectedDocIds={pinnedDocIds}
           onConfirm={({ docs }) => {
-            const ids = (docs || []).map((d) => d.id).filter(Boolean).slice(0, 2);
-            setPinnedDocIds(ids);
+            const selectedDocs = (docs || []).filter((d) => Boolean(d?.id)).slice(0, 2);
+            const ids = selectedDocs.map((d) => String(d.id));
+            setPinnedDocMetaById((prev) => {
+              const next = { ...prev };
+              for (const doc of selectedDocs) {
+                const docId = String(doc.id);
+                next[docId] = {
+                  id: docId,
+                  filename: getDocPrimaryName(doc),
+                  title: getDocSecondaryTitle(doc) || undefined,
+                  folderPath: getDocFolderPath(doc),
+                };
+              }
+              return next;
+            });
+            handlePinnedDocIdsChange(ids);
           }}
         />
 

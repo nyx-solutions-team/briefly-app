@@ -146,6 +146,11 @@ async function performFetch<T = any>(
       signal: opts.signal,
     });
   } catch (e: any) {
+    // Preserve cancellation semantics for callers. Many flows intentionally abort
+    // in-flight requests on navigation or rapid re-fetch.
+    if (e?.name === 'AbortError' || opts.signal?.aborted) {
+      throw e;
+    }
     const err = new Error(
       `API ${method} ${path} failed: could not reach server at ${BASE_URL}. ` +
       `Make sure briefly-api is running and reachable (try ${BASE_URL}/health).`

@@ -45,7 +45,7 @@ import {
   ExternalLink,
   Sparkles,
 } from 'lucide-react';
-import { apiFetch, getApiContext } from '@/lib/api';
+import { apiFetch, getApiContext, onApiContextChange } from '@/lib/api';
 import { FolderPickerDialog } from '@/components/folder-picker-dialog';
 import { useFolders as useFolderExplorer } from '@/hooks/use-folders';
 import { VersionLinkPickerDialog } from '@/components/version-link-picker-dialog';
@@ -67,6 +67,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from '@/lib/utils';
+import type { StoredDocument } from '@/lib/types';
 
 // Linear-style section component
 function Section({
@@ -158,10 +159,15 @@ function FieldSkeleton() {
 
 export default function EditDocumentPage() {
   const params = useParams<{ id: string }>();
+  const docId = String(params?.id || '');
   const router = useRouter();
   const { getDocumentById, updateDocument, removeDocument, createFolder, documents, folders, refresh, loadAllDocuments, hasLoadedAll } = useDocuments();
   const { categories } = useCategories();
-  const doc = getDocumentById(params.id);
+  const [apiContextVersion, setApiContextVersion] = React.useState(0);
+  const [fallbackDoc, setFallbackDoc] = React.useState<StoredDocument | null>(null);
+  const [docLoadState, setDocLoadState] = React.useState<'loading' | 'ready' | 'missing'>('loading');
+  const docFromStore = getDocumentById(docId);
+  const doc = docFromStore || fallbackDoc;
   const { toast } = useToast();
   const isMobile = useIsMobile();
   const [saving, setSaving] = React.useState(false);
@@ -172,6 +178,88 @@ export default function EditDocumentPage() {
   const [unlinkTarget, setUnlinkTarget] = React.useState<{ id: string; title?: string } | null>(null);
   const [unlinkLoading, setUnlinkLoading] = React.useState(false);
   const [hasChanges, setHasChanges] = React.useState(false);
+
+  React.useEffect(() => {
+    const off = onApiContextChange(() => {
+      setApiContextVersion((v) => v + 1);
+    });
+    return () => {
+      off();
+    };
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const hydrateDoc = async () => {
+      if (!docId) {
+        if (!cancelled) {
+          setFallbackDoc(null);
+          setDocLoadState('missing');
+        }
+        return;
+      }
+      if (docFromStore) {
+        if (!cancelled) {
+          setDocLoadState('ready');
+        }
+        return;
+      }
+
+      const { orgId } = getApiContext();
+      if (!orgId) {
+        if (!cancelled) {
+          setDocLoadState('loading');
+        }
+        return;
+      }
+
+      if (!cancelled) {
+        setDocLoadState('loading');
+      }
+
+      try {
+        const raw = await apiFetch<any>(`/orgs/${orgId}/documents/${docId}`, {
+          skipCache: true,
+          signal: controller.signal,
+        });
+        if (cancelled) return;
+        if (!raw || typeof raw !== 'object') {
+          setFallbackDoc(null);
+          setDocLoadState('missing');
+          return;
+        }
+
+        setFallbackDoc({
+          ...raw,
+          uploadedAt: new Date(raw.uploadedAt || raw.uploaded_at || Date.now()),
+          departmentId: raw.departmentId || raw.department_id,
+          department_id: raw.department_id || raw.departmentId,
+        } as StoredDocument);
+        setDocLoadState('ready');
+      } catch (error: any) {
+        if (error?.name === 'AbortError' || error?.cause?.name === 'AbortError') return;
+        const status = error?.status ?? error?.cause?.status;
+        if (!cancelled) {
+          if (status === 404) {
+            setFallbackDoc(null);
+            setDocLoadState('missing');
+          } else {
+            console.error('Failed to load document in edit page:', error);
+            setFallbackDoc(null);
+            setDocLoadState('missing');
+          }
+        }
+      }
+    };
+
+    void hydrateDoc();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [docId, docFromStore?.id, apiContextVersion]);
 
   const [form, setForm] = React.useState({
     title: doc?.title || '',
@@ -317,7 +405,7 @@ export default function EditDocumentPage() {
     router.push('/documents');
   };
 
-  const backHref = `/documents/${doc?.id ?? ''}`;
+  const backHref = doc?.id ? `/documents/${doc.id}` : '/documents';
 
   // Version chain data
   const versions = React.useMemo(() => {
@@ -347,6 +435,9 @@ export default function EditDocumentPage() {
     const nums = versions.map((v: any) => Number(v.versionNumber || 0)).filter(n => Number.isFinite(n) && n > 0);
     return nums.length ? Math.max(...nums) : 1;
   }, [versions]);
+
+  const isDocLoading = docLoadState === 'loading' && !doc;
+  const isDocMissing = docLoadState === 'missing' && !doc;
 
   return (
     <AppLayout>
@@ -455,7 +546,20 @@ export default function EditDocumentPage() {
 
         {/* Main Content */}
         <main className={cn("flex-1", isMobile ? "bg-zinc-950 px-4 pb-20 pt-24" : "px-6 py-6")}>
-          {!doc ? (
+          {isDocLoading ? (
+            <div className="mx-auto max-w-xl space-y-6 rounded-lg border border-border/40 bg-card/50 p-6">
+              <div className="space-y-2">
+                <div className="h-3 w-28 animate-pulse rounded bg-muted/40" />
+                <div className="h-5 w-64 animate-pulse rounded bg-muted/40" />
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <FieldSkeleton />
+                <FieldSkeleton />
+                <FieldSkeleton />
+                <FieldSkeleton />
+              </div>
+            </div>
+          ) : isDocMissing ? (
             <div className="flex flex-col items-center justify-center py-20">
               <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-muted/30 mb-4">
                 <FileText className="h-6 w-6 text-muted-foreground/50" />
@@ -479,7 +583,7 @@ export default function EditDocumentPage() {
             <div className="flex flex-col gap-6">
               <div className="flex flex-col">
                 <h1 className="text-2xl font-bold text-white leading-tight">Edit details</h1>
-                <p className="text-zinc-500 text-sm mt-1 truncate">{doc.title || doc.filename}</p>
+                <p className="text-zinc-500 text-sm mt-1 truncate">{doc?.title || doc?.filename}</p>
               </div>
 
               <Tabs defaultValue="overview" className="w-full">

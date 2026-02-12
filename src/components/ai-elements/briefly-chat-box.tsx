@@ -4,6 +4,7 @@ import {
   FileText,
   Folder,
   Globe,
+  ArrowLeftRight,
   Send,
   Search,
   Settings2,
@@ -17,12 +18,18 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
+import { FinderPicker } from "@/components/pickers/finder-picker";
 
 // -------------------- Types --------------------
 export type FolderOption = { id: string; name: string; path?: string[] };
-export type DocumentOption = { id: string; name: string; folderId?: string };
+export type DocumentOption = {
+  id: string;
+  name: string;
+  folderId?: string;
+  subtitle?: string;
+  pathLabel?: string;
+};
 export type ChatScope = "all" | "folder" | "document";
 
 export type BrieflyChatBoxProps = {
@@ -32,6 +39,7 @@ export type BrieflyChatBoxProps = {
   defaultWebSearch?: boolean;
   defaultFolderId?: string | null;
   defaultDocumentId?: string | null;
+  defaultDocumentName?: string | null;
   placeholder?: string;
   pinnedDocIds?: string[];
   onPinnedDocIdsChange?: (ids: string[]) => void;
@@ -44,6 +52,8 @@ export type BrieflyChatBoxProps = {
     mode: ChatScope;
     folderId?: string | null;
     documentId?: string | null;
+    folderName?: string | null;
+    documentName?: string | null;
     webSearch: boolean;
   }) => void;
   sending?: boolean; // external loading control
@@ -194,12 +204,12 @@ function ModePopover({
   const items: Array<{
     value: ChatScope;
     label: string;
-    desc: string;
+    helper: string;
     icon: any;
   }> = [
-      { value: "all", label: "All (Global)", desc: "Search across everything", icon: Globe },
-      { value: "folder", label: "Folder specific", desc: "Limit to one folder", icon: Folder },
-      { value: "document", label: "Document specific", desc: "Limit to one document", icon: FileText },
+      { value: "all", label: "Global", helper: "Entire workspace", icon: Globe },
+      { value: "folder", label: "Folder", helper: "One folder only", icon: Folder },
+      { value: "document", label: "File", helper: "One file only", icon: FileText },
     ];
 
   const current = items.find((i) => i.value === mode) ?? items[0];
@@ -207,56 +217,51 @@ function ModePopover({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" className="h-9 rounded-xl px-2 sm:px-3">
-          <span className="flex items-center gap-1.5 sm:gap-2">
-            <current.icon className="h-4 w-4" />
-            {mode === 'all' ? (
-              <>
-                <span className="text-xs hidden sm:inline">{current.label}</span>
-                <span className="text-xs sm:hidden">All</span>
-              </>
-            ) : (
-              <span className="flex items-center gap-1.5">
-                <Check className="h-3.5 w-3.5 text-primary" />
-                <span className="text-xs hidden sm:inline">{current.label}</span>
-                <span className="text-xs sm:hidden">Selected</span>
-              </span>
-            )}
-            <ChevronDown className="h-4 w-4 opacity-50" />
+        <Button
+          type="button"
+          variant="outline"
+          className="h-8 min-w-[100px] rounded-lg px-2.5 text-xs justify-between"
+        >
+          <span className="flex items-center gap-1.5 min-w-0">
+            <current.icon className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{current.label}</span>
           </span>
+          <ChevronDown className="h-3.5 w-3.5 opacity-50 shrink-0" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[300px] p-3" align="start">
-        <div className="space-y-3">
-          {/* Scope radio group */}
-          <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground">Scope</Label>
-            <RadioGroup
-              value={mode}
-              onValueChange={(v) => {
-                setMode(v as ChatScope);
-                setOpen(false);
-              }}
-            >
-              {items.map((i) => (
-                <label
-                  key={i.value}
-                  className={cn(
-                    "flex cursor-pointer items-start gap-3 rounded-lg p-2 hover:bg-muted/50",
-                  )}
-                >
-                  <RadioGroupItem value={i.value} className="mt-0.5" />
-                  <div className="flex flex-1 items-start gap-2">
-                    <i.icon className="mt-0.5 h-4 w-4" />
+      <PopoverContent className="w-[220px] p-1.5" align="start" sideOffset={6}>
+        <div className="space-y-1">
+          {items.map((i) => {
+            const active = i.value === mode;
+            return (
+              <button
+                key={i.value}
+                type="button"
+                onClick={() => {
+                  setMode(i.value);
+                  setOpen(false);
+                }}
+                className={cn(
+                  "w-full rounded-md border px-2.5 py-2 text-left transition-colors",
+                  "hover:bg-muted/50",
+                  active
+                    ? "border-primary/30 bg-primary/5"
+                    : "border-transparent"
+                )}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <i.icon className={cn("h-3.5 w-3.5 shrink-0", active ? "text-primary" : "text-muted-foreground")} />
                     <div className="min-w-0">
-                      <div className="text-sm font-medium leading-none">{i.label}</div>
-                      <div className="text-xs text-muted-foreground">{i.desc}</div>
+                      <div className="text-xs font-medium truncate">{i.label}</div>
+                      <div className="text-[10px] text-muted-foreground truncate">{i.helper}</div>
                     </div>
                   </div>
-                </label>
-              ))}
-            </RadioGroup>
-          </div>
+                  <Check className={cn("h-3.5 w-3.5 shrink-0", active ? "opacity-100 text-primary" : "opacity-0")} />
+                </div>
+              </button>
+            );
+          })}
         </div>
       </PopoverContent>
     </Popover>
@@ -271,6 +276,7 @@ export function BrieflyChatBox({
   defaultWebSearch = false,
   defaultFolderId = null,
   defaultDocumentId = null,
+  defaultDocumentName = null,
   placeholder = "Ask anything…",
   pinnedDocIds = [],
   onPinnedDocIdsChange,
@@ -287,6 +293,9 @@ export function BrieflyChatBox({
   const isWebSearchControlled = typeof webSearch === 'boolean';
   const [internalWebSearch, setInternalWebSearch] = useState(defaultWebSearch);
   const [text, setText] = useState("");
+  const [selectionHint, setSelectionHint] = useState<string | null>(null);
+  const [scopePickerOpen, setScopePickerOpen] = useState(false);
+  const [selectedDocumentMeta, setSelectedDocumentMeta] = useState<DocumentOption | null>(null);
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
@@ -302,16 +311,48 @@ export function BrieflyChatBox({
   }, [defaultDocumentId]);
 
   useEffect(() => {
+    if (!documentId) {
+      setSelectedDocumentMeta(null);
+      return;
+    }
+    const found = documents.find((d) => d.id === documentId) || null;
+    if (found) {
+      setSelectedDocumentMeta(found);
+    }
+  }, [documentId, documents]);
+
+  useEffect(() => {
     if (!isWebSearchControlled) {
       setInternalWebSearch(defaultWebSearch);
     }
   }, [defaultWebSearch, isWebSearchControlled]);
 
+  // Keep scope state clean: switching modes drops stale selections from other modes.
+  useEffect(() => {
+    if (mode === "all") {
+      setFolderId(null);
+      setDocumentId(null);
+      setSelectedDocumentMeta(null);
+      setSelectionHint(null);
+      return;
+    }
+    if (mode === "folder") {
+      setDocumentId(null);
+      setSelectedDocumentMeta(null);
+      setSelectionHint(null);
+      return;
+    }
+    if (mode === "document") {
+      setFolderId(null);
+      setSelectionHint(null);
+    }
+  }, [mode]);
+
   const effectiveWebSearch = isWebSearchControlled ? (webSearch as boolean) : internalWebSearch;
 
-  const docNameById = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const d of documents) m.set(d.id, d.name);
+  const docMetaById = useMemo(() => {
+    const m = new Map<string, DocumentOption>();
+    for (const d of documents) m.set(d.id, d);
     return m;
   }, [documents]);
 
@@ -329,19 +370,57 @@ export function BrieflyChatBox({
   };
 
   const canSend = useMemo(() => {
-    if (!text.trim()) return false;
-    if (mode === "folder" && !folderId) return false;
-    if (mode === "document" && !documentId) return false;
-    return true;
-  }, [text, mode, folderId, documentId]);
+    return Boolean(text.trim());
+  }, [text]);
+
+  const selectedFolderPath = useMemo(() => (folderId || "").split("/").filter(Boolean), [folderId]);
+  const selectedFolder = useMemo(() => {
+    if (!folderId) return null;
+    const matched = folders.find((f) => f.id === folderId);
+    const title = matched?.name || selectedFolderPath[selectedFolderPath.length - 1] || "Root";
+    const pathLabel = selectedFolderPath.length > 0 ? `/${selectedFolderPath.join("/")}` : "/Root";
+    return { title, pathLabel };
+  }, [folderId, folders, selectedFolderPath]);
+
+  const selectedDocument = useMemo(() => {
+    if (!documentId) return null;
+    const fromOptions = documents.find((d) => d.id === documentId);
+    if (fromOptions) return fromOptions;
+    if (selectedDocumentMeta?.id === documentId) return selectedDocumentMeta;
+    if (defaultDocumentName) {
+      return {
+        id: documentId,
+        name: defaultDocumentName,
+      } as DocumentOption;
+    }
+    return null;
+  }, [defaultDocumentName, documentId, documents, selectedDocumentMeta]);
+
+  useEffect(() => {
+    if (mode === "folder" && folderId) setSelectionHint(null);
+    if (mode === "document" && documentId) setSelectionHint(null);
+    if (mode === "all") setSelectionHint(null);
+  }, [mode, folderId, documentId]);
 
   function handleSubmit() {
     if (!canSend || sending) return;
+    if (mode === "folder" && !folderId) {
+      setSelectionHint("Choose a folder, or switch scope to Global.");
+      return;
+    }
+    if (mode === "document" && !documentId) {
+      setSelectionHint("Choose a file, or switch scope to Global.");
+      return;
+    }
+
+    setSelectionHint(null);
     onSend?.({
       text: text.trim(),
       mode,
       folderId: mode === "folder" ? folderId : null,
       documentId: mode === "document" ? documentId : null,
+      folderName: mode === "folder" ? selectedFolder?.title || null : null,
+      documentName: mode === "document" ? selectedDocument?.name || defaultDocumentName || null : null,
       webSearch: effectiveWebSearch,
     });
     setText("");
@@ -358,78 +437,117 @@ export function BrieflyChatBox({
         className
       )}
     >
-      {/* Pinned Files */}
-      {pinnedDocIds.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3">
-          {pinnedDocIds.slice(0, 3).map((id) => {
-            const name = docNameById.get(id) || "Untitled";
-            const ext = name.split('.').pop()?.toUpperCase().slice(0, 4) || 'FILE';
-
-            return (
-              <div
-                key={id}
-                className={cn(
-                  "relative group flex flex-col justify-between rounded-xl border bg-muted/20 p-3",
-                  "w-32 h-32 transition-all hover:bg-muted/30"
-                )}
-              >
-                {onPinnedDocIdsChange && (
-                  <button
-                    type="button"
-                    className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-background border rounded-full p-1 shadow-sm hover:bg-muted"
-                    aria-label="Remove file"
-                    onClick={() => onPinnedDocIdsChange(pinnedDocIds.filter((d) => d !== id))}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
-
-                <div className="space-y-1">
-                  <div className="font-medium text-sm line-clamp-2 leading-tight break-words">
-                    {name}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold tracking-wider text-muted-foreground bg-background/50 px-1.5 py-0.5 rounded border border-border/50 uppercase">
-                    {ext}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
       {/* Controls Row */}
       <div className="flex flex-wrap items-center justify-between gap-3 min-w-0">
         <div className="flex flex-wrap items-center gap-2 min-w-0">
           <ModePopover mode={mode} setMode={setMode} />
-
-          {mode === "folder" && (
-            <Combobox
-              value={folderId}
-              onChange={setFolderId}
-              options={folders}
-              placeholder="folders"
-              empty="No folders found"
-              icon={Folder}
-              label="Scope"
-              triggerLabel="folders"
-            />
+          {pinnedDocIds.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              {pinnedDocIds.slice(0, 2).map((id) => {
+                const docMeta = docMetaById.get(id);
+                const name = docMeta?.name || "Untitled";
+                const subtitle = docMeta?.subtitle?.trim() || "";
+                const ext = name.includes(".")
+                  ? name.split(".").pop()?.toUpperCase().slice(0, 4) || "FILE"
+                  : "FILE";
+                return (
+                  <div
+                    key={id}
+                    className={cn(
+                      "flex max-w-[260px] items-start gap-2 rounded-xl border border-border bg-muted/70 px-2.5 py-1.5",
+                      "shadow-sm transition-all hover:bg-muted"
+                    )}
+                  >
+                    <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[11px] font-medium leading-tight">{name}</div>
+                      {subtitle ? (
+                        <div className="truncate text-[10px] leading-tight text-muted-foreground">
+                          {subtitle}
+                        </div>
+                      ) : null}
+                    </div>
+                    <span className="rounded border border-border/50 bg-background/60 px-1.5 py-0.5 text-[9px] font-bold tracking-wider text-muted-foreground uppercase">
+                      {ext}
+                    </span>
+                    {onPinnedDocIdsChange ? (
+                      <button
+                        type="button"
+                        className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        aria-label="Remove file"
+                        onClick={() => onPinnedDocIdsChange(pinnedDocIds.filter((d) => d !== id))}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
           )}
 
-          {mode === "document" && (
-            <Combobox
-              value={documentId}
-              onChange={setDocumentId}
-              options={documents}
-              placeholder="documents"
-              empty="No documents found"
-              icon={FileText}
-              label="Scope"
-              triggerLabel="documents"
-            />
+          {mode !== "all" && (
+            <div className="flex items-center gap-1.5 min-w-0">
+              {mode === "folder" && selectedFolder && (
+                <div className="max-w-[220px] rounded-md border bg-muted/20 px-2 py-1">
+                  <div className="text-[11px] font-medium leading-tight truncate">{selectedFolder.title}</div>
+                  <div className="text-[10px] text-muted-foreground leading-tight truncate">{selectedFolder.pathLabel}</div>
+                </div>
+              )}
+
+              {mode === "document" && selectedDocument && (
+                <div className="max-w-[220px] rounded-md border bg-muted/20 px-2 py-1">
+                  <div className="text-[11px] font-medium leading-tight truncate">{selectedDocument.name || "Selected file"}</div>
+                  <div className="text-[10px] text-muted-foreground leading-tight truncate">
+                    {selectedDocument.subtitle || selectedDocument.pathLabel || "File selected"}
+                  </div>
+                </div>
+              )}
+
+              {mode === "folder" && !selectedFolder && (
+                <div className="text-[11px] text-muted-foreground px-1">No folder selected</div>
+              )}
+              {mode === "document" && !selectedDocument && (
+                <div className="text-[11px] text-muted-foreground px-1">No file selected</div>
+              )}
+
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="h-7 w-7 rounded-md"
+                onClick={() => setScopePickerOpen(true)}
+                aria-label={mode === "folder" ? (selectedFolder ? "Change folder" : "Choose folder") : (selectedDocument ? "Change file" : "Choose file")}
+                title={mode === "folder" ? (selectedFolder ? "Change folder" : "Choose folder") : (selectedDocument ? "Change file" : "Choose file")}
+              >
+                {(mode === "folder" ? Boolean(selectedFolder) : Boolean(selectedDocument)) ? (
+                  <ArrowLeftRight className="h-3.5 w-3.5" />
+                ) : mode === "folder" ? (
+                  <Folder className="h-3.5 w-3.5" />
+                ) : (
+                  <FileText className="h-3.5 w-3.5" />
+                )}
+              </Button>
+
+              {((mode === "folder" && selectedFolder) || (mode === "document" && selectedDocument)) && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 rounded-md"
+                  aria-label="Clear scope selection"
+                  onClick={() => {
+                    if (mode === "folder") setFolderId(null);
+                    if (mode === "document") {
+                      setDocumentId(null);
+                      setSelectedDocumentMeta(null);
+                    }
+                  }}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
           )}
         </div>
 
@@ -447,6 +565,12 @@ export function BrieflyChatBox({
           </Button>
         </div>
       </div>
+
+      {selectionHint ? (
+        <div className="text-xs text-amber-600 dark:text-amber-400">
+          {selectionHint}
+        </div>
+      ) : null}
 
       {/* Input Row */}
       <div className="flex items-end gap-2 min-w-0">
@@ -479,6 +603,45 @@ export function BrieflyChatBox({
           <span className="hidden sm:inline ml-2">{sending ? "Sending…" : "Send"}</span>
         </Button>
       </div>
+
+      <FinderPicker
+        open={scopePickerOpen && mode !== "all"}
+        onOpenChange={setScopePickerOpen}
+        mode={mode === "folder" ? "folder" : "doc"}
+        maxDocs={1}
+        initialPath={mode === "folder" ? selectedFolderPath : []}
+        initialSelectedDocIds={mode === "document" && documentId ? [documentId] : []}
+        onConfirm={({ path, docs }) => {
+          if (mode === "folder") {
+            const nextPath = Array.isArray(path) ? path.filter(Boolean) : [];
+            setFolderId(nextPath.length > 0 ? nextPath.join("/") : null);
+            setSelectionHint(null);
+            return;
+          }
+          const firstDoc = Array.isArray(docs) ? docs[0] : null;
+          if (!firstDoc?.id) {
+            setDocumentId(null);
+            setSelectedDocumentMeta(null);
+            setSelectionHint(null);
+            return;
+          }
+          const filename = String((firstDoc as any)?.filename || (firstDoc as any)?.name || (firstDoc as any)?.title || "Selected file");
+          const title = String((firstDoc as any)?.title || "").trim();
+          const subtitle = title && title.toLowerCase() !== filename.toLowerCase() ? title : undefined;
+          const folderPath = Array.isArray((firstDoc as any)?.folderPath)
+            ? ((firstDoc as any).folderPath as string[]).filter(Boolean)
+            : [];
+          const pathLabel = folderPath.length > 0 ? `/${folderPath.join("/")}` : "/Root";
+          setSelectedDocumentMeta({
+            id: firstDoc.id,
+            name: filename,
+            subtitle,
+            pathLabel,
+          });
+          setDocumentId(firstDoc.id);
+          setSelectionHint(null);
+        }}
+      />
     </div>
   );
 }
