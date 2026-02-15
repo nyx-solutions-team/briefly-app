@@ -1137,7 +1137,7 @@ function EditorDocPageInner({
       <div className="min-h-screen flex flex-col bg-gradient-to-b from-background via-background to-muted/20">
         <header className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border/40">
           <div className="px-4 md:px-6 py-4">
-            <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-3 min-w-0">
                 <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => router.push("/editor")}
                 >
@@ -1169,7 +1169,7 @@ function EditorDocPageInner({
                           }
                         }}
                         disabled={titleSaving}
-                        className="h-7 md:h-8 w-[180px] sm:w-[280px] md:w-[420px] max-w-full border-transparent bg-transparent px-1 -ml-1 text-sm md:text-base font-semibold tracking-tight shadow-none focus-visible:border-border/40 focus-visible:ring-0"
+                        className="h-7 md:h-8 w-[120px] sm:w-[220px] md:w-[420px] max-w-full border-transparent bg-transparent px-1 -ml-1 text-sm md:text-base font-semibold tracking-tight shadow-none focus-visible:border-border/40 focus-visible:ring-0"
                         aria-label="Document title"
                       />
                       {titleSaving && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />}
@@ -1183,16 +1183,16 @@ function EditorDocPageInner({
                     {loading ? "..." : `/${docFolderPath.length ? docFolderPath.join("/") : "Root"}`}
                   </p>
                 </div>
-                <div className="ml-2 flex items-center gap-2">
+                <div className="ml-1 hidden sm:flex items-center gap-2">
                   {lockBadge}
                   {docStatusBadge}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 sm:gap-2 shrink-0">
                 <Button
                   variant={inspectorOpen && inspectorTab === "versions" ? "secondary" : "ghost"}
                   size="sm"
-                  className="h-8 gap-1.5 px-2.5 text-muted-foreground hover:text-foreground transition-all"
+                  className="h-8 gap-1.5 px-2 text-muted-foreground hover:text-foreground transition-all"
                   onClick={() => openInspector("versions")}
                   title="History"
                 >
@@ -1203,7 +1203,7 @@ function EditorDocPageInner({
                 <Button
                   variant={inspectorOpen && inspectorTab === "approval" ? "secondary" : "ghost"}
                   size="sm"
-                  className="h-8 gap-1.5 px-2.5 text-muted-foreground hover:text-foreground transition-all"
+                  className="h-8 gap-1.5 px-2 text-muted-foreground hover:text-foreground transition-all"
                   onClick={() => openInspector("approval")}
                   title="Approval"
                 >
@@ -1215,7 +1215,7 @@ function EditorDocPageInner({
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-8 gap-1.5 px-2.5 text-destructive hover:text-destructive hover:bg-destructive/10"
+                    className="h-8 gap-1.5 px-2 text-destructive hover:text-destructive hover:bg-destructive/10"
                     onClick={() => setDeleteConfirmOpen(true)}
                     disabled={deleting || loading}
                   >
@@ -1224,9 +1224,15 @@ function EditorDocPageInner({
                   </Button>
                 )}
 
-                <Button size="sm" className="h-8 gap-1.5" onClick={() => void doSave()} disabled={!editorEditable || saving || !isDraftDirty}>
+                <Button
+                  size="sm"
+                  className="h-8 gap-1.5 px-2 sm:px-3"
+                  onClick={() => void doSave()}
+                  disabled={!editorEditable || saving || !isDraftDirty}
+                >
                   {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                  Save version
+                  <span className="hidden sm:inline">Save version</span>
+                  <span className="sm:hidden">Save</span>
                 </Button>
               </div>
             </div>

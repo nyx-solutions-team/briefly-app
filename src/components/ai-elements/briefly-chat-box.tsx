@@ -314,6 +314,7 @@ export function BrieflyChatBox({
   const [text, setText] = useState("");
   const [selectionHint, setSelectionHint] = useState<string | null>(null);
   const [scopePickerOpen, setScopePickerOpen] = useState(false);
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
   const [selectedDocumentMeta, setSelectedDocumentMeta] = useState<DocumentOption | null>(null);
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -605,7 +606,7 @@ export function BrieflyChatBox({
             <Sparkles className="h-3.5 w-3.5" />
             <span className="ml-1.5 text-xs font-medium">Deep</span>
           </Button>
-          <DropdownMenu>
+          <DropdownMenu open={actionsMenuOpen} onOpenChange={setActionsMenuOpen}>
             <DropdownMenuTrigger asChild>
               <Button
                 type="button"
@@ -619,9 +620,9 @@ export function BrieflyChatBox({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52">
               <DropdownMenuItem
-                onSelect={(event) => {
-                  event.preventDefault();
-                  triggerFilePicker();
+                onSelect={() => {
+                  setActionsMenuOpen(false);
+                  window.setTimeout(() => triggerFilePicker(), 0);
                 }}
               >
                 <FileText className="h-4 w-4" />
@@ -629,9 +630,9 @@ export function BrieflyChatBox({
               </DropdownMenuItem>
               <DropdownMenuItem
                 disabled={!onRequestCreateDraftDocument}
-                onSelect={(event) => {
-                  event.preventDefault();
-                  triggerCreateDraftDocument();
+                onSelect={() => {
+                  setActionsMenuOpen(false);
+                  window.setTimeout(() => triggerCreateDraftDocument(), 0);
                 }}
               >
                 <FilePlus2 className="h-4 w-4" />

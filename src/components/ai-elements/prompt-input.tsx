@@ -172,6 +172,7 @@ export type PromptInputActionAddAttachmentsProps = ComponentProps<
 
 export const PromptInputActionAddAttachments = ({
   label = "Add photos or files",
+  onSelect,
   ...props
 }: PromptInputActionAddAttachmentsProps) => {
   const attachments = usePromptInputAttachments();
@@ -180,8 +181,11 @@ export const PromptInputActionAddAttachments = ({
     <DropdownMenuItem
       {...props}
       onSelect={(e) => {
-        e.preventDefault();
-        attachments.openFileDialog();
+        onSelect?.(e);
+        if (e.defaultPrevented) return;
+        window.setTimeout(() => {
+          attachments.openFileDialog();
+        }, 0);
       }}
     >
       <ImageIcon className="mr-2 size-4" /> {label}

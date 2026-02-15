@@ -447,7 +447,7 @@ export default function EditDocumentPage() {
           <div className="fixed top-0 left-0 right-0 z-50 p-6 flex justify-between items-center pointer-events-none">
             <button
               onClick={() => router.push(backHref)}
-              className="pointer-events-auto h-11 w-11 flex items-center justify-center rounded-full bg-zinc-900/60 backdrop-blur-xl border border-white/10 text-white shadow-2xl active:scale-95 transition-all"
+              className="pointer-events-auto h-11 w-11 flex items-center justify-center rounded-full bg-background/90 backdrop-blur-xl border border-border/60 text-foreground shadow-xl active:scale-95 transition-all"
             >
               <ChevronLeft className="h-6 w-6" />
             </button>
@@ -545,7 +545,7 @@ export default function EditDocumentPage() {
         ) : null}
 
         {/* Main Content */}
-        <main className={cn("flex-1", isMobile ? "bg-zinc-950 px-4 pb-20 pt-24" : "px-6 py-6")}>
+        <main className={cn("flex-1", isMobile ? "bg-background px-4 pb-20 pt-24" : "px-6 py-6")}>
           {isDocLoading ? (
             <div className="mx-auto max-w-xl space-y-6 rounded-lg border border-border/40 bg-card/50 p-6">
               <div className="space-y-2">
@@ -582,29 +582,29 @@ export default function EditDocumentPage() {
             /* Mobile View Content */
             <div className="flex flex-col gap-6">
               <div className="flex flex-col">
-                <h1 className="text-2xl font-bold text-white leading-tight">Edit details</h1>
-                <p className="text-zinc-500 text-sm mt-1 truncate">{doc?.title || doc?.filename}</p>
+                <h1 className="text-2xl font-bold text-foreground leading-tight">Edit details</h1>
+                <p className="text-muted-foreground text-sm mt-1 truncate">{doc?.title || doc?.filename}</p>
               </div>
 
               <Tabs defaultValue="overview" className="w-full">
-                <TabsList className="w-full h-12 bg-zinc-900/60 border border-white/5 rounded-2xl p-1 mb-6">
-                  <TabsTrigger value="overview" className="flex-1 rounded-xl data-[state=active]:bg-orange-500 data-[state=active]:text-white text-zinc-400 font-bold transition-all">
+                <TabsList className="w-full h-12 bg-muted/20 border border-border/40 rounded-2xl p-1 mb-6">
+                  <TabsTrigger value="overview" className="flex-1 rounded-xl data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground font-bold transition-all">
                     Form
                   </TabsTrigger>
-                  <TabsTrigger value="history" className="flex-1 rounded-xl data-[state=active]:bg-orange-500 data-[state=active]:text-white text-zinc-400 font-bold transition-all">
+                  <TabsTrigger value="history" className="flex-1 rounded-xl data-[state=active]:bg-primary data-[state=active]:text-primary-foreground text-muted-foreground font-bold transition-all">
                     History
                   </TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="overview" className="mt-0 space-y-6 focus-visible:outline-none focus:outline-none">
-                  <Section icon={FileText} title="Document Basics" className="bg-zinc-900/60 border-white/5 rounded-2xl p-6">
+                  <Section icon={FileText} title="Document Basics" className="bg-card/50 border-border/40 rounded-2xl p-6">
                     <div className="space-y-5">
                       <FormField label="Title">
                         <Input
                           value={form.title}
                           onChange={(e) => updateForm({ title: e.target.value })}
                           placeholder="Document title"
-                          className="h-12 bg-zinc-800/50 border-white/5 rounded-xl text-white placeholder:text-zinc-600 focus:border-orange-500/50"
+                          className="h-12 bg-background/80 border-border/60 rounded-xl text-foreground placeholder:text-muted-foreground focus:border-primary/50"
                         />
                       </FormField>
 
@@ -613,7 +613,7 @@ export default function EditDocumentPage() {
                           value={form.filename}
                           onChange={(e) => updateForm({ filename: e.target.value })}
                           placeholder="original-filename.pdf"
-                          className="h-12 bg-zinc-800/50 border-white/5 rounded-xl text-white placeholder:text-zinc-600 focus:border-orange-500/50"
+                          className="h-12 bg-background/80 border-border/60 rounded-xl text-foreground placeholder:text-muted-foreground focus:border-primary/50"
                         />
                       </FormField>
 
@@ -623,12 +623,12 @@ export default function EditDocumentPage() {
                             value={form.folderPath}
                             onChange={(e) => updateForm({ folderPath: e.target.value })}
                             placeholder="Root (no folder)"
-                            className="h-12 bg-zinc-800/50 border-white/5 rounded-xl text-white placeholder:text-zinc-600 focus:border-orange-500/50"
+                            className="h-12 bg-background/80 border-border/60 rounded-xl text-foreground placeholder:text-muted-foreground focus:border-primary/50"
                           />
                           <Button
                             variant="outline"
                             onClick={() => setFolderCommandOpen(true)}
-                            className="h-12 rounded-xl border-white/10 bg-white/5 text-white font-semibold"
+                            className="h-12 rounded-xl border-border/60 bg-background/80 text-foreground font-semibold"
                           >
                             <FolderOpen className="h-4 w-4 mr-2" />
                             Browse Folders
@@ -638,14 +638,14 @@ export default function EditDocumentPage() {
                     </div>
                   </Section>
 
-                  <Section icon={User} title="People & Context" className="bg-zinc-900/60 border-white/5 rounded-2xl p-6">
+                  <Section icon={User} title="People & Context" className="bg-card/50 border-border/40 rounded-2xl p-6">
                     <div className="space-y-5">
                       <FormField label="Subject">
                         <Input
                           value={form.subject}
                           onChange={(e) => updateForm({ subject: e.target.value })}
                           placeholder="What is this about?"
-                          className="h-12 bg-zinc-800/50 border-white/5 rounded-xl text-white placeholder:text-zinc-600 focus:border-orange-500/50"
+                          className="h-12 bg-background/80 border-border/60 rounded-xl text-foreground placeholder:text-muted-foreground focus:border-primary/50"
                         />
                       </FormField>
 
@@ -654,7 +654,7 @@ export default function EditDocumentPage() {
                           value={form.sender}
                           onChange={(e) => updateForm({ sender: e.target.value })}
                           placeholder="From..."
-                          className="h-12 bg-zinc-800/50 border-white/5 rounded-xl text-white placeholder:text-zinc-600 focus:border-orange-500/50"
+                          className="h-12 bg-background/80 border-border/60 rounded-xl text-foreground placeholder:text-muted-foreground focus:border-primary/50"
                         />
                       </FormField>
 
@@ -663,7 +663,7 @@ export default function EditDocumentPage() {
                           value={form.receiver}
                           onChange={(e) => updateForm({ receiver: e.target.value })}
                           placeholder="To..."
-                          className="h-12 bg-zinc-800/50 border-white/5 rounded-xl text-white placeholder:text-zinc-600 focus:border-orange-500/50"
+                          className="h-12 bg-background/80 border-border/60 rounded-xl text-foreground placeholder:text-muted-foreground focus:border-primary/50"
                         />
                       </FormField>
 
@@ -672,31 +672,31 @@ export default function EditDocumentPage() {
                           value={form.documentDate}
                           onChange={(e) => updateForm({ documentDate: e.target.value })}
                           placeholder="YYYY-MM-DD"
-                          className="h-12 bg-zinc-800/50 border-white/5 rounded-xl text-white placeholder:text-zinc-600 focus:border-orange-500/50"
+                          className="h-12 bg-background/80 border-border/60 rounded-xl text-foreground placeholder:text-muted-foreground focus:border-primary/50"
                         />
                       </FormField>
                     </div>
                   </Section>
 
-                  <Section icon={Tag} title="Categorization" className="bg-zinc-900/60 border-white/5 rounded-2xl p-6">
+                  <Section icon={Tag} title="Categorization" className="bg-card/50 border-border/40 rounded-2xl p-6">
                     <div className="space-y-5">
                       <FormField label="Document Type">
                         <Input
                           value={form.documentType}
                           onChange={(e) => updateForm({ documentType: e.target.value })}
                           placeholder="Invoice, Contract..."
-                          className="h-12 bg-zinc-800/50 border-white/5 rounded-xl text-white placeholder:text-zinc-600 focus:border-orange-500/50"
+                          className="h-12 bg-background/80 border-border/60 rounded-xl text-foreground placeholder:text-muted-foreground focus:border-primary/50"
                         />
                       </FormField>
 
                       <FormField label="Category">
                         <UiSelect value={form.category || 'General'} onValueChange={(value) => updateForm({ category: value })}>
-                          <UiSelectTrigger className="h-12 bg-zinc-800/50 border-white/5 rounded-xl text-white focus:border-orange-500/50">
+                          <UiSelectTrigger className="h-12 bg-background/80 border-border/60 rounded-xl text-foreground focus:border-primary/50">
                             <UiSelectValue placeholder="Select category..." />
                           </UiSelectTrigger>
-                          <UiSelectContent className="bg-zinc-900 border-white/10 rounded-2xl shadow-2xl">
+                          <UiSelectContent className="rounded-2xl shadow-2xl">
                             {categories.map((category) => (
-                              <UiSelectItem key={category} value={category} className="rounded-xl h-11 focus:bg-white/10 text-white">
+                              <UiSelectItem key={category} value={category} className="rounded-xl h-11">
                                 {category}
                               </UiSelectItem>
                             ))}
@@ -709,7 +709,7 @@ export default function EditDocumentPage() {
                           value={form.keywords}
                           onChange={(e) => updateForm({ keywords: e.target.value })}
                           placeholder="Separate with commas"
-                          className="h-12 bg-zinc-800/50 border-white/5 rounded-xl text-white placeholder:text-zinc-600 focus:border-orange-500/50"
+                          className="h-12 bg-background/80 border-border/60 rounded-xl text-foreground placeholder:text-muted-foreground focus:border-primary/50"
                         />
                       </FormField>
 
@@ -718,20 +718,20 @@ export default function EditDocumentPage() {
                           value={form.tags}
                           onChange={(e) => updateForm({ tags: e.target.value })}
                           placeholder="Separate with commas"
-                          className="h-12 bg-zinc-800/50 border-white/5 rounded-xl text-white placeholder:text-zinc-600 focus:border-orange-500/50"
+                          className="h-12 bg-background/80 border-border/60 rounded-xl text-foreground placeholder:text-muted-foreground focus:border-primary/50"
                         />
                       </FormField>
                     </div>
                   </Section>
 
-                  <Section icon={Sparkles} title="AI Insight" variant="accent" className="bg-zinc-900/60 border-orange-500/20 rounded-2xl p-6">
+                  <Section icon={Sparkles} title="AI Insight" variant="accent" className="bg-card/50 border-orange-500/20 rounded-2xl p-6">
                     <FormField label="Summary & Description">
                       <Textarea
                         rows={10}
                         value={form.description}
                         onChange={(e) => updateForm({ description: e.target.value })}
                         placeholder="Detailed document summary..."
-                        className="bg-zinc-800/50 border-white/5 rounded-xl text-white placeholder:text-zinc-600 focus:border-orange-500/50 resize-none leading-relaxed"
+                        className="bg-background/80 border-border/60 rounded-xl text-foreground placeholder:text-muted-foreground focus:border-primary/50 resize-none leading-relaxed"
                       />
                     </FormField>
                   </Section>
@@ -749,7 +749,7 @@ export default function EditDocumentPage() {
                 </TabsContent>
 
                 <TabsContent value="history" className="mt-0 focus-visible:outline-none focus:outline-none pb-12">
-                  <Section icon={GitBranch} title="Version Control" className="bg-zinc-900/60 border-white/5 rounded-2xl p-6">
+                  <Section icon={GitBranch} title="Version Control" className="bg-card/50 border-border/40 rounded-2xl p-6">
                     <div className="flex flex-col gap-4">
                       <Button
                         variant="outline"
@@ -763,7 +763,7 @@ export default function EditDocumentPage() {
                       {relLoading ? (
                         <div className="flex flex-col items-center py-10 gap-3">
                           <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
-                          <span className="text-zinc-500 text-sm">Fetching document links...</span>
+                          <span className="text-muted-foreground text-sm">Fetching document links...</span>
                         </div>
                       ) : (
                         <div className="space-y-4 pt-2">
@@ -773,14 +773,14 @@ export default function EditDocumentPage() {
                             const canMoveDown = Number.isFinite(fromNum) && fromNum > 1;
 
                             return (
-                              <div key={v.id} className="bg-zinc-800/40 border border-white/5 rounded-2xl p-5 flex flex-col gap-4">
+                              <div key={v.id} className="bg-card/70 border border-border/40 rounded-2xl p-5 flex flex-col gap-4">
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center gap-3">
                                     <div className="h-9 w-9 flex items-center justify-center rounded-lg bg-orange-500/10 text-orange-500 font-bold text-sm">
                                       v{v.versionNumber || '—'}
                                     </div>
                                     <div className="flex flex-col">
-                                      <span className="text-white font-bold text-sm truncate max-w-[140px]">{v.title || 'Untitled'}</span>
+                                      <span className="text-foreground font-bold text-sm truncate max-w-[140px]">{v.title || 'Untitled'}</span>
                                       {v.isCurrentVersion && (
                                         <span className="flex items-center gap-1 text-[10px] text-orange-400 font-bold uppercase tracking-wider mt-0.5">
                                           <Crown className="h-2.5 w-2.5" />
@@ -790,7 +790,7 @@ export default function EditDocumentPage() {
                                     </div>
                                   </div>
                                   <div className="flex items-center gap-1">
-                                    <Button size="icon" variant="ghost" className="h-9 w-9 rounded-full text-zinc-400 hover:text-white" asChild>
+                                    <Button size="icon" variant="ghost" className="h-9 w-9 rounded-full text-muted-foreground hover:text-foreground" asChild>
                                       <Link href={`/documents/${v.id}`} target="_blank">
                                         <ExternalLink className="h-4 w-4" />
                                       </Link>
@@ -808,7 +808,7 @@ export default function EditDocumentPage() {
                                 <div className="grid grid-cols-2 gap-2">
                                   <Button
                                     variant="secondary"
-                                    className="h-10 rounded-xl bg-zinc-700/50 text-zinc-300 font-bold text-xs"
+                                    className="h-10 rounded-xl font-bold text-xs"
                                     disabled={!canMoveUp}
                                     onClick={async () => {
                                       const from = Number(v.versionNumber);
@@ -825,7 +825,7 @@ export default function EditDocumentPage() {
                                   </Button>
                                   <Button
                                     variant="secondary"
-                                    className="h-10 rounded-xl bg-zinc-700/50 text-zinc-300 font-bold text-xs"
+                                    className="h-10 rounded-xl font-bold text-xs"
                                     disabled={!canMoveDown}
                                     onClick={async () => {
                                       const from = Number(v.versionNumber);
@@ -1194,7 +1194,7 @@ export default function EditDocumentPage() {
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent className={cn("max-w-md border-border/40", isMobile && "w-[90vw] rounded-3xl p-6 bg-zinc-900 border-white/10")}>
+        <AlertDialogContent className={cn("max-w-md border-border/40", isMobile && "w-[90vw] rounded-3xl p-6")}>
           <AlertDialogHeader>
             <div className="flex items-start gap-4">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-red-500/10">
@@ -1224,7 +1224,7 @@ export default function EditDocumentPage() {
 
       {/* Remove From Version Chain Dialog */}
       <AlertDialog open={!!unlinkTarget} onOpenChange={(open) => { if (!open) setUnlinkTarget(null); }}>
-        <AlertDialogContent className={cn("max-w-md border-border/40", isMobile && "w-[90vw] rounded-3xl p-6 bg-zinc-900 border-white/10")}>
+        <AlertDialogContent className={cn("max-w-md border-border/40", isMobile && "w-[90vw] rounded-3xl p-6")}>
           <AlertDialogHeader>
             <div className="flex items-start gap-4">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-500/10">

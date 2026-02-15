@@ -13,14 +13,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
-import { useDocuments } from "@/hooks/use-documents";
-import { useFolders as useFolderExplorer } from "@/hooks/use-folders";
 import { AccessDenied } from "@/components/access-denied";
 import { createEditorDocShell, listEditorDocs, type EditorDocListItem } from "@/lib/editor-api";
 import { FolderPickerDialog } from "@/components/folder-picker-dialog";
 import { FileText, FolderOpen, Plus } from "lucide-react";
 import { formatAppDateTime } from "@/lib/utils";
 import { getOrgFeatures } from "@/lib/org-features";
+import { apiFetch, getApiContext } from "@/lib/api";
 
 const GENERAL_DEPARTMENT_VALUE = "__general__";
 
@@ -73,8 +72,7 @@ function EditorPageInner() {
   const { toast } = useToast();
   const router = useRouter();
   const { hasPermission, bootstrapData } = useAuth();
-  const { folders: documentFolders, createFolder, refresh } = useDocuments();
-  const { load: loadFolderChildren } = useFolderExplorer();
+  const orgId = getApiContext().orgId;
 
   const canRead = hasPermission("documents.read");
   const canCreate = hasPermission("documents.create");
@@ -109,12 +107,33 @@ function EditorPageInner() {
 
   const folderOptions = React.useMemo(() => {
     const set = new Set<string>();
-    for (const p of documentFolders || []) {
-      const s = (p || []).filter(Boolean).join("/");
-      if (s) set.add(s);
+    for (const d of docs) {
+      const path = Array.isArray(d.folder_path) ? d.folder_path.filter(Boolean) : [];
+      for (let i = 1; i <= path.length; i += 1) {
+        const s = path.slice(0, i).join("/");
+        if (s) set.add(s);
+      }
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [documentFolders]);
+  }, [docs]);
+
+  const loadFolderChildren = React.useCallback(async (path: string[] = []) => {
+    if (!orgId) return [];
+    const query = path.length ? `?path=${encodeURIComponent(path.join("/"))}` : "";
+    return apiFetch(`/orgs/${orgId}/folders${query}`, { skipCache: true });
+  }, [orgId]);
+
+  const createFolder = React.useCallback(async (parentPath: string[], name: string) => {
+    if (!orgId) throw new Error("No org selected");
+    await apiFetch(`/orgs/${orgId}/folders`, {
+      method: "POST",
+      body: {
+        parentPath,
+        name,
+      },
+      skipCache: true,
+    });
+  }, [orgId]);
 
   const currentFolderPath = React.useMemo(
     () => newFolderPath.split("/").map((p) => p.trim()).filter(Boolean),
@@ -398,7 +417,6 @@ function EditorPageInner() {
           onSelect={(path) => setNewFolderPath(path.join("/"))}
           onCreateFolder={async (parentPath, name) => {
             await createFolder(parentPath, name);
-            await refresh();
           }}
           onLoadChildren={loadFolderChildren}
           loading={false}

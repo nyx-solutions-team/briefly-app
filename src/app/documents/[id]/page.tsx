@@ -105,6 +105,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { cn } from '@/lib/utils';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 // Linear-style section component
 function Section({
@@ -578,14 +579,13 @@ export default function DocumentDetailPage() {
   const [accessExplainError, setAccessExplainError] = useState<string | null>(null);
   const [accessExplainData, setAccessExplainData] = useState<any | null>(null);
   const [accessExplainPerm, setAccessExplainPerm] = useState('documents.read');
-  const [isMobile, setIsMobile] = useState(false);
+  const isMobile = useIsMobile();
+  const [viewportReady, setViewportReady] = useState(false);
+  const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
   const [isFullscreenPreviewOpen, setIsFullscreenPreviewOpen] = useState(false);
 
   useEffect(() => {
-    const checkMobile = () => setIsMobile(window.innerWidth < 1024);
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
+    setViewportReady(true);
   }, []);
 
   const formatSize = (bytes?: number) => {
@@ -969,6 +969,19 @@ export default function DocumentDetailPage() {
 
   if (!doc) return null;
 
+  if (!viewportReady) {
+    return (
+      <AppLayout>
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="flex flex-col items-center gap-3">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <span className="text-sm text-muted-foreground">Preparing layout...</span>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
+
   // Determine permissions
   const folderPath = doc.folderPath || (doc as any).folder_path || [];
   const myDeptIds = new Set((departments || []).map((d: any) => d.id));
@@ -1187,43 +1200,70 @@ export default function DocumentDetailPage() {
           <div className="fixed top-0 left-0 right-0 z-50 p-6 flex justify-between items-center pointer-events-none">
             <button
               onClick={handleBack}
-              className="pointer-events-auto h-11 w-11 flex items-center justify-center rounded-full bg-zinc-900/60 backdrop-blur-xl border border-white/10 text-white shadow-2xl active:scale-95 transition-all"
+              className="pointer-events-auto h-11 w-11 flex items-center justify-center rounded-full bg-background/90 backdrop-blur-xl border border-border/60 text-foreground shadow-xl active:scale-95 transition-all"
             >
               <ChevronLeft className="h-6 w-6" />
             </button>
-            <DropdownMenu>
+            <DropdownMenu open={mobileActionsOpen} onOpenChange={setMobileActionsOpen}>
               <DropdownMenuTrigger asChild>
-                <button className="pointer-events-auto h-11 w-11 flex items-center justify-center rounded-full bg-zinc-900/60 backdrop-blur-xl border border-white/10 text-white shadow-2xl active:scale-95 transition-all">
+                <button className="pointer-events-auto h-11 w-11 flex items-center justify-center rounded-full bg-background/90 backdrop-blur-xl border border-border/60 text-foreground shadow-xl active:scale-95 transition-all">
                   <MoreHorizontal className="h-6 w-6" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-60 rounded-3xl p-2 shadow-2xl border-white/10 bg-zinc-900/95 backdrop-blur-xl">
+              <DropdownMenuContent align="end" className="w-60 rounded-2xl p-2 shadow-2xl border-border/60 bg-popover/95 backdrop-blur-xl">
                 {canEdit && (
-                  <DropdownMenuItem onClick={() => router.push(`/documents/${doc.id}/edit`)} className="rounded-2xl h-11 focus:bg-white/10 text-white">
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      setMobileActionsOpen(false);
+                      window.setTimeout(() => router.push(`/documents/${doc.id}/edit`), 0);
+                    }}
+                    className="rounded-xl h-11 focus:bg-accent"
+                  >
                     <Pencil className="h-4 w-4 mr-3" />
                     Edit Document
                   </DropdownMenuItem>
                 )}
-                <DropdownMenuItem onClick={downloadContent} className="rounded-2xl h-11 focus:bg-white/10 text-white">
+                <DropdownMenuItem
+                  onSelect={() => {
+                    setMobileActionsOpen(false);
+                    window.setTimeout(() => { void downloadContent(); }, 0);
+                  }}
+                  className="rounded-xl h-11 focus:bg-accent"
+                >
                   <Download className="h-4 w-4 mr-3" />
                   Download File
                 </DropdownMenuItem>
                 {canShare && (
-                  <DropdownMenuItem onClick={openShareModal} className="rounded-2xl h-11 focus:bg-white/10 text-white">
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      setMobileActionsOpen(false);
+                      window.setTimeout(() => openShareModal(), 0);
+                    }}
+                    className="rounded-xl h-11 focus:bg-accent"
+                  >
                     <Share2 className="h-4 w-4 mr-3" />
                     Share Link
                   </DropdownMenuItem>
                 )}
-                <DropdownMenuItem onClick={() => setAccessExplainOpen(true)} className="rounded-2xl h-11 focus:bg-white/10 text-white">
+                <DropdownMenuItem
+                  onSelect={() => {
+                    setMobileActionsOpen(false);
+                    window.setTimeout(() => setAccessExplainOpen(true), 0);
+                  }}
+                  className="rounded-xl h-11 focus:bg-accent"
+                >
                   <Info className="h-4 w-4 mr-3" />
                   Access Info
                 </DropdownMenuItem>
                 {canDelete && (
                   <>
-                    <div className="my-1.5 h-px bg-white/5" />
+                    <div className="my-1.5 h-px bg-border/60" />
                     <DropdownMenuItem
-                      className="text-red-400 focus:text-red-400 focus:bg-red-400/10 rounded-2xl h-11"
-                      onClick={() => setConfirmDeleteOpen(true)}
+                      className="text-destructive focus:text-destructive focus:bg-destructive/10 rounded-xl h-11"
+                      onSelect={() => {
+                        setMobileActionsOpen(false);
+                        window.setTimeout(() => setConfirmDeleteOpen(true), 0);
+                      }}
                     >
                       <Trash2 className="h-4 w-4 mr-3" />
                       Delete Document
@@ -1427,10 +1467,10 @@ export default function DocumentDetailPage() {
 
         {/* Content Structure */}
         {isMobile ? (
-          <main className="flex-1 flex flex-col min-h-0 bg-zinc-950 pb-20">
+          <main className="flex-1 flex flex-col min-h-0 bg-background pb-20">
             {/* Top Preview - Extra large for visibility */}
-            <div className="w-full bg-zinc-900/50 p-4 pt-20">
-              <div className="relative group rounded-2xl overflow-hidden shadow-2xl border border-white/5 bg-zinc-950 h-[45vh] min-h-[380px]">
+            <div className="w-full bg-muted/20 p-4 pt-20">
+              <div className="relative group rounded-2xl overflow-hidden shadow-2xl border border-border/40 bg-card h-[42svh] min-h-[260px] max-h-[420px]">
                 <FilePreview
                   documentId={doc.id}
                   mimeType={doc.mimeType}
@@ -1468,10 +1508,10 @@ export default function DocumentDetailPage() {
 
             {/* Document Identity Area */}
             <div className="px-5 pt-8 pb-4">
-              <h1 className="text-2xl font-bold text-white tracking-tight leading-tight">
+              <h1 className="text-2xl font-bold text-foreground tracking-tight leading-tight">
                 {doc.title || doc.name}
               </h1>
-              <div className="flex items-center gap-2 mt-2 text-zinc-400 font-medium text-[13px]">
+              <div className="flex items-center gap-2 mt-2 text-muted-foreground font-medium text-[13px]">
                 <span className="uppercase tracking-wide">
                   {(doc.mimeType?.split('/')[1] || 'DOC').toUpperCase()}
                 </span>
@@ -1484,29 +1524,29 @@ export default function DocumentDetailPage() {
 
             {/* Tabs System */}
             <Tabs defaultValue="overview" className="flex-1 flex flex-col">
-              <div className="sticky top-0 z-20 bg-zinc-950 px-2 border-b border-white/5">
+              <div className="sticky top-0 z-20 bg-background px-2 border-b border-border/40">
                 <TabsList className="w-full h-12 bg-transparent justify-start gap-6 p-0 px-3 overflow-x-auto no-scrollbar">
                   <TabsTrigger
                     value="overview"
-                    className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-0 pb-3 pt-3 text-[14px] font-semibold text-zinc-500 data-[state=active]:border-orange-500 data-[state=active]:text-white transition-all"
+                    className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-0 pb-3 pt-3 text-[14px] font-semibold text-muted-foreground data-[state=active]:border-primary data-[state=active]:text-foreground transition-all"
                   >
                     Overview
                   </TabsTrigger>
                   <TabsTrigger
                     value="info"
-                    className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-0 pb-3 pt-3 text-[14px] font-semibold text-zinc-500 data-[state=active]:border-orange-500 data-[state=active]:text-white transition-all"
+                    className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-0 pb-3 pt-3 text-[14px] font-semibold text-muted-foreground data-[state=active]:border-primary data-[state=active]:text-foreground transition-all"
                   >
                     File Info
                   </TabsTrigger>
                   <TabsTrigger
                     value="history"
-                    className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-0 pb-3 pt-3 text-[14px] font-semibold text-zinc-500 data-[state=active]:border-orange-500 data-[state=active]:text-white transition-all"
+                    className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-0 pb-3 pt-3 text-[14px] font-semibold text-muted-foreground data-[state=active]:border-primary data-[state=active]:text-foreground transition-all"
                   >
                     History
                   </TabsTrigger>
                   <TabsTrigger
                     value="ocr"
-                    className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-0 pb-3 pt-3 text-[14px] font-semibold text-zinc-500 data-[state=active]:border-orange-500 data-[state=active]:text-white transition-all"
+                    className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-0 pb-3 pt-3 text-[14px] font-semibold text-muted-foreground data-[state=active]:border-primary data-[state=active]:text-foreground transition-all"
                   >
                     OCR
                   </TabsTrigger>
@@ -1516,23 +1556,23 @@ export default function DocumentDetailPage() {
               <div className="p-4 overflow-y-auto flex-1">
                 {/* Overview TabContent */}
                 <TabsContent value="overview" className="mt-0 space-y-4 focus-visible:outline-none focus:outline-none">
-                  <Section icon={MapPin} title="Location" variant="default" className="bg-zinc-900/60 border-white/5 rounded-2xl">
+                  <Section icon={MapPin} title="Location" variant="default" className="bg-card/50 border-border/40 rounded-2xl">
                     <div className="flex items-center gap-3">
                       <div className="h-10 w-10 flex items-center justify-center rounded-xl bg-orange-500/10 text-orange-500">
                         <FolderOpen className="h-5 w-5" />
                       </div>
                       <div className="flex flex-col">
-                        <span className="text-zinc-500 text-[11px] font-bold uppercase tracking-wider">Root</span>
+                        <span className="text-muted-foreground text-[11px] font-bold uppercase tracking-wider">Root</span>
                         <div className="flex items-center gap-1.5 mt-0.5">
                           {folderPath.length > 0 ? (
                             folderPath.map((seg: string, i: number) => (
                               <React.Fragment key={i}>
-                                <span className="text-zinc-200 text-sm font-medium">{seg}</span>
-                                {i < folderPath.length - 1 && <span className="text-zinc-600">/</span>}
+                                <span className="text-foreground text-sm font-medium">{seg}</span>
+                                {i < folderPath.length - 1 && <span className="text-muted-foreground/70">/</span>}
                               </React.Fragment>
                             ))
                           ) : (
-                            <span className="text-zinc-200 text-sm font-medium">Root</span>
+                            <span className="text-foreground text-sm font-medium">Root</span>
                           )}
                         </div>
                       </div>
@@ -1540,27 +1580,27 @@ export default function DocumentDetailPage() {
                   </Section>
 
                   {displaySummary && (
-                    <Section icon={Sparkles} title="AI Summary" variant="accent" className="bg-zinc-900/60 border-white/5 rounded-2xl">
-                      <p className="text-sm text-zinc-300 whitespace-pre-wrap leading-relaxed">
+                    <Section icon={Sparkles} title="AI Summary" variant="accent" className="bg-card/50 border-border/40 rounded-2xl">
+                      <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">
                         {displaySummary}
                       </p>
                     </Section>
                   )}
 
-                  <Section icon={Tag} title="Metadata & Tags" className="bg-zinc-900/60 border-white/5 rounded-2xl">
+                  <Section icon={Tag} title="Metadata & Tags" className="bg-card/50 border-border/40 rounded-2xl">
                     <div className="space-y-6">
                       {doc.aiPurpose && (
                         <div>
-                          <div className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-2">Purpose</div>
-                          <p className="text-sm text-zinc-300">{doc.aiPurpose}</p>
+                          <div className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Purpose</div>
+                          <p className="text-sm text-foreground">{doc.aiPurpose}</p>
                         </div>
                       )}
                       {((doc.aiKeywords && doc.aiKeywords.length > 0) || (doc.tags && doc.tags.length > 0)) && (
                         <div>
-                          <div className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-3">Keywords & Tags</div>
+                          <div className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-3">Keywords & Tags</div>
                           <div className="flex flex-wrap gap-2">
                             {doc.aiKeywords?.map((k: string) => (
-                              <Badge key={k} variant="outline" className="bg-zinc-800/50 border-white/5 text-zinc-300 font-normal py-1 px-3 rounded-lg">{k}</Badge>
+                              <Badge key={k} variant="outline" className="bg-muted/30 border-border/60 text-foreground font-normal py-1 px-3 rounded-lg">{k}</Badge>
                             ))}
                             {doc.tags?.map((k: string) => (
                               <Badge key={k} variant="secondary" className="bg-orange-500/10 border-orange-500/20 text-orange-500 font-normal py-1 px-3 rounded-lg">{k}</Badge>
@@ -1574,20 +1614,20 @@ export default function DocumentDetailPage() {
 
                 {/* File Info TabContent */}
                 <TabsContent value="info" className="mt-0 space-y-4 focus-visible:outline-none focus:outline-none">
-                  <Section icon={Info} title="Details" className="bg-zinc-900/60 border-white/5 rounded-2xl">
+                  <Section icon={Info} title="Details" className="bg-card/50 border-border/40 rounded-2xl">
                     <div className="grid grid-cols-1 gap-5">
-                      <DetailRow icon={User} label="Sender" value={doc.sender || 'Unknown'} className="border-b border-white/5 pb-4" />
-                      <DetailRow icon={UserCheck} label="Receiver" value={doc.receiver || '—'} className="border-b border-white/5 pb-4" />
+                      <DetailRow icon={User} label="Sender" value={doc.sender || 'Unknown'} className="border-b border-border/30 pb-4" />
+                      <DetailRow icon={UserCheck} label="Receiver" value={doc.receiver || '—'} className="border-b border-border/30 pb-4" />
                       <DetailRow icon={MessageSquare} label="Subject" value={doc.subject || '—'} />
                     </div>
                   </Section>
 
                   {showClassificationAndExtraction && (
-                    <Section icon={FileType} title="Classification" className="bg-zinc-900/60 border-white/5 rounded-2xl">
+                    <Section icon={FileType} title="Classification" className="bg-card/50 border-border/40 rounded-2xl">
                       <div className="flex items-center justify-between">
                         <div className="flex flex-col">
-                          <span className="text-zinc-500 text-[11px] font-bold uppercase tracking-wider">Document Type</span>
-                          <span className="text-white text-lg font-bold mt-1">{(doc.docTypeKey || 'Other').replace(/_/g, ' ')}</span>
+                          <span className="text-muted-foreground text-[11px] font-bold uppercase tracking-wider">Document Type</span>
+                          <span className="text-foreground text-lg font-bold mt-1">{(doc.docTypeKey || 'Other').replace(/_/g, ' ')}</span>
                         </div>
                         {doc.docTypeConfidence && (
                           <div className="h-12 w-12 rounded-full border-4 border-orange-500/20 flex items-center justify-center relative">
@@ -1599,17 +1639,17 @@ export default function DocumentDetailPage() {
                                 strokeDasharray={`${doc.docTypeConfidence * 150} 150`}
                               />
                             </svg>
-                            <span className="text-[10px] font-bold text-white">{Math.round(doc.docTypeConfidence * 100)}%</span>
+                            <span className="text-[10px] font-bold text-foreground">{Math.round(doc.docTypeConfidence * 100)}%</span>
                           </div>
                         )}
                       </div>
                     </Section>
                   )}
 
-                  <Section icon={FileTextIcon} title="Properties" className="bg-zinc-900/60 border-white/5 rounded-2xl">
+                  <Section icon={FileTextIcon} title="Properties" className="bg-card/50 border-border/40 rounded-2xl">
                     <div className="space-y-4">
-                      <DetailRow label="Filename" value={doc.filename} className="border-b border-white/5 pb-4" />
-                      <DetailRow label="Size" value={formatSize(doc.fileSizeBytes)} className="border-b border-white/5 pb-4" />
+                      <DetailRow label="Filename" value={doc.filename} className="border-b border-border/30 pb-4" />
+                      <DetailRow label="Size" value={formatSize(doc.fileSizeBytes)} className="border-b border-border/30 pb-4" />
                       <DetailRow label="Added" value={formatAppDateTime(doc.uploadedAt)} />
                     </div>
                   </Section>
@@ -1617,23 +1657,23 @@ export default function DocumentDetailPage() {
 
                 {/* History TabContent */}
                 <TabsContent value="history" className="mt-0 focus-visible:outline-none focus:outline-none">
-                  <Section icon={GitBranch} title="Version History" className="bg-zinc-900/60 border-white/5 rounded-2xl">
+                  <Section icon={GitBranch} title="Version History" className="bg-card/50 border-border/40 rounded-2xl">
                     <div className="space-y-4">
                       {versions.map((v: any) => (
                         <div key={v.id} className={cn(
                           "flex items-center justify-between p-4 rounded-xl border",
-                          v.id === doc.id ? "bg-orange-500/5 border-orange-500/20" : "bg-zinc-800/20 border-white/5"
+                          v.id === doc.id ? "bg-orange-500/5 border-orange-500/20" : "bg-muted/20 border-border/40"
                         )}>
                           <div className="flex items-center gap-3">
                             <div className={cn(
                               "h-10 w-10 flex items-center justify-center rounded-lg font-bold text-sm",
-                              v.id === doc.id ? "bg-orange-500 text-white" : "bg-zinc-700 text-zinc-300"
+                              v.id === doc.id ? "bg-orange-500 text-white" : "bg-muted text-muted-foreground"
                             )}>
                               v{v.versionNumber}
                             </div>
                             <div className="flex flex-col">
-                              <span className={cn("text-sm font-bold", v.id === doc.id ? "text-white" : "text-zinc-300")}>{v.title || 'Untitled'}</span>
-                              <span className="text-[11px] text-zinc-500 mt-0.5">{formatAppDate(v.uploadedAt)}</span>
+                              <span className={cn("text-sm font-bold", v.id === doc.id ? "text-foreground" : "text-foreground")}>{v.title || 'Untitled'}</span>
+                              <span className="text-[11px] text-muted-foreground mt-0.5">{formatAppDate(v.uploadedAt)}</span>
                             </div>
                           </div>
                           {v.id !== doc.id && (
@@ -1649,16 +1689,16 @@ export default function DocumentDetailPage() {
 
                 {/* OCR TabContent */}
                 <TabsContent value="ocr" className="mt-0 focus-visible:outline-none focus:outline-none">
-                  <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-4 overflow-hidden">
-                    <div className="flex items-center justify-between mb-4 pb-4 border-b border-white/5">
+                  <div className="bg-card/50 border border-border/40 rounded-2xl p-4 overflow-hidden">
+                    <div className="flex items-center justify-between mb-4 pb-4 border-b border-border/30">
                       <div className="flex items-center gap-2">
                         <FileTextIcon className="h-4 w-4 text-orange-500" />
-                        <span className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest">Extracted Text Content</span>
+                        <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest">Extracted Text Content</span>
                       </div>
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8 text-zinc-400 hover:text-white"
+                        className="h-8 w-8 text-muted-foreground hover:text-foreground"
                         onClick={() => {
                           const content = doc.content || ocrText;
                           if (content) {
@@ -1670,7 +1710,7 @@ export default function DocumentDetailPage() {
                         <Copy className="h-4 w-4" />
                       </Button>
                     </div>
-                    <div className="max-h-[60vh] overflow-y-auto text-sm text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed select-text no-scrollbar">
+                    <div className="max-h-[60vh] overflow-y-auto text-sm text-foreground font-mono whitespace-pre-wrap leading-relaxed select-text no-scrollbar">
                       {doc.content || ocrText || 'No text extracted for this document.'}
                     </div>
                   </div>
