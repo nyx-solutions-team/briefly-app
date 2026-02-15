@@ -14,31 +14,42 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { useDocuments } from "@/hooks/use-documents";
+import { useFolders as useFolderExplorer } from "@/hooks/use-folders";
 import { AccessDenied } from "@/components/access-denied";
-import { createEditorDoc, listEditorDocs, type EditorDocListItem } from "@/lib/editor-api";
-import { extractTextFromTiptap } from "@/lib/tiptap-text";
-import type { TipTapEditorValue } from "@/components/editor/tiptap-editor";
-import { FileText, Plus, RefreshCw, Search } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { createEditorDocShell, listEditorDocs, type EditorDocListItem } from "@/lib/editor-api";
+import { FolderPickerDialog } from "@/components/folder-picker-dialog";
+import { FileText, FolderOpen, Plus } from "lucide-react";
+import { formatAppDateTime } from "@/lib/utils";
 import { getOrgFeatures } from "@/lib/org-features";
 
-function buildInitialDoc(title: string): TipTapEditorValue {
-  return {
-    type: "doc",
-    content: [
-      {
-        type: "heading",
-        attrs: { level: 1 },
-        content: [{ type: "text", text: title || "Untitled" }],
-      },
-      { type: "paragraph" },
-    ],
-  } as any;
-}
-
 const GENERAL_DEPARTMENT_VALUE = "__general__";
-const FOLDER_ROOT_VALUE = "__root__";
-const FOLDER_CUSTOM_VALUE = "__custom__";
+
+function DocRowSkeleton() {
+  return (
+    <div className="px-4 md:px-6 py-3 border-b border-border/20">
+      <div className="hidden md:grid md:grid-cols-[minmax(0,1.8fr)_minmax(0,1.2fr)_90px_140px] md:gap-4 md:items-center">
+        <div className="flex items-center gap-3 min-w-0">
+          <Skeleton className="h-8 w-8 rounded-md" />
+          <div className="min-w-0 space-y-1.5">
+            <Skeleton className="h-4 w-56" />
+            <Skeleton className="h-3 w-40" />
+          </div>
+        </div>
+        <Skeleton className="h-3 w-48" />
+        <Skeleton className="h-4 w-12" />
+        <Skeleton className="h-4 w-24" />
+      </div>
+      <div className="md:hidden space-y-2">
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-7 w-7 rounded-md" />
+          <Skeleton className="h-4 w-48" />
+        </div>
+        <Skeleton className="h-3 w-56" />
+        <Skeleton className="h-3 w-32" />
+      </div>
+    </div>
+  );
+}
 
 export default function EditorPage() {
   const { bootstrapData } = useAuth();
@@ -49,7 +60,7 @@ export default function EditorPage() {
       <AppLayout>
         <AccessDenied
           title="Controlled Docs Not Enabled"
-          message="The Editor feature is not enabled for this organization."
+          message="The Document Studio feature is not enabled for this organization."
         />
       </AppLayout>
     );
@@ -62,7 +73,8 @@ function EditorPageInner() {
   const { toast } = useToast();
   const router = useRouter();
   const { hasPermission, bootstrapData } = useAuth();
-  const { folders: documentFolders } = useDocuments();
+  const { folders: documentFolders, createFolder, refresh } = useDocuments();
+  const { load: loadFolderChildren } = useFolderExplorer();
 
   const canRead = hasPermission("documents.read");
   const canCreate = hasPermission("documents.create");
@@ -70,13 +82,13 @@ function EditorPageInner() {
   const [loading, setLoading] = React.useState(true);
   const [creating, setCreating] = React.useState(false);
   const [docs, setDocs] = React.useState<EditorDocListItem[]>([]);
-  const [query, setQuery] = React.useState("");
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [folderCommandOpen, setFolderCommandOpen] = React.useState(false);
 
   const [newTitle, setNewTitle] = React.useState("Untitled");
   const [newFolderPath, setNewFolderPath] = React.useState("");
   const [newDepartmentId, setNewDepartmentId] = React.useState<string>(GENERAL_DEPARTMENT_VALUE);
-  const [newIsDraft, setNewIsDraft] = React.useState(true);
+  const [newIsDraft, setNewIsDraft] = React.useState(false);
 
   const rbacMode = String(bootstrapData?.orgSettings?.rbac_mode || "legacy");
   const requiresExplicitDepartment = rbacMode !== "legacy";
@@ -104,26 +116,23 @@ function EditorPageInner() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [documentFolders]);
 
-  const folderOptionsSet = React.useMemo(() => new Set(folderOptions), [folderOptions]);
-
-  const folderSelectValue = React.useMemo(() => {
-    const raw = newFolderPath.trim();
-    if (!raw) return FOLDER_ROOT_VALUE;
-    return folderOptionsSet.has(raw) ? raw : FOLDER_CUSTOM_VALUE;
-  }, [newFolderPath, folderOptionsSet]);
+  const currentFolderPath = React.useMemo(
+    () => newFolderPath.split("/").map((p) => p.trim()).filter(Boolean),
+    [newFolderPath]
+  );
 
   const load = React.useCallback(async () => {
     if (!canRead) return;
     setLoading(true);
     try {
-      const res = await listEditorDocs({ q: query.trim() || undefined, limit: 50 });
+      const res = await listEditorDocs({ limit: 50 });
       setDocs(res.docs || []);
     } catch (e: any) {
       toast({ title: "Failed to load docs", description: e?.message || "Unknown error", variant: "destructive" });
     } finally {
       setLoading(false);
     }
-  }, [canRead, query, toast]);
+  }, [canRead, toast]);
 
   React.useEffect(() => {
     const t = window.setTimeout(() => {
@@ -144,26 +153,26 @@ function EditorPageInner() {
     }
     setCreating(true);
     try {
-      const content = buildInitialDoc(newTitle.trim() || "Untitled");
       const folderPath = newFolderPath
         .split("/")
         .map((p) => p.trim())
         .filter(Boolean);
-      const contentText = extractTextFromTiptap(content);
 
-      const res = await createEditorDoc({
+      const res = await createEditorDocShell({
         title: newTitle.trim() || "Untitled",
         folderPath: folderPath.length ? folderPath : undefined,
         departmentId: newDepartmentId !== GENERAL_DEPARTMENT_VALUE ? newDepartmentId : undefined,
         isDraft: newIsDraft,
-        content,
-        contentText,
-        commitMessage: "Create doc",
       });
 
       setCreateOpen(false);
-      toast({ title: "Created", description: "Document created." });
-      router.push(`/editor/${res.doc.id}`);
+      toast({
+        title: "Created",
+        description: newIsDraft
+          ? "Draft document created. It is visible in Document Studio and hidden from Folders/Documents list."
+          : "Document created.",
+      });
+      router.push(`/editor/${res.id}`);
     } catch (e: any) {
       toast({ title: "Create failed", description: e?.message || "Unknown error", variant: "destructive" });
     } finally {
@@ -182,15 +191,11 @@ function EditorPageInner() {
                   <FileText className="h-4 w-4 text-primary" />
                 </div>
                 <div className="min-w-0">
-                  <h1 className="text-xl font-semibold text-foreground truncate">Editor</h1>
+                  <h1 className="text-xl font-semibold text-foreground truncate">Document Studio</h1>
                   <p className="text-xs text-muted-foreground truncate">Create and edit documents with version history.</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => void load()} disabled={!canRead || loading}>
-                  <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-                  Refresh
-                </Button>
                 <Button size="sm" className="h-8 gap-1.5" onClick={() => setCreateOpen(true)} disabled={!canCreate}>
                   <Plus className="h-3.5 w-3.5" />
                   New
@@ -201,59 +206,86 @@ function EditorPageInner() {
         </header>
 
         <main className="flex-1 px-4 md:px-6 py-6">
-          <div className="mx-auto max-w-6xl space-y-4">
-            <div className="flex flex-col md:flex-row md:items-center gap-3">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search docs"
-                  className="h-10 pl-9"
-                  disabled={!canRead}
-                />
-              </div>
-              {!canRead && (
-                <div className="text-sm text-muted-foreground">You don't have permission to view documents.</div>
-              )}
-            </div>
+          <div className="space-y-4">
+            {!canRead && (
+              <div className="text-sm text-muted-foreground">You don't have permission to view documents.</div>
+            )}
 
-            <Card className="border-border/40 bg-card/50">
+            <Card className="border-border/40 bg-card/50 overflow-hidden">
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm">Recent docs</CardTitle>
               </CardHeader>
-              <CardContent className="pt-0">
+              <CardContent className="pt-0 px-0">
+                <div className="hidden md:grid md:grid-cols-[minmax(0,1.8fr)_minmax(0,1.2fr)_90px_140px] md:gap-4 md:items-center px-6 py-2 border-b border-border/30 bg-muted/20">
+                  <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Document</span>
+                  <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Folder</span>
+                  <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Version</span>
+                  <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Updated</span>
+                </div>
                 {loading ? (
-                  <div className="space-y-2">
-                    <Skeleton className="h-10 w-full" />
-                    <Skeleton className="h-10 w-full" />
-                    <Skeleton className="h-10 w-full" />
+                  <div>
+                    {Array.from({ length: 6 }).map((_, idx) => (
+                      <DocRowSkeleton key={`doc-row-skeleton-${idx}`} />
+                    ))}
                   </div>
                 ) : docs.length === 0 ? (
-                  <div className="text-sm text-muted-foreground">No docs yet.</div>
+                  <div className="py-16 px-6 text-center">
+                    <div className="text-sm font-medium text-foreground">No docs yet.</div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Create your first document to get started.
+                    </div>
+                  </div>
                 ) : (
-                  <div className="divide-y divide-border/30">
+                  <div className="divide-y divide-border/20">
                     {docs.map((d) => {
                       const displayTitle = d.title || d.filename || d.id;
+                      const displayFileName = d.filename || "Untitled.md";
                       const v = d.head?.current_version_number ?? 0;
                       const deptName = d.department_id
                         ? (bootstrapData?.departments || []).find((x: any) => x.id === d.department_id)?.name
                         : null;
+                      const folderPath = Array.isArray(d.folder_path) && d.folder_path.length > 0
+                        ? `/${d.folder_path.join(" / ")}`
+                        : "/Root";
+                      const updatedText = formatAppDateTime(d.uploaded_at);
                       return (
                         <button
                           key={d.id}
                           type="button"
-                          className="w-full text-left py-3 px-2 rounded-md hover:bg-muted/20 transition-colors"
+                          className="group w-full text-left px-4 md:px-6 py-3 hover:bg-muted/30 transition-colors"
                           onClick={() => router.push(`/editor/${d.id}`)}
                         >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="text-sm font-medium truncate">{displayTitle}</div>
-                              <div className="mt-0.5 text-xs text-muted-foreground truncate">
-                                {deptName ? `${deptName} • ` : ""}v{v}
+                          <div className="md:hidden space-y-1.5">
+                            <div className="flex items-start gap-2 min-w-0">
+                              <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary shrink-0">
+                                <FileText className="h-3.5 w-3.5" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium truncate">{displayTitle}</div>
+                                <div className="text-xs text-muted-foreground truncate">{displayFileName}</div>
                               </div>
                             </div>
-                            <div className="text-[11px] text-muted-foreground">{new Date(d.uploaded_at).toLocaleString()}</div>
+                            <div className="text-xs text-muted-foreground truncate">{folderPath}</div>
+                            <div className="text-[11px] text-muted-foreground truncate">
+                              {deptName ? `${deptName} • ` : ""}v{v} • {updatedText}
+                            </div>
+                          </div>
+
+                          <div className="hidden md:grid md:grid-cols-[minmax(0,1.8fr)_minmax(0,1.2fr)_90px_140px] md:gap-4 md:items-center">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-primary shrink-0">
+                                <FileText className="h-4 w-4" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium truncate">{displayTitle}</div>
+                                <div className="text-xs text-muted-foreground truncate">
+                                  {deptName ? `${deptName} • ` : ""}{displayFileName}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="text-xs text-muted-foreground truncate">{folderPath}</div>
+                            <div className="text-xs text-muted-foreground">v{v}</div>
+                            <div className="text-xs text-muted-foreground">{updatedText}</div>
                           </div>
                         </button>
                       );
@@ -279,35 +311,22 @@ function EditorPageInner() {
 
               <div className="space-y-2">
                 <Label>Folder path</Label>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  <Select
-                    value={folderSelectValue}
-                    onValueChange={(v) => {
-                      if (v === FOLDER_ROOT_VALUE) setNewFolderPath("");
-                      else if (v === FOLDER_CUSTOM_VALUE) return;
-                      else setNewFolderPath(v);
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder={newFolderPath ? `/${newFolderPath}` : "Root folder"} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={FOLDER_ROOT_VALUE}>Root</SelectItem>
-                      <SelectItem value={FOLDER_CUSTOM_VALUE}>Custom path...</SelectItem>
-                      {folderOptions.map((p) => (
-                        <SelectItem key={p} value={p}>
-                          /{p}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-
+                <div className="flex items-center gap-2">
                   <Input
                     id="new-folder"
                     value={newFolderPath}
                     onChange={(e) => setNewFolderPath(e.target.value.replace(/\\/g, "/"))}
-                    placeholder="Custom path e.g., Policies/HR"
+                    placeholder="Root (no folder)"
                   />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 shrink-0 gap-1.5"
+                    onClick={() => setFolderCommandOpen(true)}
+                  >
+                    <FolderOpen className="h-3.5 w-3.5" />
+                    Browse
+                  </Button>
                 </div>
                 <div className="text-xs text-muted-foreground">
                   Creating in: <span className="font-medium">/{newFolderPath || "Root"}</span>
@@ -341,7 +360,9 @@ function EditorPageInner() {
               <div className="flex items-center justify-between rounded-md border border-border/40 bg-background/40 px-3 py-2">
                 <div>
                   <div className="text-sm font-medium">Draft</div>
-                  <div className="text-xs text-muted-foreground">Drafts can be submitted for approval later.</div>
+                  <div className="text-xs text-muted-foreground">
+                    Drafts can be submitted for approval later. Draft docs are hidden from the Folders/Documents list.
+                  </div>
                 </div>
                 <Switch checked={newIsDraft} onCheckedChange={setNewIsDraft} />
               </div>
@@ -360,6 +381,29 @@ function EditorPageInner() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <FolderPickerDialog
+          open={folderCommandOpen}
+          onOpenChange={setFolderCommandOpen}
+          folders={folderOptions.map((value) => {
+            const path = value.split("/").filter(Boolean);
+            return {
+              id: value,
+              path,
+              label: `/${value}`,
+              name: path[path.length - 1] || "Folder",
+            };
+          })}
+          currentPath={currentFolderPath}
+          onSelect={(path) => setNewFolderPath(path.join("/"))}
+          onCreateFolder={async (parentPath, name) => {
+            await createFolder(parentPath, name);
+            await refresh();
+          }}
+          onLoadChildren={loadFolderChildren}
+          loading={false}
+          title="Select Folder"
+        />
       </div>
     </AppLayout>
   );

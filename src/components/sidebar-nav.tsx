@@ -11,6 +11,7 @@ import {
   Wrench,
   PlusSquare,
   ListChecks,
+  Workflow,
   // Settings icons
   ArrowLeft,
   User,
@@ -19,7 +20,7 @@ import {
   Users,
   UsersRound,
   Link2,
-  // FileText,
+  FileText,
   Lock,
   Shield,
 } from 'lucide-react';
@@ -41,8 +42,6 @@ import {
 const mainLinks = [
   { href: '/dashboard', label: 'Dashboard', Icon: LayoutDashboard },
   { href: '/documents', label: 'Folders', Icon: Folder },
-  // Temporarily hidden for deployment. Keep entry for easy restore.
-  // { href: '/editor', label: 'Editor', Icon: FileText, permission: 'documents.read' },
   { href: '/documents/upload', label: 'Upload Document', Icon: CloudUpload },
   // Temporarily hidden for deployment. Keep entry for easy restore.
   // { href: '/approvals', label: 'Approvals', Icon: PlusSquare, permission: 'documents.read' },
@@ -53,6 +52,8 @@ const mainLinks = [
 
 // Admin-only links
 const adminLinks = [
+  { href: '/editor', label: 'Document Studio', Icon: FileText, permission: 'documents.read' },
+  { href: '/workflows', label: 'Workflows', Icon: Workflow, permission: 'documents.read' },
   { href: '/chat', label: 'Chat Bot', Icon: Wrench },
 ];
 
@@ -67,7 +68,7 @@ const settingsOrgLinks = [
   { href: '/settings/general', label: 'General', Icon: Building2, adminOnly: true },
   { href: '/settings/members', label: 'Members', Icon: Users, permission: 'org.manage_members' },
   { href: '/settings/teams', label: 'Teams', Icon: UsersRound },
-  // Temporarily hidden for deployment. Keep entry for easy restore.
+  // Temporarily hidden.
   // { href: '/settings/approval-templates', label: 'Approval Templates', Icon: FileText, permission: 'org.update_settings' },
   { href: '/settings/permissions', label: 'Permissions', Icon: Lock, adminOnly: true },
   { href: '/settings/security', label: 'Security', Icon: Shield, adminOnly: true },
@@ -319,6 +320,9 @@ export default function SidebarNav() {
 
   // Filter admin links based on permissions
   const visibleAdminLinks = adminLinks.filter(({ href }) => {
+    const { editorEnabled, workflowsEnabled } = getOrgFeatures(bootstrapData?.orgSettings);
+    if (href === '/editor' && (!canReadDocuments || !editorEnabled)) return false;
+    if (href === '/workflows' && (!canReadDocuments || !workflowsEnabled)) return false;
     if (href === '/recycle-bin' && !canViewRecycleBin) return false;
     if (href === '/chat' && !canChat) return false;
     return true;
@@ -332,6 +336,10 @@ export default function SidebarNav() {
         let badgeCount = 0;
         if (href === '/queue') badgeCount = queueCount;
         if (href === '/recycle-bin') badgeCount = recycleCount;
+        const isActive =
+          href === '/workflows'
+            ? (pathname === '/workflows' || pathname === '/workflows/builder')
+            : pathname === href;
 
         return (
           <NavItem
@@ -339,7 +347,7 @@ export default function SidebarNav() {
             href={href}
             label={label}
             Icon={Icon}
-            isActive={pathname === href}
+            isActive={isActive}
             badgeCount={badgeCount}
           />
         );
@@ -352,6 +360,12 @@ export default function SidebarNav() {
           {visibleAdminLinks.map(({ href, label, Icon }) => {
             let badgeCount = 0;
             if (href === '/recycle-bin') badgeCount = recycleCount;
+            const isActive =
+              href === '/editor'
+                ? pathname === '/editor' || pathname?.startsWith('/editor/')
+                : href === '/workflows'
+                  ? (pathname === '/workflows' || pathname === '/workflows/builder')
+                  : pathname === href;
 
             return (
               <NavItem
@@ -359,7 +373,7 @@ export default function SidebarNav() {
                 href={href}
                 label={label}
                 Icon={Icon}
-                isActive={pathname === href}
+                isActive={isActive}
                 badgeCount={badgeCount}
               />
             );

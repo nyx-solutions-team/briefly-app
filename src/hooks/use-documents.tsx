@@ -66,11 +66,16 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
 
   const deriveFolders = useCallback((docs: StoredDocument[], prevFolders: string[][]) => {
     const derived = new Set<string>(prevFolders.map(p => p.join('/')));
-    // Only derive folders from non-folder documents
     for (const d of docs) {
-      if (d.type === 'folder') continue; // Skip folder placeholder documents
-      const p = (d.folderPath || (d as any).folder_path || []) as string[];
-      for (let i = 1; i <= p.length; i++) derived.add(p.slice(0, i).join('/'));
+      const rawPath = (d.folderPath || (d as any).folder_path || []) as string[] | string;
+      const path = Array.isArray(rawPath)
+        ? rawPath.filter(Boolean)
+        : typeof rawPath === 'string'
+          ? rawPath.split('/').map(s => s.trim()).filter(Boolean)
+          : [];
+      for (let i = 1; i <= path.length; i++) {
+        derived.add(path.slice(0, i).join('/'));
+      }
     }
     return Array.from(derived).filter(Boolean).map(s => s.split('/'));
   }, []);
@@ -135,11 +140,12 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
 
 
 
-      // Extra safety: ensure no folder documents are included
+      // Keep folder placeholders out of the visible documents list,
+      // but include them when deriving folder tree structure.
       const filteredRevived = revived.filter(d => d.type !== 'folder');
       setDocuments(filteredRevived);
       // Merge derived folders from docs with persisted folder placeholders from server (root path)
-      let nextFolders = deriveFolders(filteredRevived, []);
+      let nextFolders = deriveFolders(revived, []);
       try {
         const root = await apiFetch<{ name: string; fullPath: string[]; departmentId?: string; departmentName?: string; id?: string; title?: string }[]>(`/orgs/${orgId}/folders?path=`);
 
@@ -222,11 +228,12 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
         ...d,
         uploadedAt: new Date(d.uploadedAt || d.uploaded_at),
       })) as StoredDocument[];
-      // Extra safety: ensure no folder documents are included
+      // Keep folder placeholders out of the visible documents list,
+      // but include them when deriving folder tree structure.
       const filteredRevived = revived.filter(d => d.type !== 'folder');
       setDocuments(filteredRevived);
       // Merge derived folders with persisted root placeholders
-      let nextFolders = deriveFolders(filteredRevived, []);
+      let nextFolders = deriveFolders(revived, []);
       try {
         const root = await apiFetch<{ name: string; fullPath: string[]; departmentId?: string; departmentName?: string; id?: string; title?: string }[]>(`/orgs/${orgId}/folders?path=`);
 
@@ -276,6 +283,17 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
       void refresh();
     }
   }, []); // Remove refresh dependency to prevent infinite loops
+
+  // Guard against auth/org timing races: if initial mount ran before org context
+  // was available, refresh again once auth is ready and we still have no data.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const orgId = getOrgId();
+    if (!orgId) return;
+    if (documents.length === 0 && folders.length === 0 && !loadingRef.current) {
+      void refresh();
+    }
+  }, [isAuthenticated, user, documents.length, folders.length, refresh]);
 
   // Load documents when org context changes
   useEffect(() => {

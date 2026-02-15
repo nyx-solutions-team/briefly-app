@@ -2,11 +2,13 @@ import {
   Check,
   ChevronDown,
   FileText,
+  FilePlus2,
   Folder,
   Globe,
   ArrowLeftRight,
   Send,
   Search,
+  Sparkles,
   Settings2,
   X,
   Plus,
@@ -19,6 +21,12 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { FinderPicker } from "@/components/pickers/finder-picker";
 
 // -------------------- Types --------------------
@@ -37,6 +45,9 @@ export type BrieflyChatBoxProps = {
   documents?: DocumentOption[]; // options for document mode
   defaultMode?: ChatScope;
   defaultWebSearch?: boolean;
+  defaultDeepResearch?: boolean;
+  deepResearchEnabled?: boolean;
+  onDeepResearchChange?: (value: boolean) => void;
   defaultFolderId?: string | null;
   defaultDocumentId?: string | null;
   defaultDocumentName?: string | null;
@@ -44,6 +55,7 @@ export type BrieflyChatBoxProps = {
   pinnedDocIds?: string[];
   onPinnedDocIdsChange?: (ids: string[]) => void;
   onRequestFilePicker?: () => void;
+  onRequestCreateDraftDocument?: () => void;
   webSearch?: boolean;
   onWebSearchChange?: (value: boolean) => void;
   // Fired when user presses Send or hits Enter (without Shift)
@@ -55,6 +67,7 @@ export type BrieflyChatBoxProps = {
     folderName?: string | null;
     documentName?: string | null;
     webSearch: boolean;
+    deepResearch: boolean;
   }) => void;
   sending?: boolean; // external loading control
   className?: string;
@@ -274,6 +287,9 @@ export function BrieflyChatBox({
   documents = [],
   defaultMode = "all",
   defaultWebSearch = false,
+  defaultDeepResearch = false,
+  deepResearchEnabled,
+  onDeepResearchChange,
   defaultFolderId = null,
   defaultDocumentId = null,
   defaultDocumentName = null,
@@ -281,6 +297,7 @@ export function BrieflyChatBox({
   pinnedDocIds = [],
   onPinnedDocIdsChange,
   onRequestFilePicker,
+  onRequestCreateDraftDocument,
   webSearch,
   onWebSearchChange,
   onSend,
@@ -292,6 +309,8 @@ export function BrieflyChatBox({
   const [documentId, setDocumentId] = useState<string | null>(defaultDocumentId);
   const isWebSearchControlled = typeof webSearch === 'boolean';
   const [internalWebSearch, setInternalWebSearch] = useState(defaultWebSearch);
+  const isDeepResearchControlled = typeof deepResearchEnabled === 'boolean';
+  const [internalDeepResearch, setInternalDeepResearch] = useState(defaultDeepResearch);
   const [text, setText] = useState("");
   const [selectionHint, setSelectionHint] = useState<string | null>(null);
   const [scopePickerOpen, setScopePickerOpen] = useState(false);
@@ -327,6 +346,12 @@ export function BrieflyChatBox({
     }
   }, [defaultWebSearch, isWebSearchControlled]);
 
+  useEffect(() => {
+    if (!isDeepResearchControlled) {
+      setInternalDeepResearch(defaultDeepResearch);
+    }
+  }, [defaultDeepResearch, isDeepResearchControlled]);
+
   // Keep scope state clean: switching modes drops stale selections from other modes.
   useEffect(() => {
     if (mode === "all") {
@@ -349,6 +374,9 @@ export function BrieflyChatBox({
   }, [mode]);
 
   const effectiveWebSearch = isWebSearchControlled ? (webSearch as boolean) : internalWebSearch;
+  const effectiveDeepResearch = isDeepResearchControlled
+    ? (deepResearchEnabled as boolean)
+    : internalDeepResearch;
 
   const docMetaById = useMemo(() => {
     const m = new Map<string, DocumentOption>();
@@ -362,11 +390,23 @@ export function BrieflyChatBox({
     setTimeout(() => areaRef.current?.focus(), 0);
   };
 
+  const triggerCreateDraftDocument = () => {
+    onRequestCreateDraftDocument?.();
+    setTimeout(() => areaRef.current?.focus(), 0);
+  };
+
   const handleWebSearchToggle = (next: boolean) => {
     if (!isWebSearchControlled) {
       setInternalWebSearch(next);
     }
     onWebSearchChange?.(next);
+  };
+
+  const handleDeepResearchToggle = (next: boolean) => {
+    if (!isDeepResearchControlled) {
+      setInternalDeepResearch(next);
+    }
+    onDeepResearchChange?.(next);
   };
 
   const canSend = useMemo(() => {
@@ -422,6 +462,7 @@ export function BrieflyChatBox({
       folderName: mode === "folder" ? selectedFolder?.title || null : null,
       documentName: mode === "document" ? selectedDocument?.name || defaultDocumentName || null : null,
       webSearch: effectiveWebSearch,
+      deepResearch: effectiveDeepResearch,
     });
     setText("");
     // Keep selection but you can reset if desired:
@@ -555,14 +596,49 @@ export function BrieflyChatBox({
         <div className="flex items-center gap-2">
           <Button
             type="button"
-            variant="outline"
-            size="icon"
-            className="h-9 w-9 shrink-0 rounded-xl"
-            onClick={onRequestFilePicker}
-            title="Add files"
+            variant={effectiveDeepResearch ? "default" : "outline"}
+            size="sm"
+            className="h-9 rounded-xl px-3"
+            onClick={() => handleDeepResearchToggle(!effectiveDeepResearch)}
+            title="Toggle deep research mode"
           >
-            <Plus className="h-4 w-4" />
+            <Sparkles className="h-3.5 w-3.5" />
+            <span className="ml-1.5 text-xs font-medium">Deep</span>
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="h-9 w-9 shrink-0 rounded-xl"
+                title="Add actions"
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  triggerFilePicker();
+                }}
+              >
+                <FileText className="h-4 w-4" />
+                <span>Ask About Files</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!onRequestCreateDraftDocument}
+                onSelect={(event) => {
+                  event.preventDefault();
+                  triggerCreateDraftDocument();
+                }}
+              >
+                <FilePlus2 className="h-4 w-4" />
+                <span>Create Document</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 

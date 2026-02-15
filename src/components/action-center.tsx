@@ -42,6 +42,14 @@ export type CitationMeta = {
 
 export type ActionCenterTab = 'sources' | 'preview' | 'context';
 
+export type GeneratedPdfPreview = {
+    title?: string;
+    fileName?: string;
+    previewUrl: string;
+    downloadUrl?: string;
+    expiresAt?: string;
+};
+
 type ActionCenterProps = {
     open: boolean;
     onOpenChange: (open: boolean) => void;
@@ -58,6 +66,8 @@ type ActionCenterProps = {
     onCitationsModeChange: (mode: 'global' | 'message') => void;
     hasMessageScopedCitations: boolean;
     allDocuments: StoredDocument[];
+    generatedPdfPreview?: GeneratedPdfPreview | null;
+    onClearGeneratedPdfPreview?: () => void;
     activeTab: ActionCenterTab;
     onTabChange: (tab: ActionCenterTab) => void;
 };
@@ -78,6 +88,8 @@ export function ActionCenter({
     onCitationsModeChange,
     hasMessageScopedCitations,
     allDocuments,
+    generatedPdfPreview = null,
+    onClearGeneratedPdfPreview,
     activeTab,
     onTabChange,
 }: ActionCenterProps) {
@@ -517,6 +529,44 @@ export function ActionCenter({
     // --- Render Helpers ---
 
     const renderPreviewTab = () => {
+        if (generatedPdfPreview?.previewUrl) {
+            return (
+                <div className="space-y-4 pb-6 text-sm">
+                    <section className="space-y-3 rounded-xl border border-border/60 bg-card/80 p-3 shadow-sm">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="min-w-0">
+                                <h2 className="text-base sm:text-lg font-semibold text-foreground break-all">
+                                    {generatedPdfPreview.title || 'Generated PDF Draft'}
+                                </h2>
+                                {generatedPdfPreview.fileName ? (
+                                    <p className="text-xs text-muted-foreground break-all">{generatedPdfPreview.fileName}</p>
+                                ) : null}
+                            </div>
+                            <div className="flex items-center gap-2">
+                                {generatedPdfPreview.downloadUrl ? (
+                                    <Button asChild variant="secondary" size="sm" className="h-8">
+                                        <a href={generatedPdfPreview.downloadUrl}>Download</a>
+                                    </Button>
+                                ) : null}
+                                {onClearGeneratedPdfPreview ? (
+                                    <Button variant="outline" size="sm" className="h-8" onClick={onClearGeneratedPdfPreview}>
+                                        Back To Docs
+                                    </Button>
+                                ) : null}
+                            </div>
+                        </div>
+                    </section>
+                    <section className="rounded-lg border border-border/50 bg-card/60 p-0 shadow-sm overflow-hidden">
+                        <iframe
+                            src={generatedPdfPreview.previewUrl}
+                            title={generatedPdfPreview.title || 'Generated PDF Preview'}
+                            className="h-[70vh] w-full border-0"
+                        />
+                    </section>
+                </div>
+            );
+        }
+
         if (!activeDocumentId) {
             return (
                 <div className="flex h-full flex-col items-center justify-center gap-2 px-6 py-8 text-muted-foreground">

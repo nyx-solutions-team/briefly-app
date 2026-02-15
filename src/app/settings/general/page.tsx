@@ -68,12 +68,14 @@ export default function GeneralSettingsPage() {
 
     const [editorEnabled, setEditorEnabled] = React.useState(false);
     const [approvalsEnabled, setApprovalsEnabled] = React.useState(false);
+    const [workflowsEnabled, setWorkflowsEnabled] = React.useState(false);
     const [featuresSaving, setFeaturesSaving] = React.useState(false);
 
     React.useEffect(() => {
         setEditorEnabled(Boolean(bootstrapData?.orgSettings?.editor_enabled));
         setApprovalsEnabled(Boolean(bootstrapData?.orgSettings?.approvals_enabled));
-    }, [bootstrapData?.orgSettings?.approvals_enabled, bootstrapData?.orgSettings?.editor_enabled]);
+        setWorkflowsEnabled(Boolean(bootstrapData?.orgSettings?.workflows_enabled));
+    }, [bootstrapData?.orgSettings?.approvals_enabled, bootstrapData?.orgSettings?.editor_enabled, bootstrapData?.orgSettings?.workflows_enabled]);
 
     const showDmsFeatureFlags = Boolean(
         isAdmin &&
@@ -81,18 +83,21 @@ export default function GeneralSettingsPage() {
         (
             bootstrapData.selectedOrgId === BRIEFLY_DEMO_ORG_ID ||
             bootstrapData?.orgSettings?.editor_enabled ||
-            bootstrapData?.orgSettings?.approvals_enabled
+            bootstrapData?.orgSettings?.approvals_enabled ||
+            bootstrapData?.orgSettings?.workflows_enabled
         )
     );
 
     const featuresDirty = Boolean(
         editorEnabled !== Boolean(bootstrapData?.orgSettings?.editor_enabled) ||
-        approvalsEnabled !== Boolean(bootstrapData?.orgSettings?.approvals_enabled)
+        approvalsEnabled !== Boolean(bootstrapData?.orgSettings?.approvals_enabled) ||
+        workflowsEnabled !== Boolean(bootstrapData?.orgSettings?.workflows_enabled)
     );
 
     const resetFeatures = () => {
         setEditorEnabled(Boolean(bootstrapData?.orgSettings?.editor_enabled));
         setApprovalsEnabled(Boolean(bootstrapData?.orgSettings?.approvals_enabled));
+        setWorkflowsEnabled(Boolean(bootstrapData?.orgSettings?.workflows_enabled));
     };
 
     const saveFeatures = async () => {
@@ -105,6 +110,7 @@ export default function GeneralSettingsPage() {
                 body: {
                     editor_enabled: editorEnabled,
                     approvals_enabled: editorEnabled ? approvalsEnabled : false,
+                    workflows_enabled: workflowsEnabled,
                 },
             });
             toast({ title: 'Saved', description: 'Document features updated.' });
@@ -296,10 +302,25 @@ export default function GeneralSettingsPage() {
                                 />
                             </div>
 
+                            <div className="flex items-center justify-between rounded-2xl md:rounded-xl border border-border/20 md:border-border/30 bg-background/40 px-4 py-3">
+                                <div className="min-w-0 pr-3">
+                                    <div className="text-[13px] font-semibold text-foreground">Workflows</div>
+                                    <div className="text-[12px] text-muted-foreground mt-0.5">
+                                        Enable workflow builder and workflow run experience for this organization.
+                                    </div>
+                                </div>
+                                <Switch
+                                    checked={workflowsEnabled}
+                                    onCheckedChange={(v) => setWorkflowsEnabled(v)}
+                                />
+                            </div>
+
                             <div className="text-[11px] text-muted-foreground px-1">
                                 Current status: <span className="font-medium">{features.editorEnabled ? 'Editor enabled' : 'Editor disabled'}</span>
                                 {' '}·{' '}
                                 <span className="font-medium">{features.approvalsUsable ? 'Approvals enabled' : 'Approvals disabled'}</span>
+                                {' '}·{' '}
+                                <span className="font-medium">{features.workflowsEnabled ? 'Workflows enabled' : 'Workflows disabled'}</span>
                             </div>
 
                             <div className="flex items-center justify-end gap-2.5 pt-1">

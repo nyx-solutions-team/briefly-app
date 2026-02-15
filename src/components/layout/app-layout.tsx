@@ -40,7 +40,7 @@ import { useSettings } from '@/hooks/use-settings';
 import { MobileTabBar } from '@/components/mobile-tab-bar';
 import { cn } from '@/lib/utils';
 
-export default function AppLayout({ children, collapseSidebar = false }: { children: React.ReactNode; collapseSidebar?: boolean }) {
+export default function AppLayout({ children, collapseSidebar = false, flush = false }: { children: React.ReactNode; collapseSidebar?: boolean; flush?: boolean }) {
   const { documents } = useDocuments();
   const { isAuthenticated, user, signOut, isLoading } = useAuth();
   const { settings, updateSettings } = useSettings();
@@ -164,7 +164,7 @@ export default function AppLayout({ children, collapseSidebar = false }: { child
           </SidebarMenu>
         </SidebarFooter>
       </Sidebar>
-      <SidebarInset className="pb-20 md:pb-0">{children}</SidebarInset>
+      <SidebarInset className={cn("pb-20 md:pb-0", flush && "m-0 ml-0 md:m-0 md:ml-0 rounded-none shadow-none")}>{children}</SidebarInset>
       <MobileTabBar />
     </SidebarProvider>
   );

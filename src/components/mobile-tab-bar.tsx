@@ -57,7 +57,7 @@ const BASE_LINKS: NavLink[] = [
 ];
 
 const MORE_LINKS: NavLink[] = [
-  { href: "/editor", label: "Editor", Icon: FileText, permission: "documents.read" },
+  { href: "/editor", label: "Document Studio", Icon: FileText, permission: "documents.read" },
   { href: "/approvals", label: "Approvals", Icon: FileText, permission: "documents.read" },
   { href: "/audit", label: "Activity", Icon: Activity, permission: "pages.activity" },
   { href: "/queue", label: "Queue", Icon: ListChecks, permission: "pages.queue" },

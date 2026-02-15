@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 import { apiFetch, getApiContext } from '@/lib/api';
 
 type Mode = 'folder' | 'doc';
+type DocSource = 'documents' | 'editor';
 type DocListFilter = 'all' | 'folders' | 'files';
 type PickerItem =
   | { kind: 'folder'; id: string; name: string; path: string[] }
@@ -35,6 +36,14 @@ function sameStringArray(a: string[], b: string[]) {
 
 function normalizePath(path?: string[]) {
   return (path || []).filter(Boolean);
+}
+
+function pathStartsWith(path: string[], prefix: string[]) {
+  if (prefix.length > path.length) return false;
+  for (let i = 0; i < prefix.length; i += 1) {
+    if (path[i] !== prefix[i]) return false;
+  }
+  return true;
 }
 
 function folderPathFromNode(node: FolderNode, parentPath: string[]) {
@@ -83,6 +92,28 @@ function normalizeDocument(raw: any): StoredDocument {
     departmentId: raw?.departmentId || raw?.department_id,
     department_id: raw?.department_id || raw?.departmentId,
   } as StoredDocument;
+}
+
+function normalizeEditorListDocument(raw: any): StoredDocument {
+  const folderPath = normalizePath(raw?.folderPath || raw?.folder_path);
+  const filename = String(raw?.filename || raw?.title || 'Untitled.md');
+  const mime = String(raw?.mimeType || raw?.mime_type || 'text/markdown');
+  const uploadedAt = raw?.uploadedAt || raw?.uploaded_at || Date.now();
+
+  return normalizeDocument({
+    ...raw,
+    filename,
+    name: String(raw?.name || filename),
+    type: raw?.type || 'editor',
+    folderPath,
+    folder_path: folderPath,
+    mimeType: mime,
+    mime_type: mime,
+    uploadedAt,
+    uploaded_at: uploadedAt,
+    isDraft: Boolean(raw?.isDraft ?? raw?.is_draft),
+    is_draft: Boolean(raw?.is_draft ?? raw?.isDraft),
+  });
 }
 
 function PickerListSkeleton({ mode }: { mode: Mode }) {
@@ -150,6 +181,8 @@ export function FinderPicker({
   maxDocs = 1,
   initialPath = EMPTY_PATH,
   initialSelectedDocIds = EMPTY_DOC_IDS,
+  docSource = 'documents',
+  docTypeFilter,
   onConfirm,
 }: {
   open: boolean;
@@ -158,6 +191,8 @@ export function FinderPicker({
   maxDocs?: number;
   initialPath?: string[];
   initialSelectedDocIds?: string[];
+  docSource?: DocSource;
+  docTypeFilter?: string[];
   onConfirm: (payload: { path?: string[]; docs?: StoredDocument[] }) => void;
 }) {
   const { orgId } = getApiContext();
@@ -174,10 +209,53 @@ export function FinderPicker({
   const [searchDocuments, setSearchDocuments] = useState<StoredDocument[]>([]);
   const [pathLoading, setPathLoading] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [editorDocsLoading, setEditorDocsLoading] = useState(false);
+  const [allEditorDocs, setAllEditorDocs] = useState<StoredDocument[] | null>(null);
   const [selectedDocsById, setSelectedDocsById] = useState<Map<string, StoredDocument>>(new Map());
   const listRef = useRef<HTMLDivElement>(null);
   const loadFoldersRef = useRef(folderExplorer.load);
   const docsCacheRef = useRef<Map<string, StoredDocument[]>>(new Map());
+  const normalizedDocTypeFilter = useMemo(
+    () =>
+      Array.isArray(docTypeFilter)
+        ? docTypeFilter.map((v) => String(v || "").trim().toLowerCase()).filter(Boolean)
+        : [],
+    [docTypeFilter]
+  );
+  const hasDocTypeFilter = normalizedDocTypeFilter.length > 0;
+
+  const matchesDocTypeFilter = React.useCallback(
+    (doc: StoredDocument) => {
+      if (!hasDocTypeFilter) return true;
+
+      const raw: any = doc as any;
+      const type = String(raw?.type || "").trim().toLowerCase();
+      const mime = String(raw?.mimeType || raw?.mime_type || "").trim().toLowerCase();
+      const filename = String(raw?.filename || raw?.name || "").trim().toLowerCase();
+      const docTypeKey = String(raw?.docTypeKey || raw?.doc_type_key || "").trim().toLowerCase();
+      const kind = String(raw?.kind || "").trim().toLowerCase();
+      const isEditorFlag = raw?.is_editor === true || raw?.editor === true || raw?.isEditor === true;
+      const hasEditorHead = Boolean(raw?.head);
+
+      const candidates = [type, mime, docTypeKey, kind].filter(Boolean);
+      const hasMarkdownMime = mime.includes("markdown") || mime.includes("md");
+      const isMarkdownFile = filename.endsWith(".md") || filename.endsWith(".markdown");
+
+      // Special handling for editor docs because different endpoints return different shapes.
+      if (normalizedDocTypeFilter.includes("editor")) {
+        if (type === "editor") return true;
+        if (docTypeKey === "editor") return true;
+        if (isEditorFlag || hasEditorHead) return true;
+        if (hasMarkdownMime || isMarkdownFile) return true;
+      }
+
+      return normalizedDocTypeFilter.some((allowed) => {
+        if (!allowed) return false;
+        return candidates.some((value) => value === allowed || value.includes(allowed));
+      });
+    },
+    [hasDocTypeFilter, normalizedDocTypeFilter]
+  );
 
   useEffect(() => {
     loadFoldersRef.current = folderExplorer.load;
@@ -188,9 +266,11 @@ export function FinderPicker({
       setQuery('');
       setViewingPath(targetPath);
       setSelectedIndex(0);
-      void loadFoldersRef.current(targetPath);
+      if (!(mode === 'doc' && docSource === 'editor')) {
+        void loadFoldersRef.current(targetPath);
+      }
     },
-    []
+    [docSource, mode]
   );
 
   useEffect(() => {
@@ -209,12 +289,50 @@ export function FinderPicker({
       sameStringArray(prev, normalizedSelectedDocIds) ? prev : normalizedSelectedDocIds
     );
 
-    void loadFoldersRef.current([]);
-    void loadFoldersRef.current(normalizedPath);
-  }, [open, initialPath, initialSelectedDocIds, maxDocs]);
+    if (!(mode === 'doc' && docSource === 'editor')) {
+      void loadFoldersRef.current([]);
+      void loadFoldersRef.current(normalizedPath);
+    }
+  }, [open, initialPath, initialSelectedDocIds, maxDocs, mode, docSource]);
+
+  useEffect(() => {
+    if (!open || mode !== 'doc' || docSource !== 'editor') return;
+    if (!orgId) {
+      setAllEditorDocs([]);
+      return;
+    }
+
+    let cancelled = false;
+    setEditorDocsLoading(true);
+
+    (async () => {
+      try {
+        const data = await apiFetch<{ docs?: any[] }>(
+          `/orgs/${orgId}/editor/docs?limit=500`,
+          { skipCache: true }
+        );
+        if (cancelled) return;
+        const docs = Array.isArray(data?.docs) ? data.docs.map(normalizeEditorListDocument) : [];
+        setAllEditorDocs(docs);
+        setSelectedDocsById((prev) => {
+          const next = new Map(prev);
+          for (const d of docs) next.set(d.id, d);
+          return next;
+        });
+      } catch {
+        if (!cancelled) setAllEditorDocs([]);
+      } finally {
+        if (!cancelled) setEditorDocsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, mode, docSource, orgId]);
 
   const loadPathDocuments = React.useCallback(async (targetPath: string[]) => {
-    if (mode !== 'doc') return;
+    if (mode !== 'doc' || docSource !== 'documents') return;
     if (!orgId) {
       setPathDocuments([]);
       return;
@@ -249,17 +367,24 @@ export function FinderPicker({
     } finally {
       setPathLoading(false);
     }
-  }, [mode, orgId]);
+  }, [mode, docSource, orgId]);
+
+  useEffect(() => {
+    if (!open || mode !== 'doc' || docSource !== 'editor') return;
+    const docs = Array.isArray(allEditorDocs) ? allEditorDocs : [];
+    const inPath = docs.filter((doc) => sameStringArray(docFolderPath(doc), viewingPath));
+    setPathDocuments(inPath);
+  }, [open, mode, docSource, allEditorDocs, viewingPath]);
 
   useEffect(() => {
     if (!open || mode !== 'doc') return;
     if (query.trim()) return;
+    if (docSource === 'editor') return;
     void loadPathDocuments(viewingPath);
-  }, [open, mode, query, viewingPath, loadPathDocuments]);
+  }, [open, mode, query, viewingPath, loadPathDocuments, docSource]);
 
   useEffect(() => {
     if (!open || mode !== 'doc') return;
-    if (!orgId) return;
 
     const q = query.trim();
     if (!q) {
@@ -267,6 +392,32 @@ export function FinderPicker({
       setSearchLoading(false);
       return;
     }
+
+    if (docSource === 'editor') {
+      const docs = Array.isArray(allEditorDocs) ? allEditorDocs : [];
+      const lower = q.toLowerCase();
+      setSearchLoading(true);
+      const items = docs.filter((doc) => {
+        const folderPath = docFolderPath(doc);
+        const inScope = viewingPath.length === 0 || pathStartsWith(folderPath, viewingPath);
+        if (!inScope) return false;
+        const haystack = [
+          docFilename(doc),
+          docTitle(doc),
+          String((doc as any)?.subject || ''),
+          String((doc as any)?.description || ''),
+          folderPath.join('/'),
+        ]
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(lower);
+      });
+      setSearchDocuments(items);
+      setSearchLoading(false);
+      return;
+    }
+
+    if (!orgId) return;
 
     setSearchLoading(true);
     const controller = new AbortController();
@@ -305,7 +456,7 @@ export function FinderPicker({
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [open, mode, orgId, query, viewingPath]);
+  }, [open, mode, orgId, query, viewingPath, docSource, allEditorDocs]);
 
   useEffect(() => {
     if (!open || mode !== 'doc') return;
@@ -341,6 +492,31 @@ export function FinderPicker({
   }, [open, mode, orgId, selectedDocIds, selectedDocsById]);
 
   const currentFolders = useMemo(() => {
+    if (mode === 'doc' && docSource === 'editor') {
+      const docs = Array.isArray(allEditorDocs) ? allEditorDocs : [];
+      const seen = new Set<string>();
+      const folders: Array<{ kind: 'folder'; id: string; name: string; path: string[] }> = [];
+
+      for (const doc of docs) {
+        const fPath = docFolderPath(doc);
+        if (!pathStartsWith(fPath, viewingPath)) continue;
+        if (fPath.length <= viewingPath.length) continue;
+        const childPath = fPath.slice(0, viewingPath.length + 1);
+        const key = childPath.join('/');
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        folders.push({
+          kind: 'folder',
+          id: `editor|${key}`,
+          name: childPath[childPath.length - 1] || 'Folder',
+          path: childPath,
+        });
+      }
+
+      folders.sort((a, b) => a.name.localeCompare(b.name));
+      return folders;
+    }
+
     const seen = new Set<string>();
     const nodes = folderExplorer.getChildren(viewingPath) || [];
     const mapped = nodes
@@ -361,12 +537,12 @@ export function FinderPicker({
       })
       .sort((a, b) => a.name.localeCompare(b.name));
     return mapped;
-  }, [folderExplorer, viewingPath]);
+  }, [mode, docSource, allEditorDocs, folderExplorer, viewingPath]);
 
   const docsInCurrentPath = useMemo(
     () =>
       pathDocuments
-        .filter((doc) => doc.type !== 'folder')
+        .filter((doc) => doc.type !== 'folder' && matchesDocTypeFilter(doc))
         .map((doc) => ({
           kind: 'doc' as const,
           id: doc.id,
@@ -376,13 +552,13 @@ export function FinderPicker({
           doc,
         }))
         .sort((a, b) => a.filename.localeCompare(b.filename)),
-    [pathDocuments]
+    [pathDocuments, matchesDocTypeFilter]
   );
 
   const docsFromSearch = useMemo(
     () =>
       searchDocuments
-        .filter((doc) => doc.type !== 'folder')
+        .filter((doc) => doc.type !== 'folder' && matchesDocTypeFilter(doc))
         .map((doc) => ({
           kind: 'doc' as const,
           id: doc.id,
@@ -392,7 +568,7 @@ export function FinderPicker({
           doc,
         }))
         .sort((a, b) => a.filename.localeCompare(b.filename)),
-    [searchDocuments]
+    [searchDocuments, matchesDocTypeFilter]
   );
 
   const availableFolderItems = useMemo(() => {
@@ -514,7 +690,9 @@ export function FinderPicker({
       onOpenChange(false);
       return;
     }
-    const docsForConfirm = selectedDocIds.map((id) => selectedDocsById.get(id) || visibleDocsById.get(id) || ({ id } as StoredDocument));
+    const docsForConfirm = selectedDocIds
+      .map((id) => selectedDocsById.get(id) || visibleDocsById.get(id) || ({ id } as StoredDocument))
+      .filter((doc) => matchesDocTypeFilter(doc as StoredDocument));
     onConfirm({ docs: docsForConfirm });
     onOpenChange(false);
   };
@@ -528,10 +706,15 @@ export function FinderPicker({
           .join(', ');
 
   const maxSelectable = Math.max(1, maxDocs);
-  const folderLoadingForCurrentPath = folderExplorer.loading === pathKey(viewingPath);
+  const folderLoadingForCurrentPath =
+    mode === 'doc' && docSource === 'editor'
+      ? false
+      : folderExplorer.loading === pathKey(viewingPath);
   const isBusy =
     mode === 'doc'
-      ? folderLoadingForCurrentPath || (query.trim() ? searchLoading : pathLoading)
+      ? (docSource === 'editor'
+          ? editorDocsLoading || (query.trim() ? searchLoading : false)
+          : folderLoadingForCurrentPath || (query.trim() ? searchLoading : pathLoading))
       : folderLoadingForCurrentPath;
 
   return (

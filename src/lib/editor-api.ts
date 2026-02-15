@@ -42,6 +42,14 @@ export type EditorDocListItem = {
 
 export type EditorDocsListResponse = { docs: EditorDocListItem[] };
 
+export type EditorDocumentMeta = {
+  id: string;
+  title: string | null;
+  filename: string | null;
+  folderPath?: string[];
+  folder_path?: string[];
+};
+
 export type CreateEditorDocBody = {
   title: string;
   folderPath?: string[];
@@ -56,6 +64,23 @@ export type CreateEditorDocResponse = {
   doc: any;
   head: EditorHead;
   version: { id: string; version_number: number; created_at: string };
+};
+
+export type CreateEditorDocShellBody = {
+  title: string;
+  folderPath?: string[];
+  departmentId?: string;
+  isDraft?: boolean;
+};
+
+export type CreateEditorDocShellResponse = {
+  id: string;
+  title: string | null;
+  filename: string | null;
+  folderPath?: string[];
+  folder_path?: string[];
+  isDraft?: boolean;
+  is_draft?: boolean;
 };
 
 export type LatestEditorResponse = {
@@ -115,10 +140,45 @@ export async function createEditorDoc(body: CreateEditorDocBody): Promise<Create
   return apiFetch(`/orgs/${orgId}/editor/docs`, { method: 'POST', body, skipCache: true });
 }
 
+export async function createEditorDocShell(body: CreateEditorDocShellBody): Promise<CreateEditorDocShellResponse> {
+  const orgId = getApiContext().orgId;
+  if (!orgId) throw new Error('No org selected');
+
+  const title = String(body.title || '').trim() || 'Untitled';
+  const filename = `${title}.md`;
+
+  return apiFetch(`/orgs/${orgId}/documents`, {
+    method: 'POST',
+    skipCache: true,
+    body: {
+      title,
+      filename,
+      type: 'editor',
+      folderPath: Array.isArray(body.folderPath) ? body.folderPath : [],
+      departmentId: body.departmentId,
+      isDraft: Boolean(body.isDraft),
+      category: 'General',
+      tags: [],
+      keywords: [],
+      sender: '',
+      receiver: '',
+      subject: '',
+      description: '',
+      mimeType: 'text/markdown',
+    },
+  });
+}
+
 export async function getEditorLatest(docId: string): Promise<LatestEditorResponse> {
   const orgId = getApiContext().orgId;
   if (!orgId) throw new Error('No org selected');
   return apiFetch(`/orgs/${orgId}/editor/docs/${docId}/latest`, { skipCache: true });
+}
+
+export async function getEditorDocumentMeta(docId: string): Promise<EditorDocumentMeta> {
+  const orgId = getApiContext().orgId;
+  if (!orgId) throw new Error('No org selected');
+  return apiFetch(`/orgs/${orgId}/documents/${docId}`, { skipCache: true });
 }
 
 export async function listEditorVersions(docId: string, limit = 50): Promise<{ versions: EditorVersion[] }> {

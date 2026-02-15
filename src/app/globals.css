@@ -860,4 +860,477 @@
     display: none;
     /* Chrome, Safari and Opera */
   }
+
+  /* TipTap editor typography and content rhythm */
+  .tiptap-editor {
+    @apply min-h-[280px] outline-none text-[15px] leading-7 text-foreground;
+  }
+
+  .tiptap-editor.editor-block-dragging,
+  .tiptap-editor.editor-block-dragging * {
+    user-select: none !important;
+    -webkit-user-select: none !important;
+  }
+
+  .tiptap-editor> :where(p, h1, h2, h3, blockquote, ul, ol, pre, .tableWrapper, .editor-divider-block, .editor-callout-block) {
+    border-radius: 0.45rem;
+    transition: background-color 140ms ease, box-shadow 140ms ease;
+  }
+
+  .tiptap-editor> :where(p, h1, h2, h3, blockquote, ul, ol, pre, .tableWrapper, .editor-divider-block, .editor-callout-block):hover {
+    background: hsl(var(--muted) / 0.35);
+    box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.7);
+  }
+
+  .tiptap-editor>.editor-hover-block {
+    background: hsl(var(--muted) / 0.35);
+    box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.7);
+  }
+
+  .tiptap-editor>.editor-selected-block {
+    background: hsl(var(--primary) / 0.08);
+    box-shadow: inset 3px 0 0 hsl(var(--primary) / 0.88), inset 0 0 0 1px hsl(var(--primary) / 0.32);
+  }
+
+  .tiptap-editor>.editor-selected-block.editor-hover-block {
+    background: hsl(var(--primary) / 0.1);
+  }
+
+  .tiptap-editor p {
+    @apply my-1.5 text-[15px] leading-relaxed;
+  }
+
+  .tiptap-editor h1 {
+    @apply mt-5 mb-2.5 text-2xl font-semibold tracking-tight;
+  }
+
+  .tiptap-editor h2 {
+    @apply mt-4 mb-2 text-xl font-semibold tracking-tight;
+  }
+
+  .tiptap-editor h3 {
+    @apply mt-3 mb-1.5 text-lg font-semibold;
+  }
+
+  .tiptap-editor h1:first-child,
+  .tiptap-editor h2:first-child,
+  .tiptap-editor h3:first-child,
+  .tiptap-editor p:first-child {
+    @apply mt-0;
+  }
+
+  .tiptap-editor ul,
+  .tiptap-editor ol {
+    @apply my-2 pl-6;
+  }
+
+  .tiptap-editor ul {
+    list-style-type: disc;
+  }
+
+  .tiptap-editor ol {
+    list-style-type: decimal;
+  }
+
+  .tiptap-editor ul ul {
+    list-style-type: circle;
+  }
+
+  .tiptap-editor ol ol {
+    list-style-type: lower-alpha;
+  }
+
+  .tiptap-editor li {
+    @apply my-1;
+  }
+
+  .tiptap-editor ul[data-type='taskList'] {
+    list-style: none;
+    margin: 0.5rem 0;
+    padding-left: 0;
+  }
+
+  .tiptap-editor ul[data-type='taskList'] li {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .tiptap-editor ul[data-type='taskList'] li>label {
+    display: inline-flex;
+    align-items: center;
+    margin-top: 0.2rem;
+    flex: 0 0 auto;
+  }
+
+  .tiptap-editor ul[data-type='taskList'] li>label input[type='checkbox'] {
+    width: 1rem;
+    height: 1rem;
+    accent-color: hsl(var(--primary));
+  }
+
+  .tiptap-editor ul[data-type='taskList'] li>div {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .tiptap-editor ul[data-type='taskList'] li>div>p {
+    margin: 0;
+  }
+
+  .tiptap-editor ul[data-type='taskList'] li[data-checked='true']>div>p {
+    text-decoration: line-through;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .tiptap-editor blockquote {
+    @apply my-3 border-l-2 border-border pl-3 text-muted-foreground;
+  }
+
+  .tiptap-editor a {
+    color: hsl(var(--foreground));
+    text-decoration-line: underline;
+    text-decoration-thickness: 1px;
+    text-decoration-color: hsl(var(--foreground) / 0.45);
+    text-underline-offset: 2px;
+    transition: color 140ms ease, text-decoration-color 140ms ease, background-color 140ms ease;
+    border-radius: 0.2rem;
+    cursor: pointer;
+  }
+
+  .tiptap-editor a:hover {
+    color: hsl(var(--primary));
+    text-decoration-color: hsl(var(--primary) / 0.7);
+    background: hsl(var(--primary) / 0.08);
+    cursor: pointer;
+  }
+
+  .tiptap-editor hr {
+    @apply my-4 border-border/70;
+  }
+
+  .tiptap-editor .editor-divider-block {
+    position: relative;
+    margin: 1rem 0;
+    border-radius: 0.5rem;
+    padding: 0.35rem 0.25rem;
+    cursor: grab;
+    transition: background-color 140ms ease, box-shadow 140ms ease;
+  }
+
+  .tiptap-editor .editor-divider-block:active {
+    cursor: grabbing;
+  }
+
+  .tiptap-editor .editor-divider-block.is-readonly,
+  .tiptap-editor .editor-divider-block.is-readonly:active {
+    cursor: default;
+  }
+
+  .tiptap-editor .editor-divider-block[data-spacing='compact'] {
+    margin-top: 0.2rem;
+    margin-bottom: 0.2rem;
+  }
+
+  .tiptap-editor .editor-divider-block[data-spacing='normal'] {
+    margin-top: 1.1rem;
+    margin-bottom: 1.1rem;
+  }
+
+  .tiptap-editor .editor-divider-block[data-spacing='relaxed'] {
+    margin-top: 2.8rem;
+    margin-bottom: 2.8rem;
+  }
+
+  .tiptap-editor .editor-divider-block.is-selected {
+    background: hsl(var(--primary) / 0.07);
+    box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.25);
+  }
+
+  .tiptap-editor .editor-divider-line {
+    border: 0;
+    border-top: 1px solid hsl(var(--border));
+    margin: 0;
+    pointer-events: none;
+  }
+
+  /* Hide legacy divider controls if older node view is still mounted */
+  .tiptap-editor .editor-divider-controls,
+  .tiptap-editor .editor-divider-control,
+  .tiptap-editor .editor-divider-spacing-label {
+    display: none !important;
+  }
+
+  .tiptap-editor .editor-callout-block {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55rem;
+    margin: 0.8rem 0;
+    border-radius: 0.65rem;
+    border: 1px solid hsl(var(--border) / 0.85);
+    background: hsl(var(--muted) / 0.4);
+    padding: 0.55rem 0.65rem;
+    transition: background-color 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+  }
+
+  .tiptap-editor .editor-callout-block[data-tone='tip'] {
+    background: #fdf8d9;
+    border-color: #eed98b;
+  }
+
+  .tiptap-editor .editor-callout-block[data-tone='note'] {
+    background: #e9f2ff;
+    border-color: #c8dcff;
+  }
+
+  .tiptap-editor .editor-callout-block[data-tone='warning'] {
+    background: #fdecec;
+    border-color: #f0c4c4;
+  }
+
+  .tiptap-editor .editor-callout-block[data-tone='success'] {
+    background: #e9f6ee;
+    border-color: #c3e7d1;
+  }
+
+  .tiptap-editor .editor-callout-block.is-selected {
+    box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.38);
+  }
+
+  .tiptap-editor .editor-callout-emoji {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 1.4rem;
+    height: 1.4rem;
+    margin-top: 0.05rem;
+    border-radius: 0.4rem;
+    border: 1px solid hsl(var(--border) / 0.7);
+    background: hsl(var(--background));
+    cursor: pointer;
+    line-height: 1;
+  }
+
+  .tiptap-editor .editor-callout-block.is-readonly .editor-callout-emoji {
+    cursor: default;
+  }
+
+  .tiptap-editor .editor-callout-block.is-no-emoji .editor-callout-emoji {
+    display: none;
+  }
+
+  .tiptap-editor .editor-callout-content {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .tiptap-editor .editor-callout-content> :first-child {
+    margin-top: 0;
+  }
+
+  .tiptap-editor .editor-callout-content> :last-child {
+    margin-bottom: 0;
+  }
+
+  .tiptap-editor table {
+    @apply my-0 w-full border-collapse;
+    table-layout: fixed;
+  }
+
+  .tiptap-editor .tableWrapper {
+    @apply my-3 overflow-x-auto rounded-md border border-border bg-background;
+    position: relative;
+    /* Hide inner scrollbars for a cleaner Notion-like table container */
+    scrollbar-width: none;
+    /* Firefox */
+    -ms-overflow-style: none;
+    /* IE/Edge */
+  }
+
+  .tiptap-editor .tableWrapper::-webkit-scrollbar {
+    display: none;
+    /* Chrome, Safari */
+  }
+
+  .tiptap-editor .tableWrapper .editor-table-bottom-footer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+    padding: 0.25rem 0.45rem 0.4rem;
+    border-top: 1px dashed hsl(var(--border) / 0.75);
+    background: hsl(var(--muted) / 0.14);
+    transition: background-color 120ms ease, border-color 120ms ease;
+  }
+
+  .tiptap-editor .tableWrapper .editor-table-bottom-footer-button {
+    position: absolute;
+    left: var(--editor-table-footer-center-x, 50%);
+    top: 50%;
+    transform: translate(-50%, -50%);
+    height: 1.55rem;
+    width: 1.55rem;
+    border-radius: 9999px;
+    border: 1px solid hsl(var(--border) / 0.72);
+    background: hsl(var(--background));
+    color: hsl(var(--muted-foreground));
+    font-size: 1.05rem;
+    line-height: 1;
+    font-weight: 600;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease, background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+    cursor: row-resize;
+  }
+
+  .tiptap-editor .tableWrapper.editor-table-bottom-hot .editor-table-bottom-footer,
+  .tiptap-editor .tableWrapper:hover .editor-table-bottom-footer,
+  .tiptap-editor .tableWrapper .editor-table-bottom-footer:hover,
+  .tiptap-editor .tableWrapper.editor-table-dragging .editor-table-bottom-footer {
+    background: hsl(var(--muted) / 0.24);
+    border-top-color: hsl(var(--border) / 0.95);
+  }
+
+  .tiptap-editor .tableWrapper.editor-table-bottom-hot .editor-table-bottom-footer-button,
+  .tiptap-editor .tableWrapper:hover .editor-table-bottom-footer-button,
+  .tiptap-editor .tableWrapper .editor-table-bottom-footer:hover .editor-table-bottom-footer-button,
+  .tiptap-editor .tableWrapper.editor-table-dragging .editor-table-bottom-footer-button,
+  .tiptap-editor .tableWrapper .editor-table-bottom-footer-button:focus-visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .tiptap-editor .tableWrapper .editor-table-bottom-footer-button:hover,
+  .tiptap-editor .tableWrapper .editor-table-bottom-footer-button:focus-visible {
+    background: hsl(var(--muted));
+    border-color: hsl(var(--border));
+    color: hsl(var(--foreground));
+  }
+
+  .tiptap-editor .tableWrapper .editor-table-right-rail {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 1.85rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .tiptap-editor .tableWrapper .editor-table-right-rail-button {
+    height: 1.55rem;
+    width: 1.55rem;
+    border-radius: 9999px;
+    border: 1px solid hsl(var(--border) / 0.72);
+    background: hsl(var(--background));
+    color: hsl(var(--muted-foreground));
+    font-size: 1.05rem;
+    line-height: 1;
+    font-weight: 600;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease, background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+    cursor: col-resize;
+  }
+
+  .tiptap-editor .tableWrapper.editor-table-right-hot .editor-table-right-rail-button,
+  .tiptap-editor .tableWrapper:hover .editor-table-right-rail-button,
+  .tiptap-editor .tableWrapper.editor-table-dragging .editor-table-right-rail-button,
+  .tiptap-editor .tableWrapper .editor-table-right-rail-button:focus-visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .tiptap-editor .tableWrapper.editor-table-right-hot .editor-table-right-rail,
+  .tiptap-editor .tableWrapper:hover .editor-table-right-rail,
+  .tiptap-editor .tableWrapper.editor-table-dragging .editor-table-right-rail {
+    pointer-events: auto;
+  }
+
+  .tiptap-editor .tableWrapper .editor-table-right-rail-button:hover,
+  .tiptap-editor .tableWrapper .editor-table-right-rail-button:focus-visible {
+    background: hsl(var(--muted));
+    border-color: hsl(var(--border));
+    color: hsl(var(--foreground));
+  }
+
+  .editor-table-drag-preview {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  .editor-table-drag-preview-area {
+    position: fixed;
+    display: none;
+    background-color: hsl(var(--muted) / 0.18);
+    border: 1px solid hsl(var(--border) / 0.75);
+    box-shadow: 0 10px 30px hsl(var(--foreground) / 0.08);
+    background-image:
+      linear-gradient(to right, hsl(var(--border) / 0.55) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.55) 1px, transparent 1px);
+    background-size: var(--editor-table-col-snap, 96px) var(--editor-table-row-snap, 28px);
+    transform: translateZ(0);
+  }
+
+  .editor-table-drag-preview-area.editor-table-drag-preview-add {
+    background-color: hsl(var(--muted) / 0.18);
+    border-color: hsl(var(--border) / 0.75);
+  }
+
+  .editor-table-drag-preview-area.editor-table-drag-preview-del {
+    background-color: hsl(var(--destructive) / 0.10);
+    border-color: hsl(var(--destructive) / 0.32);
+    background-image:
+      linear-gradient(to right, hsl(var(--destructive) / 0.22) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--destructive) / 0.22) 1px, transparent 1px);
+  }
+
+  .tiptap-editor table.ProseMirror-selectednode {
+    @apply ring-1 ring-border/80;
+    cursor: grab;
+  }
+
+  .tiptap-editor table.ProseMirror-selectednode:active {
+    cursor: grabbing;
+  }
+
+  .tiptap-editor .selectedCell {
+    position: relative;
+  }
+
+  .tiptap-editor .selectedCell:after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: hsl(var(--muted) / 0.45);
+  }
+
+  .tiptap-editor .column-resize-handle {
+    position: absolute;
+    top: 0;
+    right: -2px;
+    bottom: -2px;
+    width: 4px;
+    background-color: hsl(var(--border) / 0.9);
+    pointer-events: none;
+  }
+
+  .tiptap-editor.resize-cursor {
+    cursor: col-resize;
+  }
+
+  .tiptap-editor th,
+  .tiptap-editor td {
+    @apply border border-border px-2 py-1.5 align-top;
+  }
+
+  .tiptap-editor th {
+    @apply bg-muted/40 text-left font-medium;
+  }
 }

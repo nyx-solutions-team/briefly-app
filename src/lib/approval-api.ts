@@ -9,7 +9,9 @@ export type ApprovalInstance = {
   status: 'draft' | 'in_progress' | 'approved' | 'rejected' | 'cancelled';
   current_stage_id: string | null;
   submitted_by: string | null;
+  submitted_by_name?: string | null;
   submitted_at: string;
+  total_stage_count?: number | null;
   completed_at: string | null;
   completed_by: string | null;
   submitted_version_number: number;

@@ -23,6 +23,11 @@
       }
     },
     "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-    "exclude": ["node_modules"]
+    "exclude": [
+      "node_modules",
+      "src/components/teams-management.tsx",
+      "src/components/teams-management_backup.tsx",
+      "src/components/teams-management_part1.tsx"
+    ]
   }
   

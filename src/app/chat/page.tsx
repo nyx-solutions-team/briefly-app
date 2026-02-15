@@ -37,14 +37,14 @@ import MermaidDiagram from '@/components/ai-elements/mermaid-diagram';
 import { DocumentResultsTable } from '@/components/ai-elements/document-results-table';
 import { ResultsSidebar } from '@/components/ai-elements/results-sidebar';
 import { useSettings } from '@/hooks/use-settings';
-import { Bot, FileText, ChevronDown, Sparkles, Globe, FileSpreadsheet, FileArchive, FileImage, FileVideo, FileAudio, FileCode, File as FileGeneric, Eye, Layers, Check, Loader2, X } from 'lucide-react';
+import { Bot, FileText, ChevronDown, Sparkles, Globe, FileSpreadsheet, FileArchive, FileImage, FileVideo, FileAudio, FileCode, File as FileGeneric, Eye, Layers, Check, Loader2, X, Download, Search, FilePlus, MessageSquare, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { type ChatContext } from '@/components/chat-context-selector';
 import { createFolderChatEndpoint } from '@/lib/folder-utils';
 import BrieflyChatBox from '@/components/ai-elements/briefly-chat-box';
 import { FinderPicker } from '@/components/pickers/finder-picker';
 import { useDocuments } from '@/hooks/use-documents';
-import { ActionCenter, type CitationMeta, type ActionCenterTab } from '@/components/action-center';
+import { ActionCenter, type CitationMeta, type ActionCenterTab, type GeneratedPdfPreview } from '@/components/action-center';
 import {
   Dialog,
   DialogContent,
@@ -175,6 +175,65 @@ function getCitationIcon(citation: any, className?: string) {
     default:
       return <FileGeneric className={className} />;
   }
+}
+
+function getGeneratedDocumentPreviewUrl(doc?: GeneratedDocumentMetadata | null): string | null {
+  if (!doc) return null;
+  if (typeof doc.preview_url === 'string' && doc.preview_url.trim()) return doc.preview_url.trim();
+  if (typeof doc.token === 'string' && doc.token.trim()) return `/api/generated-pdf/${doc.token.trim()}`;
+  return null;
+}
+
+function getGeneratedDocumentDownloadUrl(doc?: GeneratedDocumentMetadata | null): string | null {
+  if (!doc) return null;
+  if (typeof doc.download_url === 'string' && doc.download_url.trim()) return doc.download_url.trim();
+  const previewUrl = getGeneratedDocumentPreviewUrl(doc);
+  if (!previewUrl) return null;
+  const separator = previewUrl.includes('?') ? '&' : '?';
+  return `${previewUrl}${separator}download=1`;
+}
+
+function toGeneratedPdfPreview(doc?: GeneratedDocumentMetadata | null): GeneratedPdfPreview | null {
+  const previewUrl = getGeneratedDocumentPreviewUrl(doc);
+  if (!doc || !previewUrl) return null;
+  return {
+    title: doc.title || 'Generated PDF Draft',
+    fileName: doc.file_name || 'generated-document.pdf',
+    previewUrl,
+    downloadUrl: getGeneratedDocumentDownloadUrl(doc) || undefined,
+    expiresAt: doc.expires_at,
+  };
+}
+
+const TEMPLATE_SELECTOR_STATUSES = new Set(['ok', 'template_required', 'invalid_template']);
+const DOCUMENT_WORKFLOW_AWAITING_INPUT_STATUSES = new Set([
+  'collecting_details',
+  'awaiting_details',
+  'awaiting_missing_fields',
+]);
+
+function buildTemplateSelectPrompt(template: DocumentTemplateOption): string {
+  return `Template selected: template_id "${template.template_id}". Continue document generation with this template.`;
+}
+
+function isDocumentCreationKickoffPrompt(input: string): boolean {
+  const text = (input || '').toLowerCase();
+  if (!text) return false;
+  if (text.includes('template_id:')) return false;
+  return (
+    text.includes('create a document') ||
+    text.includes('create document') ||
+    text.includes('creating a document') ||
+    text.includes('creating document') ||
+    text.includes('help me create') ||
+    text.includes('help me in creating') ||
+    text.includes('create a document for me') ||
+    text.includes('create document for me') ||
+    text.includes('generate a document') ||
+    text.includes('generate document') ||
+    text.includes('show templates') ||
+    text.includes('document templates')
+  );
 }
 
 function getDocPrimaryName(doc?: DocLike | null): string {
@@ -340,6 +399,13 @@ type UsageInfo = {
 };
 
 type ActivityStatus = 'in_progress' | 'completed' | 'error';
+type WorkflowStepState = 'pending' | 'in_progress' | 'completed' | 'error';
+type DocumentWorkflowStep = {
+  key: 'extract' | 'create_pdf' | 'respond';
+  label: string;
+  state: WorkflowStepState;
+  icon: React.ReactNode;
+};
 
 const ACTIVITY_LABELS: Record<string, string> = {
   understand: 'Understanding request',
@@ -366,6 +432,16 @@ const STAGE_LABELS: Record<string, string> = {
   relate: 'Finding related records',
   aggregate: 'Computing totals',
   respond: 'Preparing response',
+};
+
+const DEEP_STAGE_LABELS: Record<string, string> = {
+  intake: 'Deep research intake',
+  planning: 'Planning deep research',
+  retrieval: 'Gathering evidence',
+  extraction: 'Extracting evidence',
+  reasoning: 'Reasoning over evidence',
+  verification: 'Verifying findings',
+  synthesis: 'Synthesizing deep findings',
 };
 
 const STAGE_ORDER = ['understand', 'plan', 'schema', 'search', 'read', 'relate', 'aggregate', 'respond'];
@@ -772,6 +848,117 @@ function buildActivityInsights(
   };
 }
 
+function hasAnyCapturedDocumentFields(workflow: any): boolean {
+  const captured = workflow?.captured_fields;
+  if (!captured || typeof captured !== 'object') return false;
+  return Object.values(captured).some((value) => String(value || '').trim().length > 0);
+}
+
+function resolveWorkflowStepState(options: {
+  completed: boolean;
+  inProgress: boolean;
+  errored?: boolean;
+}): WorkflowStepState {
+  if (options.errored) return 'error';
+  if (options.completed) return 'completed';
+  if (options.inProgress) return 'in_progress';
+  return 'pending';
+}
+
+function buildDocumentWorkflowSteps(
+  message: Message,
+  hasSelectedTemplateInFlow: boolean
+): DocumentWorkflowStep[] | null {
+  const workflow = message.metadata?.document_workflow;
+  const workflowStatus = String(workflow?.status || '').trim().toLowerCase();
+  const hasGeneratedDocument = Boolean(message.metadata?.generated_document);
+  const documentTool = (message.tools || []).find((tool) => {
+    const key = canonicalActivityKey(tool.toolId || tool.name || tool.description);
+    return key === 'run_document_generation_tool';
+  });
+  const toolStatus = documentTool ? normalizeActivityStatus(documentTool.status) : null;
+  const hasDocumentSignals = Boolean(workflow) || hasGeneratedDocument || Boolean(documentTool);
+  if (!hasDocumentSignals) return null;
+  const isTemplateSelectionStage = TEMPLATE_SELECTOR_STATUSES.has(workflowStatus);
+  if (isTemplateSelectionStage && !hasSelectedTemplateInFlow) {
+    return null;
+  }
+
+  const isStreaming = Boolean(message.isStreaming);
+  const hasCapturedValues = hasAnyCapturedDocumentFields(workflow);
+  const hasContent = String(message.content || '').trim().length > 0;
+  const workflowIsComplete = ['completed', 'done', 'success'].includes(workflowStatus);
+  const workflowCreatingPdf = ['creating_pdf', 'generating_pdf', 'rendering_pdf'].includes(workflowStatus);
+  const waitingForInput = TEMPLATE_SELECTOR_STATUSES.has(workflowStatus) || workflowStatus === 'collecting_details';
+  const workflowHasError =
+    ['error', 'failed', 'failure'].includes(workflowStatus) ||
+    Boolean(workflow?.error) ||
+    toolStatus === 'error';
+
+  const extractCompleted = hasCapturedValues || workflowIsComplete || hasGeneratedDocument || workflowCreatingPdf;
+  const extractInProgress =
+    !extractCompleted && (isStreaming || toolStatus === 'in_progress' || waitingForInput);
+
+  const createCompleted = hasGeneratedDocument || workflowIsComplete;
+  const createInProgress =
+    !createCompleted &&
+    (
+      (workflowCreatingPdf && (isStreaming || toolStatus === 'in_progress')) ||
+      (
+        hasCapturedValues &&
+        (isStreaming || toolStatus === 'in_progress' || workflowStatus === 'collecting_details')
+      )
+    );
+
+  const responseCompleted = (workflowIsComplete || hasGeneratedDocument) && !isStreaming && hasContent;
+  const responseInProgress =
+    !responseCompleted &&
+    (
+      workflowStatus === 'generating_response' ||
+      workflowStatus === 'responding' ||
+      (isStreaming && (workflowCreatingPdf || createInProgress))
+    );
+
+  return [
+    {
+      key: 'extract',
+      label: 'Extracting Info',
+      icon: <Search className="h-3.5 w-3.5" />,
+      state: resolveWorkflowStepState({
+        completed: extractCompleted,
+        inProgress: extractInProgress,
+        errored: workflowHasError && !extractCompleted,
+      }),
+    },
+    {
+      key: 'create_pdf',
+      label: 'Creating PDF',
+      icon: <FilePlus className="h-3.5 w-3.5" />,
+      state: resolveWorkflowStepState({
+        completed: createCompleted,
+        inProgress: createInProgress,
+        errored: workflowHasError && extractCompleted && !createCompleted,
+      }),
+    },
+    {
+      key: 'respond',
+      label: 'Generating Response',
+      icon: <MessageSquare className="h-3.5 w-3.5" />,
+      state: resolveWorkflowStepState({
+        completed: responseCompleted,
+        inProgress: responseInProgress,
+        errored: workflowHasError && createCompleted && !responseCompleted,
+      }),
+    },
+  ];
+}
+
+function sanitizeAssistantContentForDisplay(message: Message): string {
+  const raw = String(message.content || '');
+  if (!raw) return '';
+  return raw.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // Function to render assistant content with inline citation components
 function processContentWithCitations(
   content: string,
@@ -797,35 +984,108 @@ function processContentWithCitations(
     return `⟦⟦MMD:${idx}⟧⟧`;
   });
 
+  // Protect markdown table blocks from inline citation substitution.
+  // Splitting table markdown with React citation components breaks table parsing.
+  const tableBlocks: string[] = [];
+  const TABLE_DIVIDER_RE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/;
+  const extractMarkdownTables = (input: string): string => {
+    const lines = input.split('\n');
+    const out: string[] = [];
+    let i = 0;
+
+    while (i < lines.length) {
+      const header = lines[i] || '';
+      const divider = lines[i + 1] || '';
+      const looksLikeTableStart = header.includes('|') && TABLE_DIVIDER_RE.test(divider.trim());
+
+      if (!looksLikeTableStart) {
+        out.push(header);
+        i += 1;
+        continue;
+      }
+
+      const block: string[] = [header, divider];
+      i += 2;
+      while (i < lines.length) {
+        const row = lines[i] || '';
+        if (!row.trim() || !row.includes('|')) break;
+        block.push(row);
+        i += 1;
+      }
+
+      const idx = tableBlocks.push(block.join('\n')) - 1;
+      out.push(`⟦⟦TBL:${idx}⟧⟧`);
+    }
+
+    return out.join('\n');
+  };
+  contentWithPlaceholders = extractMarkdownTables(contentWithPlaceholders);
+
   // Preserve newlines exactly to avoid breaking markdown blocks (lists, headings)
   const preserveNewlines = (text: string) => text;
 
-  // Helper to render text while replacing mermaid placeholders with diagrams
-  const renderTextWithMermaid = (text: string, keyPrefix: string) => {
+  // Helper to render text while restoring protected placeholders.
+  const renderTextWithPlaceholders = (text: string, keyPrefix: string) => {
     const elements: JSX.Element[] = [];
-    const parts = text.split(/(⟦⟦MMD:(\d+)⟧⟧)/g);
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      const placeholderMatch = part && part.match(/^⟦⟦MMD:(\d+)⟧⟧$/);
-      if (placeholderMatch) {
-        const idx = parseInt(placeholderMatch[1], 10);
+    const placeholderRe = /⟦⟦(MMD|TBL):(\d+)⟧⟧/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null = null;
+
+    while ((match = placeholderRe.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        const plainText = text.slice(lastIndex, match.index);
+        if (plainText) {
+          elements.push(
+            <Response
+              key={`${keyPrefix}-txt-${elements.length}`}
+              className="block w-auto h-auto align-baseline"
+            >
+              {plainText}
+            </Response>
+          );
+        }
+      }
+
+      const kind = match[1];
+      const idx = parseInt(match[2], 10);
+      if (kind === 'MMD') {
         const code = mermaidBlocks[idx] || '';
         elements.push(
-          <div key={`${keyPrefix}-mmd-${i}`} className="my-3 overflow-auto">
+          <div key={`${keyPrefix}-mmd-${elements.length}`} className="my-3 overflow-auto">
             <MermaidDiagram code={code} />
           </div>
         );
-      } else if (part) {
+      } else {
+        const tableMarkdown = cleanDanglingCitationMarkers(tableBlocks[idx] || '');
+        if (tableMarkdown) {
+          elements.push(
+            <Response
+              key={`${keyPrefix}-tbl-${elements.length}`}
+              className="block w-full my-3"
+            >
+              {tableMarkdown}
+            </Response>
+          );
+        }
+      }
+
+      lastIndex = match.index + match[0].length;
+    }
+
+    if (lastIndex < text.length) {
+      const trailingText = text.slice(lastIndex);
+      if (trailingText) {
         elements.push(
           <Response
-            key={`${keyPrefix}-txt-${i}`}
+            key={`${keyPrefix}-txt-${elements.length}`}
             className="block w-auto h-auto align-baseline"
           >
-            {part}
+            {trailingText}
           </Response>
         );
       }
     }
+
     return elements;
   };
 
@@ -971,7 +1231,7 @@ function processContentWithCitations(
   // If no citations found, clean and return
   if (citationData.length === 0) {
     const cleaned = cleanDanglingCitationMarkers(contentWithPlaceholders).trim();
-    return <span className="inline">{renderTextWithMermaid(cleaned, `clean`)}</span>;
+    return <span className="inline">{renderTextWithPlaceholders(cleaned, `clean`)}</span>;
   }
 
   // Sort citations by index (forward order)
@@ -1017,7 +1277,7 @@ function processContentWithCitations(
     } else {
       // Render accumulated text as markdown
       if (currentText) {
-        renderTextWithMermaid(currentText, `chunk-${renderedParts.length}`).forEach(el => renderedParts.push(el));
+        renderTextWithPlaceholders(currentText, `chunk-${renderedParts.length}`).forEach(el => renderedParts.push(el));
         currentText = '';
       }
       // Add citation component (already inline)
@@ -1027,7 +1287,7 @@ function processContentWithCitations(
 
   // Render any remaining text
   if (currentText) {
-    renderTextWithMermaid(currentText, `tail-${renderedParts.length}`).forEach(el => renderedParts.push(el));
+    renderTextWithPlaceholders(currentText, `tail-${renderedParts.length}`).forEach(el => renderedParts.push(el));
   }
 
   return <span className="inline">{renderedParts}</span>;
@@ -1209,6 +1469,30 @@ function getThemeColors(accentColor: string) {
 
 
 
+type GeneratedDocumentMetadata = {
+  type?: string;
+  template?: string;
+  token?: string;
+  title?: string;
+  file_name?: string;
+  mime_type?: string;
+  preview_url?: string;
+  download_url?: string;
+  expires_at?: string;
+};
+
+type DocumentTemplateOption = {
+  template_id: string;
+  name: string;
+  description?: string;
+  field_count?: number;
+  sample_field_labels?: string[];
+  accent_from?: string;
+  accent_to?: string;
+  badge?: string;
+  publisher?: string;
+};
+
 type ChatResultsMetadata = {
   list_mode?: boolean;
   results_data?: Array<Record<string, any>>;
@@ -1217,6 +1501,27 @@ type ChatResultsMetadata = {
   total_count?: number;
   has_more?: boolean;
   query_type?: string | null;
+  generated_document?: GeneratedDocumentMetadata | null;
+  document_workflow?: {
+    type?: string;
+    status?: string;
+    template_id?: string;
+    template_name?: string;
+    suggested_template_id?: string | null;
+    templates?: DocumentTemplateOption[];
+    missing_fields?: Array<string | { key?: string; label?: string }>;
+    assistant_hint?: string;
+    captured_fields?: Record<string, string>;
+    error?: string;
+  } | null;
+  deep_research?: {
+    requested?: boolean;
+    enabled?: boolean;
+    max_minutes?: number;
+    strict_citations?: boolean;
+    planner_model?: string | null;
+    synth_model?: string | null;
+  } | null;
 };
 
 type AttachedDocMeta = {
@@ -1300,12 +1605,14 @@ export default function TestAgentEnhancedPage() {
   const [pinnedDocMetaById, setPinnedDocMetaById] = useState<Record<string, AttachedDocMeta>>({});
   const [fileNavigatorOpen, setFileNavigatorOpen] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [deepResearchEnabled, setDeepResearchEnabled] = useState(false);
   const [isWebSearchDialogOpen, setIsWebSearchDialogOpen] = useState(false);
   const [pendingWebSearchToggle, setPendingWebSearchToggle] = useState<boolean | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [previewDocId, setPreviewDocId] = useState<string | null>(null);
   const [previewDocPage, setPreviewDocPage] = useState<number | null>(null);
   const [previewCitation, setPreviewCitation] = useState<CitationMeta | null>(null);
+  const [generatedPdfPreview, setGeneratedPdfPreview] = useState<GeneratedPdfPreview | null>(null);
   const { settings } = useSettings();
   const themeColors = getThemeColors(settings.accent_color);
   const showTokenUsage = process.env.NEXT_PUBLIC_CHAT_USAGE_DEBUG === 'true';
@@ -1394,6 +1701,9 @@ export default function TestAgentEnhancedPage() {
     totalCount?: number | null;
     docType?: string | null;
   } | null>(null);
+  const [hasSelectedTemplateInFlow, setHasSelectedTemplateInFlow] = useState(false);
+  const [selectedTemplateCard, setSelectedTemplateCard] = useState<DocumentTemplateOption | null>(null);
+  const [selectedTemplateCardMessageId, setSelectedTemplateCardMessageId] = useState<string | null>(null);
 
   const aggregatedCitations = useMemo(
     () => messages.flatMap((m) => m.citations || []),
@@ -1435,7 +1745,19 @@ export default function TestAgentEnhancedPage() {
   );
 
   const handlePreviewDocument = useCallback((docId: string) => {
+    setGeneratedPdfPreview(null);
     setPreviewDocId(docId);
+    setPreviewDocPage(null);
+    setPreviewCitation(null);
+    setActionCenterTab('preview');
+    setIsActionCenterOpen(true);
+  }, []);
+
+  const handlePreviewGeneratedPdf = useCallback((doc: GeneratedDocumentMetadata | null | undefined) => {
+    const next = toGeneratedPdfPreview(doc);
+    if (!next) return;
+    setGeneratedPdfPreview(next);
+    setPreviewDocId(null);
     setPreviewDocPage(null);
     setPreviewCitation(null);
     setActionCenterTab('preview');
@@ -1444,6 +1766,7 @@ export default function TestAgentEnhancedPage() {
 
   const handlePreviewFromMessage = useCallback(
     (citation: CitationMeta, contextCitations: CitationMeta[] = []) => {
+      setGeneratedPdfPreview(null);
       if (citation?.docId) {
         setPreviewDocId(citation.docId);
         setPreviewCitation(citation);
@@ -1569,6 +1892,7 @@ export default function TestAgentEnhancedPage() {
     setPreviewDocId(null);
     setPreviewDocPage(null);
     setPreviewCitation(null);
+    setGeneratedPdfPreview(null);
     setIsActionCenterOpen(false);
     setActionCenterTab('sources');
     setActionCenterCitationsMode('global');
@@ -1576,6 +1900,9 @@ export default function TestAgentEnhancedPage() {
     setMessageScopedCitations([]);
     setCitationsModeLock(null);
     citationsModeLockRef.current = null;
+    setHasSelectedTemplateInFlow(false);
+    setSelectedTemplateCard(null);
+    setSelectedTemplateCardMessageId(null);
     const nextSessionId =
       typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function'
         ? (crypto as any).randomUUID()
@@ -1728,10 +2055,26 @@ export default function TestAgentEnhancedPage() {
     setSessionId(crypto.randomUUID());
   }, []);
 
-  const handleSubmit = async (input: string, overrideContext?: ChatContext) => {
+  const handleSubmit = async (
+    input: string,
+    overrideContext?: ChatContext,
+    overrideOptions?: { deepResearchEnabled?: boolean; skipUserMessage?: boolean }
+  ) => {
     if (!input.trim() || isLoading) return;
+    const isTemplateSelectionMessage = input.toLowerCase().includes('template_id');
+    if (isDocumentCreationKickoffPrompt(input)) {
+      setHasSelectedTemplateInFlow(false);
+      setSelectedTemplateCardMessageId(null);
+    }
+    if (isTemplateSelectionMessage) {
+      setHasSelectedTemplateInFlow(true);
+    }
 
     const effectiveContext = overrideContext || chatContext;
+    const effectiveDeepResearchEnabled =
+      typeof overrideOptions?.deepResearchEnabled === 'boolean'
+        ? overrideOptions.deepResearchEnabled
+        : deepResearchEnabled;
     const normalizedPinnedDocIds = (pinnedDocIds || []).filter(Boolean).slice(0, 2);
     console.log('Submitting message:', input, 'Context:', effectiveContext);
     console.log('🔍 ChatContext details:', {
@@ -1793,21 +2136,44 @@ export default function TestAgentEnhancedPage() {
         })
         .filter((item) => Boolean(item.id));
 
-      // Add user message (capture attached docs at send time)
-      const userMessage: Message = {
-        id: `user_${Date.now()}`,
-        role: 'user',
-        content: input,
-        attachedDocIds: normalizedPinnedDocIds.length > 0 ? [...normalizedPinnedDocIds] : undefined,
-        attachedDocs: attachedDocsSnapshot.length > 0 ? attachedDocsSnapshot : undefined,
-      };
-
-      setMessages(prev => [...prev, userMessage]);
+      if (!overrideOptions?.skipUserMessage) {
+        // Add user message (capture attached docs at send time)
+        const userMessage: Message = {
+          id: `user_${Date.now()}`,
+          role: 'user',
+          content: input,
+          attachedDocIds: normalizedPinnedDocIds.length > 0 ? [...normalizedPinnedDocIds] : undefined,
+          attachedDocs: attachedDocsSnapshot.length > 0 ? attachedDocsSnapshot : undefined,
+        };
+        setMessages(prev => [...prev, userMessage]);
+      }
       handlePinnedDocIdsChange([]); // Clear from input box — docs now live in the sent message
       setIsLoading(true);
 
       // Add assistant message placeholder
       const assistantId = `assistant_${Date.now()}`;
+      const lastAssistantWorkflowStatus = (() => {
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+          const msg = messages[i];
+          if (msg.role !== 'assistant') continue;
+          const status = String(msg.metadata?.document_workflow?.status || '').trim().toLowerCase();
+          if (status) return status;
+        }
+        return '';
+      })();
+      const hasActiveDocumentInputStep = DOCUMENT_WORKFLOW_AWAITING_INPUT_STATUSES.has(lastAssistantWorkflowStatus);
+      const shouldBootstrapDocWorkflow =
+        hasSelectedTemplateInFlow &&
+        Boolean(selectedTemplateCard?.template_id) &&
+        (
+          isTemplateSelectionMessage ||
+          (
+            hasActiveDocumentInputStep &&
+            !isDocumentCreationKickoffPrompt(input) &&
+            !overrideOptions?.skipUserMessage
+          )
+        );
+      const bootstrapWorkflowStatus = isTemplateSelectionMessage ? 'collecting_details' : 'creating_pdf';
       const assistantMessage: Message = {
         id: assistantId,
         role: 'assistant',
@@ -1816,7 +2182,19 @@ export default function TestAgentEnhancedPage() {
         processingSteps: [],
         tools: [],
         streamStartedAtMs: Date.now(),
+        metadata: shouldBootstrapDocWorkflow
+          ? {
+            document_workflow: {
+              status: bootstrapWorkflowStatus,
+              template_id: selectedTemplateCard?.template_id,
+              template_name: selectedTemplateCard?.name,
+            },
+          }
+          : undefined,
       };
+      if (isTemplateSelectionMessage) {
+        setSelectedTemplateCardMessageId(assistantId);
+      }
 
       setMessages(prev => [...prev, assistantMessage]);
       console.log('Added assistant message placeholder');
@@ -1859,7 +2237,13 @@ export default function TestAgentEnhancedPage() {
           context: contextPayload,
           filters: {},
           strictCitations: false,
-          webSearchEnabled: webSearchEnabled
+          webSearchEnabled: webSearchEnabled,
+          deepResearch: {
+            enabled: effectiveDeepResearchEnabled,
+            mode: 'auto',
+            strictCitations: true,
+            maxMinutes: 4,
+          },
         }, (event) => {
           if (event.event === 'message' && event.data) {
             try {
@@ -1932,6 +2316,58 @@ export default function TestAgentEnhancedPage() {
                   status: normalizeActivityStatus(data.status),
                   task: data.task,
                   category: data.category,
+                  updatedAtMs: streamLastEventTs,
+                };
+                streamSteps = dedupeSteps([...streamSteps, nextStep]);
+                updateAssistantMessage((m) => ({
+                  ...m,
+                  processingSteps: streamSteps,
+                  tools: streamTools,
+                  streamRunId: streamRunId || m.streamRunId || null,
+                  streamLastEventSeq: streamLastEventSeq || m.streamLastEventSeq,
+                  streamLastEventTs,
+                }));
+              } else if (data.type === 'deep_stage' || data.type === 'deep_progress') {
+                const rawStage = String(data.stage || '').trim().toLowerCase();
+                const stageKey = rawStage || 'deep';
+                const stageLabel = DEEP_STAGE_LABELS[stageKey] || normalizeActivityLabel(stageKey.replace(/_/g, ' '), 'Deep research');
+                const rawPercent = Number((data as any).percent);
+                const percentLabel = Number.isFinite(rawPercent)
+                  ? `${Math.max(0, Math.min(100, Math.round(rawPercent)))}%`
+                  : null;
+                const detail = String((data as any).detail || '').trim();
+                const description = [detail, percentLabel].filter(Boolean).join(' • ');
+
+                const nextStep: ProcessingStep = {
+                  step: `deep_${stageKey}`,
+                  title: stageLabel,
+                  description: description || stageLabel,
+                  status: normalizeActivityStatus(data.status || (data.type === 'deep_progress' ? 'in_progress' : undefined)),
+                  category: 'deep_research',
+                  updatedAtMs: streamLastEventTs,
+                };
+                streamSteps = dedupeSteps([...streamSteps, nextStep]);
+                updateAssistantMessage((m) => ({
+                  ...m,
+                  processingSteps: streamSteps,
+                  tools: streamTools,
+                  streamRunId: streamRunId || m.streamRunId || null,
+                  streamLastEventSeq: streamLastEventSeq || m.streamLastEventSeq,
+                  streamLastEventTs,
+                }));
+              } else if (data.type === 'deep_warning') {
+                const rawStage = String((data as any).stage || '').trim().toLowerCase();
+                const stageKey = rawStage || 'warning';
+                const stageLabel = rawStage
+                  ? (DEEP_STAGE_LABELS[stageKey] || normalizeActivityLabel(stageKey.replace(/_/g, ' '), 'Deep research'))
+                  : 'Deep research warning';
+                const detail = String((data as any).detail || '').trim();
+                const nextStep: ProcessingStep = {
+                  step: rawStage ? `deep_${stageKey}` : 'deep_warning',
+                  title: stageLabel,
+                  description: detail || 'Deep research reported a warning.',
+                  status: 'error',
+                  category: 'deep_research',
                   updatedAtMs: streamLastEventTs,
                 };
                 streamSteps = dedupeSteps([...streamSteps, nextStep]);
@@ -2143,6 +2579,28 @@ export default function TestAgentEnhancedPage() {
     }
   };
 
+  const startCreateDocumentFlow = useCallback(() => {
+    setHasSelectedTemplateInFlow(false);
+    setSelectedTemplateCard(null);
+    setSelectedTemplateCardMessageId(null);
+    const kickoffPrompt = [
+      "Can you create a document for me?",
+      "Show me available templates first and let me choose one.",
+    ].join(' ');
+    const orgContext: ChatContext = { type: 'org' };
+    setChatContext(orgContext);
+    handleSubmit(kickoffPrompt, orgContext, { deepResearchEnabled: false });
+  }, [handleSubmit]);
+
+  const handleTemplateCardSelect = useCallback((template: DocumentTemplateOption) => {
+    setHasSelectedTemplateInFlow(true);
+    setSelectedTemplateCard(template);
+    setSelectedTemplateCardMessageId(null);
+    const orgContext: ChatContext = { type: 'org' };
+    setChatContext(orgContext);
+    handleSubmit(buildTemplateSelectPrompt(template), orgContext, { deepResearchEnabled: false, skipUserMessage: true });
+  }, [handleSubmit]);
+
   return (
     <AppLayout collapseSidebar={isActionCenterPinned}>
       <div className={cn("flex w-full h-full", isActionCenterPinned && "gap-0")}>
@@ -2161,6 +2619,7 @@ export default function TestAgentEnhancedPage() {
                 if (isActionCenterOpen) {
                   setIsActionCenterOpen(false);
                   setPreviewDocId(null);
+                  setGeneratedPdfPreview(null);
                   setActionCenterCitationsMode('global');
                   setActionCenterCitations(aggregatedCitations);
                 } else {
@@ -2395,16 +2854,258 @@ export default function TestAgentEnhancedPage() {
                                 );
                               })()}
 
-                              {/* Main Response Content - Enhanced typography */}
-                              {message.content && (
-                                <div className="prose prose-sm max-w-none text-foreground dark:prose-invert [&>p]:leading-relaxed text-xs sm:text-sm break-words overflow-wrap-anywhere pl-1">
-                                  {processContentWithCitations(
-                                    message.content,
-                                    message.citations,
-                                    (citation, context) => handlePreviewFromMessage(citation, context)
-                                  )}
-                                </div>
-                              )}
+                              {(() => {
+                                const workflowSteps = buildDocumentWorkflowSteps(message, hasSelectedTemplateInFlow);
+                                if (!workflowSteps) return null;
+                                const workflowStatusLabel: Record<WorkflowStepState, string> = {
+                                  pending: 'Pending',
+                                  in_progress: 'In progress',
+                                  completed: 'Completed',
+                                  error: 'Needs attention',
+                                };
+
+                                return (
+                                  <div className="rounded-xl border border-zinc-200 bg-white p-3.5 sm:p-4 dark:border-zinc-700 dark:bg-zinc-900/60">
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400">
+                                      Document Workflow
+                                    </p>
+                                    <div className="mt-3 flex items-center gap-1.5 overflow-x-auto pb-1 sm:gap-2">
+                                      {workflowSteps.map((step, idx) => (
+                                        <React.Fragment key={step.key}>
+                                          <div
+                                            className={cn(
+                                              "flex flex-1 flex-col gap-2 rounded-xl border p-2.5 transition-all duration-300 min-w-[120px] sm:min-w-0",
+                                              step.state === 'completed' && "border-primary bg-primary text-primary-foreground shadow-sm shadow-primary/20",
+                                              step.state === 'in_progress' && "border-primary/40 bg-primary/5 text-primary dark:bg-primary/20",
+                                              step.state === 'pending' && "border-zinc-200 bg-zinc-50/50 text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/40",
+                                              step.state === 'error' && "border-destructive/30 bg-destructive/5 text-destructive dark:bg-destructive/10"
+                                            )}
+                                          >
+                                            <div className="flex items-center justify-between">
+                                              <div className={cn(
+                                                "flex h-7 w-7 items-center justify-center rounded-lg border border-current/20 bg-current/5",
+                                                step.state === 'completed' && "bg-white/10"
+                                              )}>
+                                                {step.icon}
+                                              </div>
+                                              <div className={cn(
+                                                "flex h-5 w-5 items-center justify-center rounded-full border border-current/20",
+                                                step.state === 'completed' && "bg-white/20 border-white/40"
+                                              )}>
+                                                {step.state === 'completed' ? (
+                                                  <Check className="h-2.5 w-2.5" />
+                                                ) : step.state === 'in_progress' ? (
+                                                  <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                                                ) : step.state === 'error' ? (
+                                                  <X className="h-2.5 w-2.5" />
+                                                ) : (
+                                                  <span className="h-1 w-1 rounded-full bg-current/40" />
+                                                )}
+                                              </div>
+                                            </div>
+                                            <div>
+                                              <p className="truncate text-[10px] font-bold leading-none tracking-tight sm:text-[11px]">
+                                                {step.label}
+                                              </p>
+                                              <p className="mt-1 text-[9px] font-medium opacity-70 sm:text-[10px]">
+                                                {workflowStatusLabel[step.state]}
+                                              </p>
+                                            </div>
+                                          </div>
+                                          {idx < workflowSteps.length - 1 && (
+                                            <div className="flex shrink-0 items-center justify-center px-0.5 opacity-20">
+                                              <ChevronRight className="h-4 w-4" />
+                                            </div>
+                                          )}
+                                        </React.Fragment>
+                                      ))}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+
+                              {/* Main Response Content */}
+                              {(() => {
+                                const workflow = message.metadata?.document_workflow;
+                                const templates = Array.isArray(workflow?.templates) ? workflow.templates : [];
+                                const workflowStatus = String(workflow?.status || '').toLowerCase();
+                                const showTemplateCards =
+                                  templates.length > 0 &&
+                                  TEMPLATE_SELECTOR_STATUSES.has(workflowStatus) &&
+                                  !hasSelectedTemplateInFlow;
+                                const contentForDisplay = sanitizeAssistantContentForDisplay(message);
+                                if (!contentForDisplay || showTemplateCards) return null;
+                                return (
+                                  <div className="prose prose-sm max-w-none text-foreground dark:prose-invert [&>p]:leading-relaxed text-xs sm:text-sm break-words overflow-wrap-anywhere pl-1">
+                                    {processContentWithCitations(
+                                      contentForDisplay,
+                                      message.citations,
+                                      (citation, context) => handlePreviewFromMessage(citation, context)
+                                    )}
+                                  </div>
+                                );
+                              })()}
+
+                              {(() => {
+                                const workflow = message.metadata?.document_workflow;
+                                const templates = Array.isArray(workflow?.templates) ? workflow.templates : [];
+                                const workflowStatus = String(workflow?.status || '').toLowerCase();
+                                const showTemplateCards =
+                                  templates.length > 0 &&
+                                  TEMPLATE_SELECTOR_STATUSES.has(workflowStatus) &&
+                                  !hasSelectedTemplateInFlow;
+                                if (!showTemplateCards) return null;
+
+                                return (
+                                  <div className="rounded-2xl border border-zinc-200 bg-white p-3.5 sm:p-4 dark:border-zinc-800 dark:bg-zinc-950">
+                                    <div className="mb-3 flex items-start justify-between gap-3">
+                                      <div className="min-w-0">
+                                        <div className="flex items-center gap-2 text-zinc-900 dark:text-zinc-100">
+                                          <Sparkles className="h-4 w-4 text-zinc-500 dark:text-zinc-300" />
+                                          <p className="text-sm font-semibold tracking-tight">Choose A Template</p>
+                                        </div>
+                                        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Select one template to begin your draft.</p>
+                                      </div>
+                                      <span className="shrink-0 rounded-full border border-zinc-300 bg-zinc-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+                                        {templates.length} options
+                                      </span>
+                                    </div>
+                                    <div className="-mx-1 overflow-x-auto pb-1">
+                                      <div className="flex min-w-max gap-2.5 px-1">
+                                        {templates.map((template) => (
+                                          <button
+                                            key={template.template_id}
+                                            type="button"
+                                            onClick={() => handleTemplateCardSelect(template)}
+                                            className="group w-[220px] shrink-0 rounded-xl border border-primary/20 bg-primary/5 p-3 text-left transition-all hover:-translate-y-1 hover:border-primary hover:bg-white dark:bg-primary/10 dark:hover:bg-zinc-900/80"
+                                          >
+                                            <div className="flex h-full flex-col text-zinc-900 dark:text-zinc-100">
+                                              <div className="flex items-start justify-between gap-2">
+                                                <p className="line-clamp-1 text-sm font-bold leading-tight text-primary dark:text-primary-foreground">{template.name}</p>
+                                                <span className="shrink-0 rounded-full border border-primary/30 bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary dark:bg-primary/20 dark:text-white">
+                                                  {template.badge || 'Template'}
+                                                </span>
+                                              </div>
+                                              <p className="mt-1 line-clamp-2 min-h-[32px] text-xs text-zinc-600 dark:text-zinc-300">
+                                                {template.description || 'Click to use this template in document generation.'}
+                                              </p>
+                                              <div className="mt-2 flex items-center gap-1.5">
+                                                <span className="rounded-full border border-primary/20 bg-white/50 px-2 py-0.5 text-[10px] font-semibold text-primary dark:bg-white/10 dark:text-primary-foreground">
+                                                  {template.field_count || 0} fields
+                                                </span>
+                                              </div>
+                                              <div className="mt-3 flex flex-wrap gap-1.5">
+                                                {(template.sample_field_labels || []).slice(0, 2).map((label) => (
+                                                  <span
+                                                    key={`${template.template_id}-${label}`}
+                                                    className="inline-flex max-w-[100%] items-center rounded-full border border-primary/10 bg-white/30 px-2 py-0.5 text-[9px] font-medium text-zinc-700 dark:text-zinc-300"
+                                                  >
+                                                    <span className="truncate">{label}</span>
+                                                  </span>
+                                                ))}
+                                              </div>
+                                              <div className="mt-4 flex items-center gap-1.5 text-[11px] font-bold text-primary group-hover:translate-x-1 transition-transform">
+                                                Use template <ChevronRight className="h-3 w-3" />
+                                              </div>
+                                            </div>
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+
+                              {(() => {
+                                const workflow = message.metadata?.document_workflow;
+                                const workflowStatus = String(workflow?.status || '').toLowerCase();
+                                const hasChosenTemplate = hasSelectedTemplateInFlow && Boolean(selectedTemplateCard);
+                                const isSelectionStage = TEMPLATE_SELECTOR_STATUSES.has(workflowStatus);
+                                const shouldShowInThisMessage = selectedTemplateCardMessageId === message.id;
+                                if (!hasChosenTemplate || isSelectionStage || !shouldShowInThisMessage) return null;
+                                const capturedFields = workflow?.captured_fields || {};
+                                const hasCapturedValues = Object.values(capturedFields).some((value) => String(value || '').trim().length > 0);
+                                return (
+                                  <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 dark:bg-primary/10">
+                                    <div className="flex items-center justify-between gap-3">
+                                      <div className="min-w-0">
+                                        <p className="truncate text-sm font-bold text-primary">
+                                          {selectedTemplateCard?.name}
+                                        </p>
+                                        <p className="truncate text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                                          {selectedTemplateCard?.badge || 'Template'}
+                                        </p>
+                                      </div>
+                                      <span className="shrink-0 rounded-full border border-primary bg-primary px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white shadow-sm shadow-primary/20">
+                                        Selected
+                                      </span>
+                                    </div>
+                                    {!hasCapturedValues ? (
+                                      <p className="mt-2 text-xs text-zinc-700 dark:text-zinc-300">
+                                        Add your details in one message, or type <span className="font-bold text-primary">autofill</span> to complete it instantly.
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                );
+                              })()}
+
+                              {(() => {
+                                const generatedDoc = message.metadata?.generated_document;
+                                if (!generatedDoc) return null;
+                                const previewUrl = getGeneratedDocumentPreviewUrl(generatedDoc);
+                                const downloadUrl = getGeneratedDocumentDownloadUrl(generatedDoc);
+                                if (!previewUrl && !downloadUrl) return null;
+                                return (
+                                  <div className="rounded-xl border border-zinc-300 bg-white p-3 sm:p-4">
+                                    <div className="flex items-start gap-3">
+                                      <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-100 text-zinc-700">
+                                        <FileText className="h-4 w-4" />
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                        <p className="text-sm font-semibold text-zinc-900">
+                                          {generatedDoc.title || 'Generated PDF draft'}
+                                        </p>
+                                        <p className="text-xs text-zinc-500">
+                                          {generatedDoc.file_name || 'sales-deed.pdf'}
+                                        </p>
+                                        <div className="mt-3 flex flex-wrap gap-2">
+                                          {previewUrl ? (
+                                            <a
+                                              href={previewUrl}
+                                              className={cn(
+                                                "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors",
+                                                "border-border bg-background",
+                                                themeColors.primary,
+                                                themeColors.iconBg,
+                                                themeColors.buttonHover
+                                              )}
+                                              onClick={(event) => {
+                                                event.preventDefault();
+                                                handlePreviewGeneratedPdf(generatedDoc);
+                                              }}
+                                            >
+                                              <Eye className="h-3.5 w-3.5" />
+                                              Preview In Sidebar
+                                            </a>
+                                          ) : null}
+                                          {downloadUrl ? (
+                                            <a
+                                              href={downloadUrl}
+                                              className={cn(
+                                                "inline-flex h-8 items-center gap-1.5 rounded-full border border-transparent px-3 text-xs font-medium text-white transition-colors",
+                                                themeColors.buttonBg
+                                              )}
+                                            >
+                                              <Download className="h-3.5 w-3.5" />
+                                              Download
+                                            </a>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })()}
 
                               {message.metadata?.list_mode && Array.isArray(message.metadata?.results_data) && message.metadata.results_data.length > 0 && (
                                 <DocumentResultsTable
@@ -2507,6 +3208,9 @@ export default function TestAgentEnhancedPage() {
                       documents={documentOptions}
                       defaultMode={chatContext.type === 'folder' ? 'folder' : chatContext.type === 'document' ? 'document' : 'all'}
                       defaultWebSearch={webSearchEnabled}
+                      defaultDeepResearch={deepResearchEnabled}
+                      deepResearchEnabled={deepResearchEnabled}
+                      onDeepResearchChange={setDeepResearchEnabled}
                       webSearch={webSearchEnabled}
                       onWebSearchChange={handleWebSearchChange}
                       defaultFolderId={selectedFolderId}
@@ -2515,6 +3219,7 @@ export default function TestAgentEnhancedPage() {
                       pinnedDocIds={pinnedDocIds}
                       onPinnedDocIdsChange={handlePinnedDocIdsChange}
                       onRequestFilePicker={() => setFileNavigatorOpen(true)}
+                      onRequestCreateDraftDocument={startCreateDocumentFlow}
                       placeholder={
                         chatContext.type === 'document'
                           ? `Ask about "${chatContext.name || 'this document'}"...`
@@ -2523,7 +3228,7 @@ export default function TestAgentEnhancedPage() {
                             : 'Ask about clauses, dates, people, risks, or compliance...'
                       }
                       sending={isLoading}
-                      onSend={({ text, mode, folderId, documentId, folderName, documentName, webSearch }) => {
+                      onSend={({ text, mode, folderId, documentId, folderName, documentName, webSearch, deepResearch }) => {
                         let nextContext: ChatContext = { type: 'org' };
                         if (mode === 'folder' && folderId) {
                           const path = folderId.split('/').filter(Boolean);
@@ -2538,7 +3243,8 @@ export default function TestAgentEnhancedPage() {
                         }
                         setChatContext(nextContext);
                         setWebSearchEnabled(webSearch);
-                        handleSubmit(text, nextContext);
+                        setDeepResearchEnabled(deepResearch);
+                        handleSubmit(text, nextContext, { deepResearchEnabled: deepResearch });
                       }}
                     />
                   </div>
@@ -2603,6 +3309,9 @@ export default function TestAgentEnhancedPage() {
                       documents={documentOptions}
                       defaultMode={chatContext.type === 'folder' ? 'folder' : chatContext.type === 'document' ? 'document' : 'all'}
                       defaultWebSearch={webSearchEnabled}
+                      defaultDeepResearch={deepResearchEnabled}
+                      deepResearchEnabled={deepResearchEnabled}
+                      onDeepResearchChange={setDeepResearchEnabled}
                       webSearch={webSearchEnabled}
                       onWebSearchChange={handleWebSearchChange}
                       defaultFolderId={selectedFolderId}
@@ -2611,6 +3320,7 @@ export default function TestAgentEnhancedPage() {
                       pinnedDocIds={pinnedDocIds}
                       onPinnedDocIdsChange={handlePinnedDocIdsChange}
                       onRequestFilePicker={() => setFileNavigatorOpen(true)}
+                      onRequestCreateDraftDocument={startCreateDocumentFlow}
                       placeholder={
                         chatContext.type === 'document'
                           ? `Ask about "${chatContext.name || 'this document'}"...`
@@ -2619,7 +3329,7 @@ export default function TestAgentEnhancedPage() {
                             : 'Ask about clauses, dates, people, risks, or compliance...'
                       }
                       sending={isLoading}
-                      onSend={({ text, mode, folderId, documentId, folderName, documentName, webSearch }) => {
+                      onSend={({ text, mode, folderId, documentId, folderName, documentName, webSearch, deepResearch }) => {
                         let nextContext: ChatContext = { type: 'org' };
                         if (mode === 'folder' && folderId) {
                           const path = folderId.split('/').filter(Boolean);
@@ -2634,7 +3344,8 @@ export default function TestAgentEnhancedPage() {
                         }
                         setChatContext(nextContext);
                         setWebSearchEnabled(webSearch);
-                        handleSubmit(text, nextContext);
+                        setDeepResearchEnabled(deepResearch);
+                        handleSubmit(text, nextContext, { deepResearchEnabled: deepResearch });
                       }}
                     />
                   </div>
@@ -2711,6 +3422,7 @@ export default function TestAgentEnhancedPage() {
                 setPreviewDocId(null);
                 setPreviewDocPage(null);
                 setPreviewCitation(null);
+                setGeneratedPdfPreview(null);
                 setIsActionCenterPinned(false);
               }
             }}
@@ -2731,6 +3443,8 @@ export default function TestAgentEnhancedPage() {
             memoryDocIds={teamMemory}
             citations={actionCenterCitations}
             allDocuments={allDocs}
+            generatedPdfPreview={generatedPdfPreview}
+            onClearGeneratedPdfPreview={() => setGeneratedPdfPreview(null)}
             activeTab={actionCenterTab}
             onTabChange={setActionCenterTab}
             citationsMode={actionCenterCitationsMode}
@@ -2752,6 +3466,7 @@ export default function TestAgentEnhancedPage() {
               setPreviewDocId(null);
               setPreviewDocPage(null);
               setPreviewCitation(null);
+              setGeneratedPdfPreview(null);
               setIsActionCenterPinned(false);
             }
           }}
@@ -2771,6 +3486,8 @@ export default function TestAgentEnhancedPage() {
           memoryDocIds={teamMemory}
           citations={actionCenterCitations}
           allDocuments={allDocs}
+          generatedPdfPreview={generatedPdfPreview}
+          onClearGeneratedPdfPreview={() => setGeneratedPdfPreview(null)}
           activeTab={actionCenterTab}
           onTabChange={setActionCenterTab}
           citationsMode={actionCenterCitationsMode}
