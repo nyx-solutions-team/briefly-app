@@ -59,6 +59,8 @@ const BASE_LINKS: NavLink[] = [
 const MORE_LINKS: NavLink[] = [
   { href: "/editor", label: "Document Studio", Icon: FileText, permission: "documents.read" },
   { href: "/approvals", label: "Approvals", Icon: FileText, permission: "documents.read" },
+  // Hidden for now. Keep config commented for easy restore.
+  // { href: "/workflows", label: "Workflows", Icon: Workflow, permission: "documents.read" },
   { href: "/audit", label: "Activity", Icon: Activity, permission: "pages.activity" },
   { href: "/queue", label: "Queue", Icon: ListChecks, permission: "pages.queue" },
   { href: "/recycle-bin", label: "Recycle Bin", Icon: Trash2, permission: "pages.recycle_bin" },

@@ -11,7 +11,6 @@ import {
   Wrench,
   PlusSquare,
   ListChecks,
-  Workflow,
   // Settings icons
   ArrowLeft,
   User,
@@ -43,8 +42,7 @@ const mainLinks = [
   { href: '/dashboard', label: 'Dashboard', Icon: LayoutDashboard },
   { href: '/documents', label: 'Folders', Icon: Folder },
   { href: '/documents/upload', label: 'Upload Document', Icon: CloudUpload },
-  // Temporarily hidden for deployment. Keep entry for easy restore.
-  // { href: '/approvals', label: 'Approvals', Icon: PlusSquare, permission: 'documents.read' },
+  { href: '/approvals', label: 'Approvals', Icon: PlusSquare, permission: 'documents.read' },
   { href: '/queue', label: 'Queue', Icon: ListChecks },
   { href: '/audit', label: 'Activity', Icon: Activity },
   { href: '/recycle-bin', label: 'Recycle Bin', Icon: Trash2 },
@@ -53,7 +51,8 @@ const mainLinks = [
 // Admin-only links
 const adminLinks = [
   { href: '/editor', label: 'Document Studio', Icon: FileText, permission: 'documents.read' },
-  { href: '/workflows', label: 'Workflows', Icon: Workflow, permission: 'documents.read' },
+  // Hidden for now. Keep config commented for easy restore.
+  // { href: '/workflows', label: 'Workflows', Icon: Workflow, permission: 'documents.read' },
   { href: '/chat', label: 'Chat Bot', Icon: Wrench },
 ];
 
