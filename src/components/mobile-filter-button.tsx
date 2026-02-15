@@ -24,6 +24,8 @@ type MobileFilterButtonProps = {
   activeCount?: number;
   className?: string;
   footer?: React.ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 };
 
 type FilterSectionProps = {
@@ -73,8 +75,18 @@ export function MobileFilterButton({
   activeCount = 0,
   className,
   footer,
+  open: openProp,
+  onOpenChange,
 }: MobileFilterButtonProps) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = openProp ?? internalOpen;
+
+  const setOpen = (nextOpen: boolean) => {
+    if (openProp === undefined) {
+      setInternalOpen(nextOpen);
+    }
+    onOpenChange?.(nextOpen);
+  };
 
   return (
     <>
@@ -134,4 +146,3 @@ export function MobileFilterButton({
     </>
   );
 }
-

@@ -284,6 +284,7 @@ export default function AuditPage() {
   const defaultStart = fmt(new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000));
 
   const [q, setQ] = useState("");
+  const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
   const [mobileFilterView, setMobileFilterView] = useState<'main' | 'types' | 'actors' | 'date'>('main');
   const [typesMode, setTypesMode] = useState<FilterMode>("all");
   const [actorsMode, setActorsMode] = useState<FilterMode>("all");
@@ -913,6 +914,13 @@ export default function AuditPage() {
                 title="Filter Activity"
                 description="Filter by type, people, and date range"
                 activeCount={mobileActiveCount}
+                open={mobileFilterOpen}
+                onOpenChange={(nextOpen) => {
+                  setMobileFilterOpen(nextOpen);
+                  if (!nextOpen) {
+                    setMobileFilterView("main");
+                  }
+                }}
                 footer={
                   <div className="flex flex-col gap-3">
                     <div className="flex gap-3">
@@ -920,7 +928,11 @@ export default function AuditPage() {
                         variant="default"
                         className="flex-1 h-11 rounded-2xl font-bold tracking-tight shadow-md"
                         disabled={isLoading || dateMode === "pending"}
-                        onClick={() => reloadWithFilters(1)}
+                        onClick={() => {
+                          reloadWithFilters(1);
+                          setMobileFilterOpen(false);
+                          setMobileFilterView("main");
+                        }}
                       >
                         {isLoading ? (
                           <Loader2 className="h-4 w-4 animate-spin mr-2" />
@@ -949,6 +961,8 @@ export default function AuditPage() {
                           setActorsPick([]);
                           resetDateRange();
                           reloadWithFilters(1);
+                          setMobileFilterOpen(false);
+                          setMobileFilterView("main");
                         }}
                         className="text-xs font-semibold text-muted-foreground hover:text-primary transition-colors py-1 flex items-center justify-center gap-1.5"
                       >
@@ -1059,7 +1073,7 @@ export default function AuditPage() {
                                 </div>
                                 <span className="text-sm font-bold">All Activity Types</span>
                               </div>
-                              <Checkbox checked={typesMode === "all"} onCheckedChange={() => toggleAllTypes()} />
+                              <Checkbox checked={typesMode === "all"} />
                             </div>
 
                             <div className="grid gap-1.5">
@@ -1085,7 +1099,6 @@ export default function AuditPage() {
                                     </div>
                                     <Checkbox
                                       checked={checked}
-                                      onCheckedChange={() => toggleType(key)}
                                       className={cn("transition-opacity", (typesMode === "all" && !selectedTypes.includes(key)) ? "opacity-30" : "opacity-100")}
                                     />
                                   </div>
@@ -1110,7 +1123,7 @@ export default function AuditPage() {
                                 </div>
                                 <span className="text-sm font-bold">All People</span>
                               </div>
-                              <Checkbox checked={actorsMode === "all"} onCheckedChange={() => toggleAllActors()} />
+                              <Checkbox checked={actorsMode === "all"} />
                             </div>
 
                             <div className="grid gap-1">
@@ -1131,7 +1144,7 @@ export default function AuditPage() {
                                       onClick={() => toggleActor(a.id)}
                                     >
                                       <UserAvatar email={a.email} name={a.name} />
-                                      <Checkbox checked={checked} onCheckedChange={() => toggleActor(a.id)} />
+                                      <Checkbox checked={checked} />
                                     </div>
                                   );
                                 })
