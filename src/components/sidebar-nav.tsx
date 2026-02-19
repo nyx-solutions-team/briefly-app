@@ -57,7 +57,7 @@ const mainLinks = [
 const adminLinks = [
   { href: '/approvals', label: 'Approvals', Icon: PlusSquare, permission: 'documents.read' },
   { href: '/editor', label: 'Document Studio', Icon: FileText, permission: 'documents.read' },
-  { href: '/workflows', label: 'Workflows', Icon: Workflow, permission: 'documents.read' },
+  // { href: '/workflows', label: 'Workflows', Icon: Workflow, permission: 'documents.read' }, // Hidden — not ready for production
   { href: '/chat', label: 'Chat Bot', Icon: Wrench },
 ];
 
@@ -319,36 +319,8 @@ export default function SidebarNav() {
     );
   }
 
-  // Workflows sidebar
-  if (isWorkflows) {
-    const isWorkflowRouteActive = (href: string) => {
-      if (href === '/workflows') return pathname === '/workflows';
-      if (href === '/workflows/run') return pathname === '/workflows/run';
-      if (href === '/workflows/history') return pathname === '/workflows/history';
-      if (href === '/workflows/templates') return pathname === '/workflows/templates';
-      if (href === '/workflows/my-workflows') return pathname === '/workflows/my-workflows';
-      if (href === '/workflows/builder') return pathname === '/workflows/builder';
-      return pathname === href;
-    };
-
-    return (
-      <SidebarMenu className="px-2 py-1">
-        <BackNavItem href="/dashboard" label="Back to app" />
-
-        <div className="my-2 h-px bg-sidebar-border/30 group-data-[collapsible=icon]:mx-1" />
-        <SectionLabel>Workflows</SectionLabel>
-        {workflowLinks.map(({ href, label, Icon }) => (
-          <NavItem
-            key={href}
-            href={href}
-            label={label}
-            Icon={Icon}
-            isActive={isWorkflowRouteActive(href)}
-          />
-        ))}
-      </SidebarMenu>
-    );
-  }
+  // Workflows sidebar — hidden from production
+  // if (isWorkflows) { ... }
 
   // Filter main links based on permissions
   const visibleMainLinks = mainLinks.filter(({ href }) => {
