@@ -180,6 +180,10 @@ const SUPPORTED_EXTENSIONS = new Set([
   '.csv',
   '.xls',
   '.xlsx',
+  '.docx',
+  '.doc',
+  '.dwg',
+  '.dxf',
 ]);
 const SYSTEM_FILE_PATTERNS = [/^__MACOSX\//i, /\.DS_Store$/i];
 const MIME_MAP: Record<string, string> = {
@@ -193,6 +197,10 @@ const MIME_MAP: Record<string, string> = {
   '.csv': 'text/csv',
   '.xls': 'application/vnd.ms-excel',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.doc': 'application/msword',
+  '.dwg': 'application/octet-stream',
+  '.dxf': 'application/octet-stream',
 };
 
 const normalizeSegment = (segment: string) => {
@@ -2195,7 +2203,7 @@ function UploadContent() {
   const hasSuccess = useMemo(() => queue.some(q => q.status === 'success'), [queue]);
   const hasProcessable = useMemo(() => queue.some(q => q.status === 'idle'), [queue]);
   const allSaved = useMemo(() => queue.length > 0 && queue.every(q => q.status === 'success'), [queue]);
-  
+
   // Status counts for bulk upload display
   const statusCounts = useMemo(() => {
     const total = queue.length;
@@ -2801,7 +2809,9 @@ function UploadContent() {
                     { type: 'XLS', color: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30' },
                     { type: 'XLSX', color: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30' },
                     { type: 'JPG', color: 'bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/30' },
-                    { type: 'PNG', color: 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border-cyan-500/30' }
+                    { type: 'PNG', color: 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border-cyan-500/30' },
+                    { type: 'DOCX', color: 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30' },
+                    { type: 'DWG', color: 'bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/30' },
                   ].map(({ type, color }) => (
                     <span key={type} className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${color}`}>
                       {type}
@@ -2824,7 +2834,7 @@ function UploadContent() {
                     ref={inputRef}
                     type="file"
                     multiple
-                    accept=".pdf,.txt,.md,.jpg,.jpeg,.png,.csv,.xls,.xlsx,application/pdf,text/plain,text/markdown,image/jpeg,image/png,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    accept=".pdf,.txt,.md,.markdown,.jpg,.jpeg,.png,.csv,.xls,.xlsx,.docx,.doc,.dwg,.dxf"
                     className="hidden"
                     onChange={(e) => e.target.files && onSelect(e.target.files)}
                     onClick={(e) => e.stopPropagation()}
@@ -2877,7 +2887,7 @@ function UploadContent() {
                   </Button>
                 </div>
                 <p className="mt-6 text-xs text-muted-foreground">
-                  Supports up to {BULK_UPLOAD_LIMIT} files per bulk upload (PDF, TXT/MD, CSV/XLS/XLSX, JPG, PNG). Individual files must be under {BULK_UPLOAD_MAX_FILE_MB}MB.
+                  Supports up to {BULK_UPLOAD_LIMIT} files per bulk upload (PDF, TXT/MD, CSV/XLS/XLSX, JPG, PNG, DOCX, DWG). Individual files must be under {BULK_UPLOAD_MAX_FILE_MB}MB.
                 </p>
                 {/* Upload Status Summary */}
                 {queue.length > 0 && (
@@ -2893,12 +2903,12 @@ function UploadContent() {
                         {statusCounts.progress}% Complete
                       </div>
                     </div>
-                    
+
                     {/* Progress Bar */}
                     <div className="w-full">
                       <Progress value={statusCounts.progress} className="h-2" />
                     </div>
-                    
+
                     {/* Status Breakdown */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
                       <div className="flex items-center gap-2">
@@ -2934,7 +2944,7 @@ function UploadContent() {
                     </div>
                   </div>
                 )}
-                
+
                 {(lastBulkSummary || skipDetails) && (
                   <div className="mt-4 w-full rounded-md border bg-muted/30 p-3 text-xs space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3162,10 +3172,10 @@ function UploadContent() {
                                     </Button>
                                   )}
                                   {readyCount > 0 && (
-                                    <Button 
-                                      size="sm" 
-                                      onClick={saveAllReady} 
-                                      disabled={isSavingAll || planBlocked} 
+                                    <Button
+                                      size="sm"
+                                      onClick={saveAllReady}
+                                      disabled={isSavingAll || planBlocked}
                                       className="h-7 gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs"
                                     >
                                       {isSavingAll ? (

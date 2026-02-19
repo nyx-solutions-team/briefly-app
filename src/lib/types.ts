@@ -1,7 +1,7 @@
 export type Document = {
   id: string;
   name: string;
-  type: 'PDF' | 'Image' | 'Word' | 'Government Circular' | 'Invoice' | 'folder';
+  type: 'PDF' | 'Image' | 'Word' | 'Drawing' | 'Government Circular' | 'Invoice' | 'folder';
   uploadedAt: Date;
   version: number; // legacy field; prefer versionNumber
   keywords: string[];

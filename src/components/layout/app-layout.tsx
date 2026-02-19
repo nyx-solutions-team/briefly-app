@@ -164,7 +164,7 @@ export default function AppLayout({ children, collapseSidebar = false, flush = f
           </SidebarMenu>
         </SidebarFooter>
       </Sidebar>
-      <SidebarInset className={cn("pb-20 md:pb-0", flush && "m-0 ml-0 md:m-0 md:ml-0 rounded-none shadow-none")}>{children}</SidebarInset>
+      <SidebarInset className={cn("pb-20 md:pb-0", flush && "m-0 ml-0 md:m-0 md:ml-0 rounded-none shadow-none h-svh overflow-hidden min-h-0")}>{children}</SidebarInset>
       <MobileTabBar />
     </SidebarProvider>
   );

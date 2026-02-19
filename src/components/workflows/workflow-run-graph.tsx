@@ -34,12 +34,14 @@ function nodePositionKey(node: WorkflowGraphNode): string {
   return key || String(node.id);
 }
 
-function buildResponsivePositions(nodes: WorkflowGraphNode[], canvasWidth: number) {
+function buildLinearPositions(nodes: WorkflowGraphNode[], canvasWidth: number, canvasHeight: number) {
   const out = new Map<string, { x: number; y: number }>();
   if (!nodes.length) return out;
 
   const innerWidth = Math.max(CARD_WIDTH, canvasWidth - (LAYOUT_PADDING_X * 2));
   const columns = Math.max(1, Math.floor((innerWidth + LAYOUT_HORIZONTAL_GAP) / (CARD_WIDTH + LAYOUT_HORIZONTAL_GAP)));
+  const innerHeight = Math.max(CARD_HEIGHT, canvasHeight - (LAYOUT_PADDING_Y * 2));
+  const rowHeight = CARD_HEIGHT + Math.round(LAYOUT_VERTICAL_GAP * 0.7);
 
   let cursor = 0;
   let row = 0;
@@ -47,18 +49,109 @@ function buildResponsivePositions(nodes: WorkflowGraphNode[], canvasWidth: numbe
     const itemsInRow = Math.min(columns, nodes.length - cursor);
     const rowWidth = (itemsInRow * CARD_WIDTH) + (Math.max(0, itemsInRow - 1) * LAYOUT_HORIZONTAL_GAP);
     const rowOffset = LAYOUT_PADDING_X + Math.max(0, Math.round((innerWidth - rowWidth) / 2));
+    const rowsNeeded = Math.max(1, Math.ceil(nodes.length / columns));
+    const totalHeight = (rowsNeeded * CARD_HEIGHT) + (Math.max(0, rowsNeeded - 1) * Math.round(LAYOUT_VERTICAL_GAP * 0.7));
+    const startY = LAYOUT_PADDING_Y + Math.max(0, Math.round((innerHeight - totalHeight) / 2));
 
     for (let col = 0; col < itemsInRow; col += 1) {
       const visualCol = row % 2 === 0 ? col : (itemsInRow - 1 - col);
       const node = nodes[cursor + col];
       out.set(node.id, {
         x: rowOffset + (visualCol * (CARD_WIDTH + LAYOUT_HORIZONTAL_GAP)),
-        y: LAYOUT_PADDING_Y + (row * (CARD_HEIGHT + LAYOUT_VERTICAL_GAP)),
+        y: startY + (row * rowHeight),
       });
     }
 
     cursor += itemsInRow;
     row += 1;
+  }
+
+  return out;
+}
+
+function buildDagPositions(
+  nodes: WorkflowGraphNode[],
+  edges: WorkflowGraphEdge[],
+  canvasWidth: number,
+  canvasHeight: number
+) {
+  const out = new Map<string, { x: number; y: number }>();
+  if (!nodes.length) return out;
+
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const inDegree = new Map(nodes.map((node) => [node.id, 0]));
+  const outgoing = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  const level = new Map<string, number>();
+
+  for (const edge of edges || []) {
+    const from = String(edge?.from || "").trim();
+    const to = String(edge?.to || "").trim();
+    if (!from || !to || from === to) continue;
+    if (!nodeById.has(from) || !nodeById.has(to)) continue;
+    outgoing.get(from)?.push(to);
+    inDegree.set(to, Number(inDegree.get(to) || 0) + 1);
+  }
+
+  const queue = nodes
+    .filter((node) => Number(inDegree.get(node.id) || 0) === 0)
+    .sort((a, b) => a.index - b.index)
+    .map((node) => node.id);
+  for (const id of queue) level.set(id, 0);
+
+  while (queue.length > 0) {
+    const currentId = queue.shift() as string;
+    const currentLevel = Number(level.get(currentId) || 0);
+    for (const nextId of outgoing.get(currentId) || []) {
+      const previousLevel = Number(level.get(nextId) || 0);
+      if (currentLevel + 1 > previousLevel) {
+        level.set(nextId, currentLevel + 1);
+      }
+      inDegree.set(nextId, Number(inDegree.get(nextId) || 0) - 1);
+      if (Number(inDegree.get(nextId) || 0) === 0) {
+        queue.push(nextId);
+        queue.sort((a, b) => (nodeById.get(a)?.index || 0) - (nodeById.get(b)?.index || 0));
+      }
+    }
+  }
+
+  // Keep disconnected/cyclic leftovers visible by assigning fallback columns.
+  let fallbackLevel = Math.max(0, ...Array.from(level.values(), (v) => Number(v || 0)));
+  for (const node of nodes) {
+    if (level.has(node.id)) continue;
+    fallbackLevel += 1;
+    level.set(node.id, fallbackLevel);
+  }
+
+  const grouped = new Map<number, WorkflowGraphNode[]>();
+  for (const node of nodes) {
+    const column = Number(level.get(node.id) || 0);
+    if (!grouped.has(column)) grouped.set(column, []);
+    grouped.get(column)?.push(node);
+  }
+  for (const list of grouped.values()) {
+    list.sort((a, b) => a.index - b.index);
+  }
+
+  const columns = Array.from(grouped.keys()).sort((a, b) => a - b);
+  const maxColumn = columns.length > 0 ? columns[columns.length - 1] : 0;
+  const horizontalStep = CARD_WIDTH + LAYOUT_HORIZONTAL_GAP;
+  const verticalGap = Math.round(LAYOUT_VERTICAL_GAP * 0.58);
+  const requiredWidth = ((maxColumn + 1) * CARD_WIDTH) + (maxColumn * LAYOUT_HORIZONTAL_GAP);
+  const innerWidth = Math.max(CARD_WIDTH, canvasWidth - (LAYOUT_PADDING_X * 2));
+  const xBase = LAYOUT_PADDING_X + Math.max(0, Math.round((innerWidth - requiredWidth) / 2));
+  const innerHeight = Math.max(CARD_HEIGHT, canvasHeight - (LAYOUT_PADDING_Y * 2));
+
+  for (const column of columns) {
+    const list = grouped.get(column) || [];
+    const colHeight = (list.length * CARD_HEIGHT) + (Math.max(0, list.length - 1) * verticalGap);
+    const yBase = LAYOUT_PADDING_Y + Math.max(0, Math.round((innerHeight - colHeight) / 2));
+    for (let i = 0; i < list.length; i += 1) {
+      const node = list[i];
+      out.set(node.id, {
+        x: xBase + (column * horizontalStep),
+        y: yBase + (i * (CARD_HEIGHT + verticalGap)),
+      });
+    }
   }
 
   return out;
@@ -164,8 +257,10 @@ export function WorkflowRunGraph({
   }, []);
 
   const autoPositions = React.useMemo(
-    () => buildResponsivePositions(nodes, canvasSize.width),
-    [canvasSize.width, nodes]
+    () => ((edges || []).length > 0
+      ? buildDagPositions(nodes, edges, canvasSize.width, canvasSize.height)
+      : buildLinearPositions(nodes, canvasSize.width, canvasSize.height)),
+    [canvasSize.height, canvasSize.width, edges, nodes]
   );
 
   React.useEffect(() => {
@@ -206,7 +301,7 @@ export function WorkflowRunGraph({
   const contentWidth = Math.max(canvasSize.width, maxX);
   const contentHeight = Math.max(canvasSize.height, maxY);
 
-  const startNodeDrag = (event: React.MouseEvent<HTMLButtonElement>, nodeId: string) => {
+  const startNodeDrag = (event: React.MouseEvent<HTMLDivElement>, nodeId: string) => {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
@@ -343,12 +438,18 @@ export function WorkflowRunGraph({
             const nodeStatus = String(node.status || "pending").toLowerCase();
             const isActive = nodeStatus === "running" || nodeStatus === "waiting";
             return (
-              <button
+              <div
                 key={node.id}
                 data-node-card="true"
-                type="button"
+                role="button"
+                tabIndex={0}
                 onMouseDown={(event) => startNodeDrag(event, node.id)}
                 onClick={() => onSelectNode(node.id)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  onSelectNode(node.id);
+                }}
                 className={cn(
                   "absolute rounded-xl border p-3 text-left transition-all",
                   selected
@@ -382,7 +483,7 @@ export function WorkflowRunGraph({
                   </Badge>
                   <div className="text-[11px] text-muted-foreground">{formatDurationMs(node.durationMs)}</div>
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>

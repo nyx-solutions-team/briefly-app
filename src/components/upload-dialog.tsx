@@ -181,27 +181,41 @@ export default function UploadDialog({ onNewDocument }: { onNewDocument: (doc: S
     }
   }, [departments, selectedDepartmentId, setSelectedDepartmentId]);
 
+  const ALLOWED_EXTENSIONS = new Set(['pdf', 'txt', 'md', 'markdown', 'jpg', 'jpeg', 'png', 'csv', 'xls', 'xlsx', 'docx', 'doc', 'dwg', 'dxf']);
+
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = event.target.files?.[0];
     if (selectedFile) {
+      // Validate by extension — more reliable than MIME type on Windows
+      const ext = selectedFile.name.split('.').pop()?.toLowerCase() || '';
+      if (!ALLOWED_EXTENSIONS.has(ext)) {
+        toast({
+          title: 'File type not supported',
+          description: `".${ext}" files cannot be uploaded. Supported: PDF, TXT, MD, CSV, XLS/XLSX, JPG, PNG, DOCX, DWG/DXF.`,
+          variant: 'destructive',
+        });
+        if (event.target) event.target.value = '';
+        return;
+      }
+
       // Check file size limit (50MB)
-      const maxSizeBytes = 50 * 1024 * 1024; // 50MB in bytes
+      const maxSizeBytes = 50 * 1024 * 1024;
       if (selectedFile.size > maxSizeBytes) {
         toast({
           title: 'File too large',
           description: `Files must be smaller than 50MB. Your file is ${(selectedFile.size / 1024 / 1024).toFixed(1)}MB.`,
-          variant: 'destructive'
+          variant: 'destructive',
         });
-        // Clear the file input
         if (event.target) event.target.value = '';
         return;
       }
 
       setFile(selectedFile);
       setFileName(selectedFile.name);
-      const extension = selectedFile.name.split('.').pop()?.toLowerCase();
       let docType: Document['type'] = 'PDF';
-      if (['png', 'jpg', 'jpeg'].includes(extension || '')) docType = 'Image';
+      if (['png', 'jpg', 'jpeg'].includes(ext)) docType = 'Image';
+      if (['docx', 'doc'].includes(ext)) docType = 'Word';
+      if (['dwg', 'dxf'].includes(ext)) docType = 'Drawing';
       setFileType(docType);
       setStatus('idle');
       setProgress(0);
@@ -373,7 +387,23 @@ export default function UploadDialog({ onNewDocument }: { onNewDocument: (doc: S
   const renderStatus = () => {
     switch (status) {
       case 'uploading': return (<div className="space-y-4 text-center"><p>Uploading {fileName}...</p><Progress value={progress} /></div>);
-      case 'processing': return (<div className="space-y-4 text-center flex flex-col items-center"><Loader className="h-10 w-10 animate-spin text-primary" /><p>Processing document with AI...</p><p className="text-sm text-muted-foreground">Extracting metadata and performing OCR.</p></div>);
+      case 'processing': {
+        const isDwgFile = fileType === 'Drawing';
+        const isDocxFile = fileType === 'Word';
+        return (
+          <div className="space-y-4 text-center flex flex-col items-center">
+            <Loader className="h-10 w-10 animate-spin text-primary" />
+            <p>{isDwgFile ? 'Storing CAD file...' : isDocxFile ? 'Processing document...' : 'Processing document with AI...'}</p>
+            <p className="text-sm text-muted-foreground">
+              {isDwgFile
+                ? 'CAD drawing files are stored as-is. No text extraction is performed.'
+                : isDocxFile
+                  ? 'Extracting text from Word document and generating metadata.'
+                  : 'Extracting metadata and performing OCR.'}
+            </p>
+          </div>
+        );
+      }
       case 'success': return (<div className="space-y-4 text-center flex flex-col items-center"><CheckCircle className="h-10 w-10 text-green-500" /><p className='font-semibold'>Upload Successful!</p><p className="text-sm text-muted-foreground">{fileName} has been stored.</p></div>);
       case 'error': return (<div className="space-y-4 text-center flex flex-col items-center"><AlertTriangle className="h-10 w-10 text-destructive" /><p className='font-semibold'>Upload Failed</p><p className="text-sm text-muted-foreground">Could not process {fileName}. Please try again.</p></div>);
       default: return (
@@ -437,14 +467,14 @@ export default function UploadDialog({ onNewDocument }: { onNewDocument: (doc: S
               <UploadCloud className="h-10 w-10 text-muted-foreground" />
               <span className="font-semibold text-primary">Click to upload</span>
               <span className="text-sm text-muted-foreground">or drag and drop</span>
-              <span className="text-xs text-muted-foreground">PDF, TXT, MD, CSV/XLS/XLSX, JPG, PNG</span>
+              <span className="text-xs text-muted-foreground">PDF, TXT, MD, CSV/XLS/XLSX, JPG, PNG, DOCX, DWG</span>
               <input
                 ref={fileInputRef}
                 id="file-upload"
                 type="file"
                 className="sr-only"
                 onChange={handleFileChange}
-                accept=".pdf,.txt,.md,.jpg,.jpeg,.png,.csv,.xls,.xlsx,application/pdf,text/plain,text/markdown,image/jpeg,image/png,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                accept=".pdf,.txt,.md,.markdown,.jpg,.jpeg,.png,.csv,.xls,.xlsx,.docx,.doc,.dwg,.dxf"
               />
             </label>
             {fileName && (
@@ -461,7 +491,7 @@ export default function UploadDialog({ onNewDocument }: { onNewDocument: (doc: S
 
   // Check if user has permission to create documents
   const canCreateDocuments = hasPermission('documents.create');
-  
+
   // If user doesn't have upload permission, show disabled button with tooltip
   if (!canCreateDocuments) {
     return (

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,11 +17,9 @@ import { apiFetch, getApiContext } from "@/lib/api";
 import { buildDefinitionGraph, buildLiveRunGraph, detectCurrentStepId, friendlyNodeLabel } from "@/lib/workflow-view-model";
 import type { StoredDocument } from "@/lib/types";
 import {
-  assignWorkflowTask,
   completeWorkflowTask,
   getWorkflowRun,
   getWorkflowTemplateDefinition,
-  listOpenWorkflowTasks,
   listWorkflowTemplates,
   runWorkflowManual,
   type WorkflowTemplate,
@@ -47,7 +46,7 @@ type DocItem = {
 
 type StudioState = "setup" | "running" | "results" | "review";
 type RulesTab = "issues" | "all";
-type RequirementKind = "doc" | "doc_list" | "text";
+type RequirementKind = "doc" | "doc_list" | "text" | "folder";
 type InputRequirement = {
   key: string;
   label: string;
@@ -62,6 +61,17 @@ function normalizeFolderPath(row: any): string[] {
   if (typeof row?.folderPath === "string") return row.folderPath.split("/").filter(Boolean);
   if (typeof row?.folder_path === "string") return row.folder_path.split("/").filter(Boolean);
   return [];
+}
+
+function normalizeFolderValue(value: any): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+  if (typeof value === "string") return value.split("/").map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
+function formatFolderPath(path: string[]): string {
+  if (!Array.isArray(path) || path.length === 0) return "/";
+  return `/${path.join("/")}`;
 }
 
 function trimMiddle(value: string, max = 54) {
@@ -116,9 +126,13 @@ function runningLine(nodeTypeRaw: string, subjectCount: number): string {
   if (nodeType === "ai.classify") return "Classifying content using configured labels.";
   if (nodeType === "system.validate") return "Running validation checks on the workflow payload.";
   if (nodeType === "system.reconcile") return "Reconciling records and checking mismatches.";
+  if (nodeType === "system.packet_check") return "Checking packet completeness against required files.";
   if (nodeType === "dms.set_metadata") return "Updating document metadata fields.";
   if (nodeType === "artifact.export_csv") return "Exporting records as CSV document.";
   if (nodeType === "flow.branch") return "Evaluating branch condition and route.";
+  if (nodeType === "flow.route") return "Evaluating routing rules and selecting path.";
+  if (nodeType === "flow.for_each") return "Preparing item-wise collection for downstream steps.";
+  if (nodeType === "flow.aggregate") return "Merging results from previous steps.";
   if (nodeType === "dms.create_document") return "Creating generated document output.";
   if (nodeType === "dms.move_document") return "Moving document to target folder.";
   if (nodeType.startsWith("human.")) return "Waiting for reviewer action to continue.";
@@ -175,38 +189,101 @@ function normalizeTemplateNodeType(node: any): string {
   return raw.toLowerCase().trim();
 }
 
-function extractInputKeyFromPath(pathValue: string): string | null {
+function isTriggerNodeType(nodeTypeRaw: string): boolean {
+  const nodeType = String(nodeTypeRaw || "").trim().toLowerCase();
+  return nodeType === "manual.trigger" || nodeType === "chat.trigger";
+}
+
+function extractInputKeyFromTriggerStepPath(pathValue: string, nodeById: Map<string, any>): string | null {
   const raw = String(pathValue || "").trim();
-  if (!raw.startsWith("$.input.")) return null;
-  const remainder = raw.slice("$.input.".length).trim();
-  if (!remainder) return null;
-  const key = remainder.split(".")[0]?.trim();
+  const match = raw.match(/^\$\.steps\.([A-Za-z0-9_-]+)\.output\.(.+)$/);
+  if (!match) return null;
+  const sourceNodeId = String(match[1] || "").trim();
+  const sourceFieldPath = String(match[2] || "").trim();
+  if (!sourceNodeId || !sourceFieldPath) return null;
+  const sourceNode = nodeById.get(sourceNodeId);
+  const sourceNodeType = normalizeTemplateNodeType(sourceNode);
+  if (!isTriggerNodeType(sourceNodeType)) return null;
+  const key = sourceFieldPath.split(".")[0]?.trim();
   return key || null;
+}
+
+function extractInputKeyFromPath(pathValue: string, nodeById: Map<string, any> = new Map()): string | null {
+  const raw = String(pathValue || "").trim();
+  if (raw.startsWith("$.input.")) {
+    const remainder = raw.slice("$.input.".length).trim();
+    if (!remainder) return null;
+    const key = remainder.split(".")[0]?.trim();
+    return key || null;
+  }
+  if (raw.startsWith("$.steps.")) {
+    return extractInputKeyFromTriggerStepPath(raw, nodeById);
+  }
+  return null;
+}
+
+function parseIndexedInputKey(rawKey: string): { baseKey: string; index: number | null } {
+  const normalized = String(rawKey || "").trim();
+  const match = normalized.match(/^([A-Za-z0-9_]+)\[(\d+)\]$/);
+  if (!match) return { baseKey: normalized, index: null };
+  return {
+    baseKey: String(match[1] || "").trim(),
+    index: Number(match[2]),
+  };
 }
 
 function inferRequirementMeta(rawKey: string): { key: string; label: string; kind: RequirementKind } {
   const normalized = String(rawKey || "").trim();
+  const parsed = parseIndexedInputKey(normalized);
   const lower = normalized.toLowerCase();
-  if (lower === "ruleset_doc_id" || lower === "rulesetdocid") {
+  const lowerBase = parsed.baseKey.toLowerCase();
+
+  const camelBase = parsed.baseKey.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+  const camelLowerBase = camelBase.toLowerCase();
+
+  if (lowerBase === "folder_path" || lowerBase === "folderpath" || camelLowerBase === "folderpath" || camelLowerBase === "folderpath") {
+    return { key: "folder_path", label: "Source Folder", kind: "folder" };
+  }
+  if (lowerBase === "ruleset_doc_id" || lowerBase === "rulesetdocid" || camelLowerBase === "rulesetdocid") {
     return { key: "ruleset_doc_id", label: "Ruleset Document", kind: "doc" };
   }
-  if (lower === "doc_id" || lower === "docid") {
+  if (lowerBase === "doc_id" || lowerBase === "docid" || camelLowerBase === "docid") {
     return { key: "doc_id", label: "Source Document", kind: "doc" };
   }
   if (
-    lower === "doc_ids"
-    || lower === "supporting_doc_ids"
-    || lower === "subject_packet_doc_ids"
-    || lower === "supportingdocids"
-    || lower === "subjectpacketdocids"
+    lowerBase === "doc_ids"
+    || lowerBase === "supporting_doc_ids"
+    || lowerBase === "subject_packet_doc_ids"
+    || lowerBase === "supportingdocids"
+    || lowerBase === "subjectpacketdocids"
+    || camelLowerBase === "docids"
+    || camelLowerBase === "supportingdocids"
+    || camelLowerBase === "subjectpacketdocids"
   ) {
+    if (parsed.index != null) {
+      return {
+        key: normalized,
+        label: `Project Document ${parsed.index + 1}`,
+        kind: "doc",
+      };
+    }
     return { key: "doc_ids", label: "Source Documents", kind: "doc_list" };
   }
-  if (lower.includes("doc") && lower.endsWith("_id")) {
-    return { key: normalized, label: normalized, kind: "doc" };
+  if ((lowerBase.includes("doc") && lowerBase.endsWith("_id")) || (camelLowerBase.includes("doc") && camelLowerBase.endsWith("id"))) {
+    return { key: parsed.baseKey, label: parsed.baseKey, kind: "doc" };
   }
-  if (lower.includes("doc") && lower.endsWith("_ids")) {
-    return { key: normalized, label: normalized, kind: "doc_list" };
+  if ((lowerBase.includes("doc") && lowerBase.endsWith("_ids")) || (camelLowerBase.includes("doc") && camelLowerBase.endsWith("ids"))) {
+    if (parsed.index != null) {
+      return {
+        key: normalized,
+        label: `${parsed.baseKey} #${parsed.index + 1}`,
+        kind: "doc",
+      };
+    }
+    return { key: parsed.baseKey, label: parsed.baseKey, kind: "doc_list" };
+  }
+  if (lowerBase.includes("folder") || lowerBase.endsWith("_path") || camelLowerBase.includes("folder") || camelLowerBase.endsWith("path")) {
+    return { key: "folder_path", label: "Source Folder", kind: "folder" };
   }
   if (lower.includes("prompt") || lower.includes("text") || lower.includes("content")) {
     if (lower === "content") return { key: "content", label: "Document Content", kind: "text" };
@@ -222,6 +299,28 @@ function hasNonEmptyValue(value: any): boolean {
   if (Array.isArray(value)) return value.length > 0;
   if (typeof value === "object") return Object.keys(value).length > 0;
   return true;
+}
+
+function resolveGeneratedRequirementValue(input: Record<string, any>, requirementKey: string): any {
+  if (!input || typeof input !== "object") return undefined;
+  if (Object.prototype.hasOwnProperty.call(input, requirementKey)) {
+    return (input as any)[requirementKey];
+  }
+
+  const parsed = parseIndexedInputKey(requirementKey);
+  const baseValue = Object.prototype.hasOwnProperty.call(input, parsed.baseKey)
+    ? (input as any)[parsed.baseKey]
+    : undefined;
+
+  if (parsed.index != null) {
+    if (Array.isArray(baseValue)) return baseValue[parsed.index];
+    if (Array.isArray((input as any).doc_ids)) return (input as any).doc_ids[parsed.index];
+    if (Array.isArray((input as any).supporting_doc_ids)) return (input as any).supporting_doc_ids[parsed.index];
+    if (Array.isArray((input as any).subject_packet_doc_ids)) return (input as any).subject_packet_doc_ids[parsed.index];
+    return undefined;
+  }
+
+  return baseValue;
 }
 
 function toDocItem(doc: StoredDocument): DocItem {
@@ -240,15 +339,16 @@ const BRIEFLY_LOCAL_ORG_ID = "5f4fa858-8ba2-4f46-988b-58ac0b2a948d";
 
 type WorkflowExecuteStudioProps = {
   embedded?: boolean;
+  initialTemplateId?: string | null;
   onOpenRunDetail?: (runId: string) => void;
 };
 
 export function WorkflowExecuteStudio({
   embedded = false,
+  initialTemplateId = null,
   onOpenRunDetail,
 }: WorkflowExecuteStudioProps) {
   const { toast } = useToast();
-  const roleOptions = ["orgAdmin", "member", "viewer", "uploader"];
 
   const [loading, setLoading] = React.useState(true);
   const [running, setRunning] = React.useState(false);
@@ -259,12 +359,14 @@ export function WorkflowExecuteStudio({
   const [docs, setDocs] = React.useState<DocItem[]>([]);
   const [rulesetDoc, setRulesetDoc] = React.useState<DocItem | null>(null);
   const [subjectDocs, setSubjectDocs] = React.useState<DocItem[]>([]);
+  const [selectedFolderPath, setSelectedFolderPath] = React.useState<string[]>([]);
   const [runInputFields, setRunInputFields] = React.useState<Record<string, string>>({});
   const [extraInputJson, setExtraInputJson] = React.useState("{}");
   const [extraContextJson, setExtraContextJson] = React.useState('{"source":"workflow-run-studio"}');
   const [showAdvanced, setShowAdvanced] = React.useState(false);
   const [rulesetPickerOpen, setRulesetPickerOpen] = React.useState(false);
   const [subjectPickerOpen, setSubjectPickerOpen] = React.useState(false);
+  const [folderPickerOpen, setFolderPickerOpen] = React.useState(false);
   const [stepInspectorOpen, setStepInspectorOpen] = React.useState(false);
   const [rulesTab, setRulesTab] = React.useState<RulesTab>("issues");
 
@@ -283,13 +385,7 @@ export function WorkflowExecuteStudio({
   const [escalateToLegal, setEscalateToLegal] = React.useState(false);
   const [reviewOptionsOpen, setReviewOptionsOpen] = React.useState(false);
   const [signoffError, setSignoffError] = React.useState("");
-  const [assignMode, setAssignMode] = React.useState<"role" | "user">("role");
-  const [assignRole, setAssignRole] = React.useState("orgAdmin");
-  const [assignUserId, setAssignUserId] = React.useState("");
   const [taskActing, setTaskActing] = React.useState(false);
-
-  const [inboxTasks, setInboxTasks] = React.useState<any[]>([]);
-  const [inboxTaskAssignments, setInboxTaskAssignments] = React.useState<any[]>([]);
 
   const pollTimerRef = React.useRef<number | null>(null);
   const runFetchSeqRef = React.useRef(0);
@@ -299,11 +395,10 @@ export function WorkflowExecuteStudio({
     setRefreshing(true);
     try {
       const orgId = getApiContext().orgId || BRIEFLY_LOCAL_ORG_ID;
-      const [tplRes, docsRes, usersRes, taskRes] = await Promise.all([
+      const [tplRes, docsRes, usersRes] = await Promise.all([
         listWorkflowTemplates(true),
         apiFetch<any>(`/orgs/${orgId}/documents`, { skipCache: true }),
         apiFetch<any[]>(`/orgs/${orgId}/users`, { skipCache: true }).catch(() => []),
-        listOpenWorkflowTasks(50).catch(() => ({ tasks: [], taskAssignments: [] })),
       ]);
 
       const list = Array.isArray(docsRes) ? docsRes : (Array.isArray(docsRes?.items) ? docsRes.items : []);
@@ -324,11 +419,15 @@ export function WorkflowExecuteStudio({
         role: String(u?.role || "member"),
         label: String(u?.displayName || u?.username || u?.email || u?.userId || "user"),
       })).filter((u) => u.id));
-      setInboxTasks(Array.isArray(taskRes?.tasks) ? taskRes.tasks : []);
-      setInboxTaskAssignments(Array.isArray(taskRes?.taskAssignments) ? taskRes.taskAssignments : []);
 
-      if (!selectedTemplateId && Array.isArray(tplRes.templates) && tplRes.templates.length > 0) {
-        const defaultTpl = tplRes.templates.find((t) => String(t.name || "").toLowerCase().includes("compliance")) || tplRes.templates[0];
+      if (Array.isArray(tplRes.templates) && tplRes.templates.length > 0) {
+        const requestedTemplateId = String(initialTemplateId || "").trim();
+        const requested = requestedTemplateId
+          ? tplRes.templates.find((tpl) => String(tpl.id) === requestedTemplateId)
+          : null;
+        const defaultTpl = requested
+          || tplRes.templates.find((t) => String(t.name || "").toLowerCase().includes("compliance"))
+          || tplRes.templates[0];
         setSelectedTemplateId(defaultTpl.id);
       }
     } catch (e: any) {
@@ -341,17 +440,7 @@ export function WorkflowExecuteStudio({
       setRefreshing(false);
       setLoading(false);
     }
-  }, [selectedTemplateId, toast]);
-
-  const refreshTaskInbox = React.useCallback(async () => {
-    try {
-      const data = await listOpenWorkflowTasks(50);
-      setInboxTasks(Array.isArray(data?.tasks) ? data.tasks : []);
-      setInboxTaskAssignments(Array.isArray(data?.taskAssignments) ? data.taskAssignments : []);
-    } catch {
-      // no-op
-    }
-  }, []);
+  }, [toast]);
 
   React.useEffect(() => {
     void loadInitial();
@@ -360,6 +449,11 @@ export function WorkflowExecuteStudio({
   React.useEffect(() => {
     if (!selectedTemplateId) return;
     setRunInputFields({});
+    setSelectedFolderPath([]);
+    setRulesetDoc(null);
+    setSubjectDocs([]);
+    setLiveRunId("");
+    setLiveRunDetail(null);
     void (async () => {
       try {
         const def = await getWorkflowTemplateDefinition(selectedTemplateId);
@@ -380,6 +474,14 @@ export function WorkflowExecuteStudio({
     })();
   }, [selectedTemplateId]);
 
+  React.useEffect(() => {
+    const nextTemplateId = String(initialTemplateId || "").trim();
+    if (!nextTemplateId) return;
+    if (nextTemplateId === selectedTemplateId) return;
+    if (templates.length > 0 && !templates.some((tpl) => String(tpl.id) === nextTemplateId)) return;
+    setSelectedTemplateId(nextTemplateId);
+  }, [initialTemplateId, selectedTemplateId, templates]);
+
   const docLabelById = React.useMemo(() => {
     const map: Record<string, string> = {};
     for (const doc of docs) {
@@ -394,6 +496,49 @@ export function WorkflowExecuteStudio({
   }, [docLabelById]);
 
   const isComplianceTemplate = selectedTemplateType.toLowerCase() === "compliance.assessment";
+  const templateGraphMeta = React.useMemo(() => {
+    const nodes = Array.isArray(selectedTemplateDefinition?.nodes) ? selectedTemplateDefinition.nodes : [];
+    const edges = Array.isArray(selectedTemplateDefinition?.edges) ? selectedTemplateDefinition.edges : [];
+    const nodeTypeById = new Map<string, string>();
+    const nodeById = new Map<string, any>();
+    const incomingByNodeId = new Map<string, string[]>();
+
+    for (let index = 0; index < nodes.length; index += 1) {
+      const node = nodes[index];
+      const nodeId = String(node?.id || `step_${index + 1}`);
+      nodeById.set(nodeId, node);
+      nodeTypeById.set(nodeId, normalizeTemplateNodeType(node));
+      incomingByNodeId.set(nodeId, []);
+    }
+
+    for (const edge of edges) {
+      const from = String((edge as any)?.from || "").trim();
+      const to = String((edge as any)?.to || "").trim();
+      if (!from || !to || from === to) continue;
+      if (!incomingByNodeId.has(to) || !nodeTypeById.has(from)) continue;
+      incomingByNodeId.get(to)?.push(from);
+    }
+
+    return {
+      nodes,
+      nodeById,
+      nodeTypeById,
+      incomingByNodeId,
+    };
+  }, [selectedTemplateDefinition?.edges, selectedTemplateDefinition?.nodes]);
+
+  const packetCanUseFolderListing = React.useCallback((nodeId: string, fallbackIndex: number) => {
+    const incoming = templateGraphMeta.incomingByNodeId.get(nodeId) || [];
+    if (incoming.some((sourceId) => templateGraphMeta.nodeTypeById.get(sourceId) === "dms.list_folder")) {
+      return true;
+    }
+    if (incoming.length === 0 && fallbackIndex > 0) {
+      const prevNode = templateGraphMeta.nodes[fallbackIndex - 1];
+      if (normalizeTemplateNodeType(prevNode) === "dms.list_folder") return true;
+    }
+    return false;
+  }, [templateGraphMeta.incomingByNodeId, templateGraphMeta.nodeTypeById, templateGraphMeta.nodes]);
+
   const templateRequirements = React.useMemo<InputRequirement[]>(() => {
     const requirementMap = new Map<string, InputRequirement>();
     const addRequirement = (rawKey: string, nodeId: string, nodeType: string) => {
@@ -414,14 +559,18 @@ export function WorkflowExecuteStudio({
       addRequirement("doc_ids", "extract_facts", "ai.extract_facts");
     }
 
-    const nodes = Array.isArray(selectedTemplateDefinition?.nodes) ? selectedTemplateDefinition.nodes : [];
+    const nodes = templateGraphMeta.nodes;
     const docRequiredNodeTypes = new Set([
       "dms.read_document",
       "dms.set_metadata",
       "dms.move_document",
+      "system.packet_check",
       "ai.extract_facts",
       "system.evaluate",
       "ai.generate_report",
+    ]);
+    const folderRequiredNodeTypes = new Set([
+      "dms.list_folder",
     ]);
 
     for (let index = 0; index < nodes.length; index += 1) {
@@ -441,12 +590,15 @@ export function WorkflowExecuteStudio({
       let hasTextBinding = false;
       let hasContentFromInput = false;
       let hasContentFromSteps = false;
+      let hasFolderFromInput = false;
+      let hasFolderFromSteps = false;
 
       for (const [fieldKey, fieldPathRaw] of bindingEntries) {
         const fieldPath = String(fieldPathRaw || "").trim();
         if (!fieldPath) continue;
-        const inputKey = extractInputKeyFromPath(fieldPath);
+        const inputKey = extractInputKeyFromPath(fieldPath, templateGraphMeta.nodeById);
         if (inputKey) addRequirement(inputKey, nodeId, nodeType);
+        const isTriggerInputBinding = Boolean(extractInputKeyFromTriggerStepPath(fieldPath, templateGraphMeta.nodeById));
 
         const field = String(fieldKey || "").toLowerCase();
         const path = fieldPath.toLowerCase();
@@ -454,18 +606,33 @@ export function WorkflowExecuteStudio({
         const referencesRuleset = field.includes("ruleset") || path.includes("ruleset");
         const referencesText = field.includes("text") || field.includes("prompt") || field.includes("content");
         const referencesContent = field === "content" || field === "text" || field === "markdown" || path.endsWith(".content") || path.endsWith(".text") || path.endsWith(".markdown");
+        const referencesFolder = field.includes("folder_path") || field.includes("folderpath") || path.includes("folder_path") || path.includes("folderpath");
 
         if (path.startsWith("$.input.")) {
           if (referencesDocs) hasDocsFromInput = true;
           if (referencesRuleset) hasRulesetFromInput = true;
           if (referencesText) hasTextBinding = true;
           if (referencesContent) hasContentFromInput = true;
+          if (referencesFolder) hasFolderFromInput = true;
         }
         if (path.startsWith("$.steps.")) {
-          if (referencesDocs) hasDocsFromSteps = true;
-          if (referencesRuleset) hasRulesetFromSteps = true;
+          if (referencesDocs) {
+            if (isTriggerInputBinding) hasDocsFromInput = true;
+            else hasDocsFromSteps = true;
+          }
+          if (referencesRuleset) {
+            if (isTriggerInputBinding) hasRulesetFromInput = true;
+            else hasRulesetFromSteps = true;
+          }
           if (referencesText) hasTextBinding = true;
-          if (referencesContent) hasContentFromSteps = true;
+          if (referencesContent) {
+            if (isTriggerInputBinding) hasContentFromInput = true;
+            else hasContentFromSteps = true;
+          }
+          if (referencesFolder) {
+            if (isTriggerInputBinding) hasFolderFromInput = true;
+            else hasFolderFromSteps = true;
+          }
         }
       }
 
@@ -480,12 +647,18 @@ export function WorkflowExecuteStudio({
       const hasStaticContent = typeof config?.content === "string"
         ? String(config.content).trim().length > 0
         : Boolean(config?.content);
+      const hasStaticFolder = normalizeFolderValue(config?.folder_path).length > 0
+        || normalizeFolderValue(config?.folderPath).length > 0;
 
       if (nodeType === "ai.parse_ruleset" && !hasStaticRuleset && !hasRulesetFromInput && !hasRulesetFromSteps) {
         addRequirement("ruleset_doc_id", nodeId, nodeType);
       }
-      if (docRequiredNodeTypes.has(nodeType) && !hasStaticDocs && !hasDocsFromInput && !hasDocsFromSteps) {
+      const packetHasFolderDocSource = nodeType === "system.packet_check" && packetCanUseFolderListing(nodeId, index);
+      if (docRequiredNodeTypes.has(nodeType) && !hasStaticDocs && !hasDocsFromInput && !hasDocsFromSteps && !packetHasFolderDocSource) {
         addRequirement("doc_ids", nodeId, nodeType);
+      }
+      if (folderRequiredNodeTypes.has(nodeType) && !hasStaticFolder && !hasFolderFromInput && !hasFolderFromSteps) {
+        addRequirement("folder_path", nodeId, nodeType);
       }
       if ((nodeType === "ai.extract" || nodeType === "ai.classify") && !hasStaticDocs && !hasDocsFromInput && !hasDocsFromSteps && !hasTextBinding) {
         addRequirement("doc_ids", nodeId, nodeType);
@@ -497,37 +670,52 @@ export function WorkflowExecuteStudio({
     }
 
     return Array.from(requirementMap.values());
-  }, [isComplianceTemplate, selectedTemplateDefinition?.nodes]);
+  }, [isComplianceTemplate, packetCanUseFolderListing, templateGraphMeta.nodeById, templateGraphMeta.nodes]);
 
   const templateInputNeeds = React.useMemo(() => {
-    if (isComplianceTemplate) return { needsRuleset: true, needsSubjectDocs: true };
-    const nodes = Array.isArray(selectedTemplateDefinition?.nodes) ? selectedTemplateDefinition.nodes : [];
+    if (isComplianceTemplate) return { needsRuleset: true, needsSubjectDocs: true, needsFolder: false };
+    const nodes = templateGraphMeta.nodes;
     let needsRuleset = false;
     let needsSubjectDocs = false;
+    let needsFolder = false;
     const docRequiredNodeTypes = new Set([
       "dms.read_document",
       "dms.set_metadata",
       "dms.move_document",
+      "system.packet_check",
       "ai.extract_facts",
       "system.evaluate",
       "ai.generate_report",
     ]);
+    const folderRequiredNodeTypes = new Set([
+      "dms.list_folder",
+    ]);
 
-    for (const node of nodes) {
+    for (let index = 0; index < nodes.length; index += 1) {
+      const node = nodes[index];
+      const nodeId = String(node?.id || `step_${index + 1}`);
       const nodeType = normalizeTemplateNodeType(node);
       const config = node?.config && typeof node.config === "object" ? node.config : {};
 
       const inputBindings = node?.input_bindings && typeof node.input_bindings === "object"
         ? node.input_bindings
         : {};
-      const bindingValues = Object.values(inputBindings)
-        .map((value) => String(value || "").toLowerCase().trim())
+      const bindingPaths = Object.values(inputBindings)
+        .map((value) => String(value || "").trim())
         .filter(Boolean);
+      const bindingValues = bindingPaths
+        .map((value) => value.toLowerCase())
+        .filter(Boolean);
+      const stepBindingPaths = bindingPaths.filter((value) => value.toLowerCase().startsWith("$.steps."));
+      const triggerInputKeys = stepBindingPaths
+        .map((value) => extractInputKeyFromTriggerStepPath(value, templateGraphMeta.nodeById))
+        .filter(Boolean) as string[];
+      const triggerInputKeyTexts = triggerInputKeys.map((value) => String(value || "").toLowerCase());
 
       const usesRulesetFromInput = bindingValues.some((text) => {
         if (!text.includes("$.input.")) return false;
         return text.includes("ruleset_doc_id") || text.includes("rulesetdocid");
-      });
+      }) || triggerInputKeyTexts.some((text) => text.includes("ruleset"));
       const usesDocIdsFromInput = bindingValues.some((text) => {
         if (!text.includes("$.input.")) return false;
         return (
@@ -539,19 +727,33 @@ export function WorkflowExecuteStudio({
           || text.includes("doc_ids")
           || text.includes("docid")
         );
-      });
-      const usesDocIdsFromSteps = bindingValues.some((text) => {
-        if (!text.includes("$.steps.")) return false;
+      }) || triggerInputKeyTexts.some((text) => text.includes("doc"));
+      const usesDocIdsFromSteps = stepBindingPaths.some((rawPath) => {
+        if (extractInputKeyFromTriggerStepPath(rawPath, templateGraphMeta.nodeById)) return false;
+        const text = rawPath.toLowerCase();
         return text.includes("doc_ids") || text.includes("docid");
+      });
+      const usesFolderFromInput = bindingValues.some((text) => {
+        if (!text.includes("$.input.")) return false;
+        return text.includes("folder_path") || text.includes("folderpath");
+      }) || triggerInputKeyTexts.some((text) => text.includes("folder") || text.includes("path"));
+      const usesFolderFromSteps = stepBindingPaths.some((rawPath) => {
+        if (extractInputKeyFromTriggerStepPath(rawPath, templateGraphMeta.nodeById)) return false;
+        const text = rawPath.toLowerCase();
+        return text.includes("folder_path") || text.includes("folderpath");
       });
       const hasTextBinding = bindingValues.some((text) => {
         return (text.includes("$.input.") || text.includes("$.steps.")) && (text.includes("text") || text.includes("content"));
-      });
+      }) || triggerInputKeyTexts.some((text) => text.includes("text") || text.includes("content") || text.includes("prompt"));
 
       const hasStaticRuleset = typeof config?.ruleset_doc_id === "string" && String(config.ruleset_doc_id).trim().length > 0;
       const hasStaticDoc =
         (typeof config?.doc_id === "string" && String(config.doc_id).trim().length > 0)
-        || (Array.isArray(config?.doc_ids) && config.doc_ids.length > 0);
+        || (typeof config?.docId === "string" && String(config.docId).trim().length > 0)
+        || (Array.isArray(config?.doc_ids) && config.doc_ids.length > 0)
+        || (Array.isArray(config?.supporting_doc_ids) && config.supporting_doc_ids.length > 0);
+      const hasStaticFolder = normalizeFolderValue(config?.folder_path).length > 0
+        || normalizeFolderValue(config?.folderPath).length > 0;
 
       if ((nodeType === "ai.parse_ruleset" || usesRulesetFromInput) && !hasStaticRuleset) {
         needsRuleset = true;
@@ -559,23 +761,37 @@ export function WorkflowExecuteStudio({
       if (usesDocIdsFromInput) {
         needsSubjectDocs = true;
       }
-      if (docRequiredNodeTypes.has(nodeType) && !hasStaticDoc && !usesDocIdsFromSteps) {
+      const packetHasFolderDocSource = nodeType === "system.packet_check" && packetCanUseFolderListing(nodeId, index);
+      if (docRequiredNodeTypes.has(nodeType) && !hasStaticDoc && !usesDocIdsFromSteps && !packetHasFolderDocSource) {
         needsSubjectDocs = true;
       }
       if ((nodeType === "ai.extract" || nodeType === "ai.classify") && !hasStaticDoc && !usesDocIdsFromSteps && !hasTextBinding) {
         needsSubjectDocs = true;
       }
+      if ((folderRequiredNodeTypes.has(nodeType) || usesFolderFromInput) && !hasStaticFolder && !usesFolderFromSteps) {
+        needsFolder = true;
+      }
 
-      if (needsRuleset && needsSubjectDocs) break;
+      if (needsRuleset && needsSubjectDocs && needsFolder) break;
     }
 
     if (templateRequirements.some((req) => req.key === "ruleset_doc_id")) needsRuleset = true;
     if (templateRequirements.some((req) => req.key === "doc_id" || req.key === "doc_ids")) needsSubjectDocs = true;
+      if (templateRequirements.some((req) => req.key === "folder_path")) needsFolder = true;
 
-    return { needsRuleset, needsSubjectDocs };
-  }, [isComplianceTemplate, selectedTemplateDefinition?.nodes, templateRequirements]);
+    return { needsRuleset, needsSubjectDocs, needsFolder };
+  }, [isComplianceTemplate, packetCanUseFolderListing, templateGraphMeta.nodeById, templateGraphMeta.nodes, templateRequirements]);
   const needsRuleset = templateInputNeeds.needsRuleset;
   const needsSubjectDocs = templateInputNeeds.needsSubjectDocs;
+  const needsFolder = templateInputNeeds.needsFolder;
+
+  React.useEffect(() => {
+    if (!needsFolder) return;
+    if (selectedFolderPath.length > 0) return;
+    const inferred = subjectDocs[0]?.folderPath || [];
+    if (inferred.length === 0) return;
+    setSelectedFolderPath(inferred);
+  }, [needsFolder, selectedFolderPath.length, subjectDocs]);
 
   const manualRequirementInput = React.useMemo(() => {
     const output: Record<string, any> = {};
@@ -608,6 +824,9 @@ export function WorkflowExecuteStudio({
     }
     const selectedDocIds = subjectDocs.map((d) => d.id);
     const primaryDocId = selectedDocIds[0] || rulesetDoc?.id || "";
+    const derivedFolderPath = selectedFolderPath.length > 0
+      ? selectedFolderPath
+      : (subjectDocs[0]?.folderPath || []);
     const payload: Record<string, any> = { ...manualRequirementInput };
 
     if (rulesetDoc?.id) {
@@ -621,6 +840,10 @@ export function WorkflowExecuteStudio({
       payload.doc_id = primaryDocId;
       payload.docId = primaryDocId;
     }
+    if (derivedFolderPath.length > 0) {
+      payload.folder_path = derivedFolderPath;
+      payload.folderPath = derivedFolderPath;
+    }
     if (isComplianceTemplate) {
       payload.caseFolder = detectCaseFolder(rulesetDoc, subjectDocs);
     }
@@ -629,11 +852,11 @@ export function WorkflowExecuteStudio({
       ...payload,
       ...extra,
     };
-  }, [extraInputJson, isComplianceTemplate, manualRequirementInput, rulesetDoc, subjectDocs]);
+  }, [extraInputJson, isComplianceTemplate, manualRequirementInput, rulesetDoc, selectedFolderPath, subjectDocs]);
 
   const requirementStatus = React.useMemo(() => {
     return templateRequirements.map((req) => {
-      let value: any = generatedInput[req.key];
+      let value: any = resolveGeneratedRequirementValue(generatedInput, req.key);
       if (req.key === "ruleset_doc_id") {
         value = generatedInput.ruleset_doc_id ?? generatedInput.rulesetDocId;
       }
@@ -642,6 +865,9 @@ export function WorkflowExecuteStudio({
       }
       if (req.key === "doc_ids") {
         value = generatedInput.doc_ids ?? generatedInput.supporting_doc_ids ?? generatedInput.subject_packet_doc_ids;
+      }
+      if (req.key === "folder_path") {
+        value = generatedInput.folder_path ?? generatedInput.folderPath;
       }
       return {
         ...req,
@@ -656,23 +882,35 @@ export function WorkflowExecuteStudio({
 
   const loadRun = React.useCallback(async (runId: string) => {
     if (!runId) return null;
-    const requestSeq = ++runFetchSeqRef.current;
+    const currentSeq = ++runFetchSeqRef.current;
     const detail = await getWorkflowRun(runId);
-    if (requestSeq < runAppliedSeqRef.current) return detail;
-    runAppliedSeqRef.current = requestSeq;
+    if (currentSeq < runAppliedSeqRef.current) return detail;
+    runAppliedSeqRef.current = currentSeq;
     setLiveRunDetail((prev: any) => {
+      if (!prev) return detail;
       const prevRunId = String(prev?.run?.id || "");
       const nextRunId = String(detail?.run?.id || "");
-      if (prevRunId && prevRunId !== runId && nextRunId !== runId) return prev;
+      if (prevRunId && nextRunId && prevRunId !== nextRunId) return prev;
       return detail;
     });
     return detail;
   }, []);
 
   React.useEffect(() => {
-    if (!liveRunId) return;
+    if (!liveRunId) {
+      if (pollTimerRef.current != null) {
+        window.clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+      return;
+    }
     let cancelled = false;
+    let currentTimer: number | null = null;
     const clearPollTimer = () => {
+      if (currentTimer != null) {
+        window.clearTimeout(currentTimer);
+        currentTimer = null;
+      }
       if (pollTimerRef.current != null) {
         window.clearTimeout(pollTimerRef.current);
         pollTimerRef.current = null;
@@ -690,10 +928,12 @@ export function WorkflowExecuteStudio({
           return;
         }
         const delay = status === "running" ? 350 : 900;
-        pollTimerRef.current = window.setTimeout(() => { void tick(); }, delay);
+        currentTimer = window.setTimeout(() => { void tick(); }, delay);
+        pollTimerRef.current = currentTimer;
       } catch {
         if (cancelled) return;
-        pollTimerRef.current = window.setTimeout(() => { void tick(); }, 1200);
+        currentTimer = window.setTimeout(() => { void tick(); }, 1200);
+        pollTimerRef.current = currentTimer;
       }
     };
     void tick();
@@ -716,12 +956,20 @@ export function WorkflowExecuteStudio({
       toast({ title: "Fill required inputs before run", description: message, variant: "destructive" });
       return;
     }
-    if ((needsRuleset && !rulesetDoc) || (needsSubjectDocs && subjectDocs.length === 0)) {
-      const message = needsRuleset && needsSubjectDocs
-        ? "Select required files for this workflow before starting."
-        : needsRuleset
-          ? "Select a ruleset file before starting."
-          : "Select at least one project document before starting.";
+    if ((needsRuleset && !rulesetDoc) || (needsSubjectDocs && subjectDocs.length === 0) || (needsFolder && selectedFolderPath.length === 0)) {
+      const message = needsRuleset && needsSubjectDocs && needsFolder
+        ? "Select required files and folder for this workflow before starting."
+        : needsRuleset && needsSubjectDocs
+          ? "Select required files for this workflow before starting."
+          : needsRuleset && needsFolder
+            ? "Select a ruleset file and folder before starting."
+            : needsSubjectDocs && needsFolder
+              ? "Select project document(s) and folder before starting."
+              : needsRuleset
+                ? "Select a ruleset file before starting."
+                : needsFolder
+                  ? "Select a source folder before starting."
+                  : "Select at least one project document before starting.";
       toast({ title: message, variant: "destructive" });
       return;
     }
@@ -783,8 +1031,7 @@ export function WorkflowExecuteStudio({
   }, [steps]);
 
   const definitionGraph = React.useMemo(() => {
-    const nodes = Array.isArray(selectedTemplateDefinition?.nodes) ? selectedTemplateDefinition.nodes : [];
-    return buildDefinitionGraph(nodes);
+    return buildDefinitionGraph(selectedTemplateDefinition || { nodes: [] });
   }, [selectedTemplateDefinition]);
 
   React.useEffect(() => {
@@ -799,10 +1046,12 @@ export function WorkflowExecuteStudio({
   }, [definitionGraph.nodes]);
 
   const runGraph = React.useMemo(() => {
-    const nodes = Array.isArray(selectedTemplateDefinition?.nodes) ? selectedTemplateDefinition.nodes : [];
-    return buildLiveRunGraph(nodes, steps);
+    return buildLiveRunGraph(selectedTemplateDefinition || { nodes: [] }, steps);
   }, [selectedTemplateDefinition, steps]);
 
+  const selectedTemplate = React.useMemo(() => {
+    return templates.find((template) => template.id === selectedTemplateId) || null;
+  }, [selectedTemplateId, templates]);
   const hasLiveRun = Boolean(liveRunDetail?.run?.id);
   const graphData = hasLiveRun ? runGraph : definitionGraph;
   const selectedGraphNodeId = hasLiveRun ? selectedLiveStepId : selectedDefinitionNodeId;
@@ -812,6 +1061,7 @@ export function WorkflowExecuteStudio({
     if (selectedLiveStepId) {
       const found = steps.find((step: any) => String(step?.id || "") === selectedLiveStepId);
       if (found) return found;
+      return null;
     }
     return steps[0] || null;
   }, [selectedLiveStepId, steps]);
@@ -843,6 +1093,13 @@ export function WorkflowExecuteStudio({
   const tasks = Array.isArray(liveRunDetail?.tasks) ? liveRunDetail.tasks : [];
   const openTasks = tasks.filter((t: any) => String(t?.status || "") !== "done" && String(t?.status || "") !== "completed");
   const taskAssignments = Array.isArray(liveRunDetail?.taskAssignments) ? liveRunDetail.taskAssignments : [];
+  const userLabelById = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const user of orgUsers) {
+      map[user.id] = user.label;
+    }
+    return map;
+  }, [orgUsers]);
 
   const selectedLiveTasks = React.useMemo(() => {
     const stepId = String(selectedLiveStep?.id || "");
@@ -855,17 +1112,20 @@ export function WorkflowExecuteStudio({
     });
   }, [selectedLiveStep?.id, selectedLiveStep?.node_id, tasks]);
 
-  const availableTasks = openTasks.length > 0 ? openTasks : inboxTasks;
-  const availableAssignments = openTasks.length > 0 ? taskAssignments : inboxTaskAssignments;
-
   React.useEffect(() => {
-    if (availableTasks.length > 0 && !selectedTaskId) setSelectedTaskId(String(availableTasks[0].id));
-    if (availableTasks.length === 0) setSelectedTaskId("");
-  }, [availableTasks, selectedTaskId]);
+    if (openTasks.length === 0) {
+      setSelectedTaskId("");
+      return;
+    }
+    setSelectedTaskId((prev) => {
+      if (prev && openTasks.some((task: any) => String(task?.id || "") === prev)) return prev;
+      return String(openTasks[0]?.id || "");
+    });
+  }, [openTasks]);
 
-  const selectedTask = availableTasks.find((t: any) => String(t.id) === selectedTaskId) || null;
+  const selectedTask = openTasks.find((t: any) => String(t.id) === selectedTaskId) || null;
   const selectedTaskAssignees = selectedTask
-    ? availableAssignments.filter((a: any) => String(a?.task_id || "") === String(selectedTask.id))
+    ? taskAssignments.filter((a: any) => String(a?.task_id || "") === String(selectedTask.id))
     : [];
 
   React.useEffect(() => {
@@ -896,19 +1156,28 @@ export function WorkflowExecuteStudio({
 
   const missingRuleset = needsRuleset && !rulesetDoc;
   const missingSubjectDocs = needsSubjectDocs && subjectDocs.length === 0;
+  const missingFolder = needsFolder && selectedFolderPath.length === 0;
   const hasMissingRequirements = missingRequirements.length > 0;
-  const canStartRun = Boolean(selectedTemplateId) && !missingRuleset && !missingSubjectDocs && !hasMissingRequirements && !running;
+  const canStartRun = Boolean(selectedTemplateId) && !missingRuleset && !missingSubjectDocs && !missingFolder && !hasMissingRequirements && !running;
   const runBlockedMessage = !selectedTemplateId
     ? "Select a template to run."
-    : (missingRuleset && missingSubjectDocs)
-      ? "Select required files to run this workflow."
-      : missingRuleset
-        ? "Select a ruleset file to run this workflow."
-        : missingSubjectDocs
-          ? "Select at least one project document to run this workflow."
-          : hasMissingRequirements
-            ? `Fill required inputs: ${missingRequirements.slice(0, 2).map((req) => req.label).join(", ")}${missingRequirements.length > 2 ? ` (+${missingRequirements.length - 2} more)` : ""}`
-            : "";
+    : (missingRuleset && missingSubjectDocs && missingFolder)
+      ? "Select required files and folder to run this workflow."
+      : (missingRuleset && missingSubjectDocs)
+        ? "Select required files to run this workflow."
+        : (missingSubjectDocs && missingFolder)
+          ? "Select project documents and a source folder to run this workflow."
+          : (missingRuleset && missingFolder)
+            ? "Select a ruleset file and source folder to run this workflow."
+            : missingRuleset
+              ? "Select a ruleset file to run this workflow."
+              : missingFolder
+                ? "Select a source folder to run this workflow."
+                : missingSubjectDocs
+                  ? "Select at least one project document to run this workflow."
+                  : hasMissingRequirements
+                    ? `Fill required inputs: ${missingRequirements.slice(0, 2).map((req) => req.label).join(", ")}${missingRequirements.length > 2 ? ` (+${missingRequirements.length - 2} more)` : ""}`
+                    : "";
 
   const activeGraphNode = runGraph.nodes.find((n) => {
     const status = String(n?.status || "").toLowerCase();
@@ -1025,7 +1294,36 @@ export function WorkflowExecuteStudio({
         ? "pass"
         : (runStatusKey === "failed" ? "fail" : "unknown");
 
-  const advancedArtifacts = runArtifacts.filter((artifact: any) => {
+  const createdDocArtifacts = React.useMemo(() => {
+    const out: any[] = [];
+    const seen = new Set<string>();
+    for (const artifact of runArtifacts) {
+      const docId = typeof artifact?.doc_id === "string" ? artifact.doc_id.trim() : "";
+      if (!docId) continue;
+      if (String(artifact?.artifact_type || "").toLowerCase() !== "generated_doc") continue;
+      if (seen.has(docId)) continue;
+      seen.add(docId);
+      out.push(artifact);
+    }
+    return out;
+  }, [runArtifacts]);
+
+  const referencedDocArtifacts = React.useMemo(() => {
+    const out: any[] = [];
+    const seen = new Set<string>();
+    for (const artifact of runArtifacts) {
+      const docId = typeof artifact?.doc_id === "string" ? artifact.doc_id.trim() : "";
+      if (!docId) continue;
+      if (String(artifact?.artifact_type || "").toLowerCase() === "generated_doc") continue;
+      const key = `${docId}:${String(artifact?.artifact_type || "")}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(artifact);
+    }
+    return out;
+  }, [runArtifacts]);
+
+  const advancedArtifacts = referencedDocArtifacts.filter((artifact: any) => {
     const docId = typeof artifact?.doc_id === "string" ? artifact.doc_id : "";
     if (!docId) return false;
     return docId !== reportDocId && docId !== evidencePackDocId;
@@ -1083,33 +1381,19 @@ export function WorkflowExecuteStudio({
     }
     return null;
   }, [latestBusinessOutput]);
-
-  const runDocArtifacts = React.useMemo(() => {
-    return runArtifacts.filter((artifact: any) => typeof artifact?.doc_id === "string" && String(artifact.doc_id).trim().length > 0);
-  }, [runArtifacts]);
-
-  const onAssignTask = async () => {
-    if (!selectedTaskId) return;
-    if (assignMode === "user" && !assignUserId) {
-      toast({ title: "Select user first", variant: "destructive" });
-      return;
-    }
-    setTaskActing(true);
-    try {
-      if (selectedTask?.workflow_run_id && selectedTask.workflow_run_id !== liveRunId) {
-        setLiveRunId(String(selectedTask.workflow_run_id));
-      }
-      await assignWorkflowTask(selectedTaskId, assignMode === "user" ? { userId: assignUserId } : { role: assignRole });
-      if (selectedTask?.workflow_run_id) await loadRun(String(selectedTask.workflow_run_id));
-      else if (liveRunId) await loadRun(liveRunId);
-      await refreshTaskInbox();
-      toast({ title: "Task assigned" });
-    } catch (e: any) {
-      toast({ title: "Assign failed", description: e?.message || "Unknown error", variant: "destructive" });
-    } finally {
-      setTaskActing(false);
-    }
-  };
+  const selectedLiveOutput = React.useMemo(() => {
+    const output = selectedLiveStep?.output;
+    return output && typeof output === "object" ? stripModelFields(output) : {};
+  }, [selectedLiveStep?.output]);
+  const selectedLiveOutputText = React.useMemo(() => {
+    const text = typeof selectedLiveOutput?.response_text === "string"
+      ? selectedLiveOutput.response_text.trim()
+      : "";
+    return text;
+  }, [selectedLiveOutput]);
+  const selectedLiveOutputRows = React.useMemo(() => {
+    return compactJsonRows(selectedLiveOutput, 12);
+  }, [selectedLiveOutput]);
 
   const onCompleteTask = async () => {
     if (!selectedTaskId) return;
@@ -1143,7 +1427,6 @@ export function WorkflowExecuteStudio({
       });
       if (selectedTask?.workflow_run_id) await loadRun(String(selectedTask.workflow_run_id));
       else if (liveRunId) await loadRun(liveRunId);
-      await refreshTaskInbox();
       toast({ title: "Signoff submitted" });
     } catch (e: any) {
       const status = Number(e?.status || e?.data?.statusCode || 0);
@@ -1178,14 +1461,27 @@ export function WorkflowExecuteStudio({
   return (
     <div className={embedded ? "w-full" : "min-h-screen bg-gradient-to-b from-background via-background to-muted/20"}>
       {!embedded ? (
-        <header className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border/40">
-          <div className="px-4 md:px-6 py-4 flex items-center justify-between gap-3">
-            <div>
-              <h1 className="text-xl font-semibold">Workflow Run Studio</h1>
-              <p className="text-xs text-muted-foreground">Simple by default. Details only when you need them.</p>
+        <header className="h-14 border-b border-border/50 flex items-center justify-between px-6 shrink-0 bg-background/80 backdrop-blur-md sticky top-0 z-20">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="text-base font-bold tracking-tight">Workflow Runs</h1>
             </div>
-            <Button variant="outline" size="sm" onClick={() => void loadInitial()} disabled={refreshing}>
-              <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
+            <div className="h-4 w-[1px] bg-border/50 mx-1" />
+            <div className="min-w-[220px] max-w-[320px] px-2 py-1 rounded-md bg-muted/30 border border-border/50">
+              <div className="w-full px-1 text-left text-xs font-semibold text-foreground truncate" title="Run Studio">
+                Run Studio
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs font-semibold" asChild>
+              <Link href="/workflows">Builder</Link>
+            </Button>
+            <Button variant="default" size="sm" className="h-8 gap-1.5 text-xs font-semibold" asChild>
+              <Link href="/workflows">Run Workflow</Link>
+            </Button>
+            <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs font-semibold" onClick={() => void loadInitial()} disabled={refreshing}>
+              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
               Refresh
             </Button>
           </div>
@@ -1196,9 +1492,13 @@ export function WorkflowExecuteStudio({
         <div className={embedded ? "contents" : "w-full grid grid-cols-1 xl:grid-cols-12 gap-0 overflow-hidden"}>
           <div className={`xl:col-span-9 xl:h-full ${embedded ? "xl:min-h-[calc(100vh-77px)]" : "xl:min-h-[calc(100vh-250px)]"} p-4`}>
             <WorkflowRunGraph
-              title={hasLiveRun ? "Compliance Run" : "Workflow Preview"}
+              title={hasLiveRun
+                ? (isComplianceTemplate
+                  ? "Compliance Run"
+                  : `${selectedTemplate?.name || "Workflow"} Run`)
+                : "Workflow Preview"}
               subtitle={hasLiveRun
-                ? `Status: ${String(liveRunDetail?.run?.status || "-")} · Steps: ${graphData.nodes.length}`
+                ? `${selectedTemplate?.name || "Workflow"} · Status: ${String(liveRunDetail?.run?.status || "-")} · Steps: ${graphData.nodes.length}`
                 : `Steps: ${graphData.nodes.length} · Start run to track live progress`}
               nodes={graphData.nodes}
               edges={graphData.edges}
@@ -1209,7 +1509,7 @@ export function WorkflowExecuteStudio({
                 if (hasLiveRun) {
                   const node = graphData.nodes.find((n) => n.id === nodeId);
                   const stepId = String(node?.raw?.step?.id || "");
-                  setSelectedLiveStepId(stepId || null);
+                  setSelectedLiveStepId(stepId || nodeId);
                   return;
                 }
                 setSelectedDefinitionNodeId(nodeId);
@@ -1294,13 +1594,21 @@ export function WorkflowExecuteStudio({
                   <div className="space-y-3">
                     <div className="text-sm font-semibold">Setup Inputs</div>
                     <div className="text-xs text-muted-foreground">
-                      {needsRuleset && needsSubjectDocs
-                        ? "Choose required files, then start the run."
-                        : needsRuleset
-                          ? "Choose a ruleset file, then start the run."
-                          : needsSubjectDocs
-                            ? "Choose project documents, then start the run."
-                            : "No file selection needed for this workflow."}
+                      {needsRuleset && needsSubjectDocs && needsFolder
+                        ? "Choose required files and source folder, then start the run."
+                        : needsRuleset && needsSubjectDocs
+                          ? "Choose required files, then start the run."
+                          : needsSubjectDocs && needsFolder
+                            ? "Choose project documents and source folder, then start the run."
+                            : needsRuleset && needsFolder
+                              ? "Choose a ruleset file and source folder, then start the run."
+                              : needsRuleset
+                                ? "Choose a ruleset file, then start the run."
+                                : needsSubjectDocs
+                                  ? "Choose project documents, then start the run."
+                                  : needsFolder
+                                    ? "Choose a source folder, then start the run."
+                                    : "No file/folder selection needed for this workflow."}
                     </div>
 
                     {requirementStatus.length > 0 ? (
@@ -1329,6 +1637,10 @@ export function WorkflowExecuteStudio({
                                   placeholder={`Enter ${String(req.label || req.key).replace(/_/g, " ").toLowerCase()}`}
                                   className="h-8 text-xs"
                                 />
+                              ) : req.kind === "folder" ? (
+                                <div className="text-[11px] text-muted-foreground">
+                                  Use the <span className="font-medium">Source Folder</span> selector below.
+                                </div>
                               ) : req.key === "ruleset_doc_id" ? (
                                 <div className="text-[11px] text-muted-foreground">
                                   Use the <span className="font-medium">Ruleset</span> selector below.
@@ -1448,6 +1760,49 @@ export function WorkflowExecuteStudio({
                           </div>
                         ) : (
                           <div className="text-xs text-muted-foreground mt-1">No project documents selected.</div>
+                        )}
+                      </div>
+                    ) : null}
+
+                    {needsFolder ? (
+                      <div className={`rounded-lg border p-3 ${selectedFolderPath.length > 0 ? "border-emerald-300/50 bg-emerald-50/30 dark:bg-emerald-950/15" : "border-border/30 bg-muted/20"}`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="text-xs text-muted-foreground">Source Folder</div>
+                            <Badge variant={selectedFolderPath.length > 0 ? "default" : "outline"} className="h-5 text-[10px] gap-1">
+                              {selectedFolderPath.length > 0 ? <CheckCircle2 className="h-3 w-3" /> : null}
+                              {selectedFolderPath.length > 0 ? "Ready" : "Missing"}
+                            </Badge>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              size="icon"
+                              variant={selectedFolderPath.length > 0 ? "secondary" : "outline"}
+                              className="h-7 w-7"
+                              title="Select source folder"
+                              aria-label="Select source folder"
+                              onClick={() => setFolderPickerOpen(true)}
+                            >
+                              <FolderOpen className="h-3.5 w-3.5" />
+                            </Button>
+                            {selectedFolderPath.length > 0 ? (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7 text-muted-foreground"
+                                title="Clear source folder"
+                                aria-label="Clear source folder"
+                                onClick={() => setSelectedFolderPath([])}
+                              >
+                                <XCircle className="h-3.5 w-3.5" />
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
+                        {selectedFolderPath.length > 0 ? (
+                          <div className="mt-1 text-sm font-mono">{formatFolderPath(selectedFolderPath)}</div>
+                        ) : (
+                          <div className="text-xs text-muted-foreground mt-1">No source folder selected.</div>
                         )}
                       </div>
                     ) : null}
@@ -1659,14 +2014,14 @@ export function WorkflowExecuteStudio({
 
                       <div className="rounded-md border border-border/40 p-3 bg-background/60 space-y-2">
                         <div className="flex items-center justify-between gap-2">
-                          <div className="text-sm font-semibold">Files Produced</div>
-                          <Badge variant="outline">{runDocArtifacts.length}</Badge>
+                          <div className="text-sm font-semibold">Files Created</div>
+                          <Badge variant="outline">{createdDocArtifacts.length}</Badge>
                         </div>
-                        {runDocArtifacts.length === 0 ? (
+                        {createdDocArtifacts.length === 0 ? (
                           <div className="text-xs text-muted-foreground">No files were produced by this run.</div>
                         ) : (
                           <div className="space-y-2">
-                            {runDocArtifacts.slice(0, 6).map((artifact: any) => (
+                            {createdDocArtifacts.slice(0, 6).map((artifact: any) => (
                               <div key={String(artifact?.id || artifact?.doc_id)} className="rounded border border-border/30 p-2 bg-background/70 text-xs flex items-center justify-between gap-2">
                                 <div className="min-w-0">
                                   <div className="font-medium truncate">{String(artifact?.title || artifact?.data?.filename || "artifact")}</div>
@@ -1687,7 +2042,7 @@ export function WorkflowExecuteStudio({
                     <summary className="text-xs cursor-pointer text-muted-foreground">More files (advanced)</summary>
                     <div className="mt-2 space-y-2">
                       {advancedArtifacts.length === 0 ? (
-                        <div className="text-xs text-muted-foreground">No extra files.</div>
+                        <div className="text-xs text-muted-foreground">No referenced files.</div>
                       ) : (
                         advancedArtifacts.map((artifact: any) => {
                           const docId = typeof artifact?.doc_id === "string" ? artifact.doc_id : "";
@@ -1708,17 +2063,6 @@ export function WorkflowExecuteStudio({
                       )}
                     </div>
                   </details>
-
-                  <details className="rounded-md p-2 bg-muted/20">
-                    <summary className="text-xs cursor-pointer text-muted-foreground">Technical details</summary>
-                    <pre className="text-xs overflow-auto rounded-md p-2 bg-background/70 mt-2">
-                      {JSON.stringify({
-                        runId: liveRunDetail?.run?.id || liveRunId,
-                        status: runStatus,
-                        input: generatedInput,
-                      }, null, 2)}
-                    </pre>
-                  </details>
                 </>
               ) : null}
 
@@ -1729,11 +2073,53 @@ export function WorkflowExecuteStudio({
                       <ShieldAlert className="h-4 w-4" /> Reviewer sign-off required
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      Complete assignment and decision to finish this workflow.
+                      Complete a decision to finish this workflow.
                     </div>
                   </div>
 
-                  {availableTasks.length === 0 ? (
+                  <div className="rounded-md border border-border/40 p-3 bg-background/60 space-y-2">
+                    <div className="text-sm font-semibold">Current Step Output</div>
+                    {String(selectedLiveStep?.node_type || "").toLowerCase() === "system.packet_check" ? (
+                      <div className="text-xs text-muted-foreground">
+                        Packet Check verifies minimum docs + required filename/type rules, then lists missing requirements.
+                      </div>
+                    ) : null}
+                    {String(selectedLiveStep?.node_type || "").toLowerCase() === "human.checklist" ? (
+                      <div className="text-xs text-muted-foreground">
+                        Checklist Task creates a human review task and waits for Accept/Reject to continue the run.
+                      </div>
+                    ) : null}
+                    <div className="text-xs text-muted-foreground">
+                      {selectedLiveStep
+                        ? `Step: ${businessStepLabel(String(selectedLiveStep?.node_type || ""))}`
+                        : (selectedLiveStepId
+                          ? "Selected node has not executed yet."
+                          : "Select a step on the graph to inspect output.")}
+                    </div>
+                    {selectedLiveOutputText ? (
+                      <div className="rounded border border-border/30 bg-background/70 p-3 text-sm whitespace-pre-wrap leading-6">
+                        {selectedLiveOutputText}
+                      </div>
+                    ) : selectedLiveOutputRows.length > 0 ? (
+                      <div className="space-y-1">
+                        {selectedLiveOutputRows.map((row) => (
+                          <div key={row.key} className="text-xs">
+                            <span className="text-muted-foreground">{row.key}:</span> {row.value}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-muted-foreground">No user-facing output available for the selected step yet.</div>
+                    )}
+                    <div className="flex items-center justify-end">
+                      <Button size="sm" variant="outline" onClick={() => setStepInspectorOpen(true)} disabled={!selectedLiveStep}>
+                        <Eye className="h-3.5 w-3.5 mr-1.5" />
+                        View Full Step Output
+                      </Button>
+                    </div>
+                  </div>
+
+                  {openTasks.length === 0 ? (
                     <div className="text-xs text-muted-foreground">No open review task found for this run.</div>
                   ) : (
                     <div className="space-y-3">
@@ -1742,7 +2128,7 @@ export function WorkflowExecuteStudio({
                         <Select value={selectedTaskId} onValueChange={setSelectedTaskId}>
                           <SelectTrigger><SelectValue placeholder="Select task" /></SelectTrigger>
                           <SelectContent>
-                            {availableTasks.map((t: any) => (
+                            {openTasks.map((t: any) => (
                               <SelectItem key={t.id} value={String(t.id)}>
                                 {String(t?.title || "Task")} ({String(t?.status || "-")})
                               </SelectItem>
@@ -1752,42 +2138,13 @@ export function WorkflowExecuteStudio({
                         {selectedTask ? (
                           <div className="text-xs text-muted-foreground mt-2">
                             Assigned: {selectedTaskAssignees.length > 0
-                              ? selectedTaskAssignees.map((a: any) => trimMiddle(String(a.user_id || ""), 14)).join(", ")
+                              ? selectedTaskAssignees.map((a: any) => {
+                                const userId = String(a?.user_id || "");
+                                return userLabelById[userId] || trimMiddle(userId, 14);
+                              }).join(", ")
                               : "none"}
                           </div>
                         ) : null}
-                      </div>
-
-                      <div className="rounded-md bg-muted/20 p-2 space-y-2">
-                        <div className="text-xs font-medium">Assign</div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Select value={assignMode} onValueChange={(v: any) => setAssignMode(v)}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="role">By Role</SelectItem>
-                              <SelectItem value="user">By User</SelectItem>
-                            </SelectContent>
-                          </Select>
-
-                          {assignMode === "role" ? (
-                            <Select value={assignRole} onValueChange={setAssignRole}>
-                              <SelectTrigger><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                {roleOptions.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                              </SelectContent>
-                            </Select>
-                          ) : (
-                            <Select value={assignUserId} onValueChange={setAssignUserId}>
-                              <SelectTrigger><SelectValue placeholder="Select user" /></SelectTrigger>
-                              <SelectContent>
-                                {orgUsers.map((u) => <SelectItem key={u.id} value={u.id}>{u.label} ({u.role})</SelectItem>)}
-                              </SelectContent>
-                            </Select>
-                          )}
-                        </div>
-                        <Button size="sm" variant="outline" onClick={() => void onAssignTask()} disabled={!selectedTaskId || taskActing}>
-                          Assign Task
-                        </Button>
                       </div>
 
                       <div className="rounded-md bg-muted/20 p-2 space-y-2">
@@ -1856,7 +2213,7 @@ export function WorkflowExecuteStudio({
                     </Button>
                   ) : (
                     <Button asChild size="sm" variant="outline">
-                      <a href={`/workflows#run-${liveRunId}`}>
+                      <a href={`/workflows/run#run-${liveRunId}`}>
                         <Eye className="h-3.5 w-3.5 mr-1.5" />
                         Open Detail
                       </a>
@@ -1894,12 +2251,23 @@ export function WorkflowExecuteStudio({
         }}
       />
 
+      <FinderPicker
+        open={folderPickerOpen}
+        onOpenChange={setFolderPickerOpen}
+        mode="folder"
+        initialPath={selectedFolderPath}
+        onConfirm={(payload) => {
+          const path = Array.isArray(payload?.path) ? payload.path.map((value) => String(value || "").trim()).filter(Boolean) : [];
+          setSelectedFolderPath(path);
+        }}
+      />
+
       <Sheet open={stepInspectorOpen} onOpenChange={setStepInspectorOpen}>
         <SheetContent side="right" className="w-[700px] sm:max-w-[700px] p-0 overflow-auto">
           <div className="h-full flex flex-col">
             <SheetHeader className="px-4 py-3 border-b border-border/40">
               <SheetTitle>Step Details</SheetTitle>
-              <SheetDescription>Detailed artifacts, findings, and raw step output.</SheetDescription>
+              <SheetDescription>Detailed artifacts, findings, and step output.</SheetDescription>
             </SheetHeader>
             <div className="p-4">
               <WorkflowRunStepDetail

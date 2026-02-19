@@ -5,7 +5,7 @@ import Link from "next/link";
 import { AlertTriangle, CheckCircle2, Clock3 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatDurationMs, summarizeObjectForUi } from "@/lib/workflow-view-model";
+import { formatDurationMs } from "@/lib/workflow-view-model";
 
 type Props = {
   step: any | null;
@@ -52,6 +52,7 @@ function stepNarrative(statusRaw: string, findingCount: number, pendingTaskCount
     return "Step completed successfully with no flagged findings.";
   }
   if (status === "failed") return "Step failed. Review advanced logs and output payload for root cause.";
+  if (status === "waiting" && pendingTaskCount > 0) return "Step is waiting for assigned reviewer action.";
   if (status === "running" || status === "waiting") return "Step is still in progress. Refresh to see latest evidence and output.";
   if (pendingTaskCount > 0) return "Step is waiting for human action to continue.";
   return "Step details are available below.";
@@ -110,9 +111,8 @@ export function WorkflowRunStepDetail({
     );
   }
 
-  const inputSummary = summarizeObjectForUi(step?.input || {}, 8);
   const safeOutput = stripModelFields(step?.output || {});
-  const outputSummary = summarizeObjectForUi(safeOutput, 8);
+  const outputSummary = compactJsonRows(safeOutput, 8);
   const nodeType = normalizeNodeType(step?.node_type || step?.node_id || "");
   const stepOutput = (safeOutput && typeof safeOutput === "object") ? safeOutput : {};
   const promptText = typeof stepOutput?.response_text === "string" ? stepOutput.response_text.trim() : "";
@@ -134,14 +134,29 @@ export function WorkflowRunStepDetail({
     ? stepOutput.generated_doc_title
     : (typeof stepOutput?.generated_doc_filename === "string" ? stepOutput.generated_doc_filename : null);
   const createdDocId = typeof stepOutput?.generated_doc_id === "string" ? stepOutput.generated_doc_id : null;
+  const packetMatchedRequirements = Array.isArray(stepOutput?.matched_requirements) ? stepOutput.matched_requirements : [];
+  const packetMissingRequirements = Array.isArray(stepOutput?.missing_requirements) ? stepOutput.missing_requirements : [];
+  const packetMinDocs = Number.isFinite(Number(stepOutput?.min_docs)) ? Number(stepOutput.min_docs) : null;
+  const packetRequiredCount = Number.isFinite(Number(stepOutput?.required_count)) ? Number(stepOutput.required_count) : null;
+  const packetDocIds = Array.isArray(stepOutput?.doc_ids) ? stepOutput.doc_ids : [];
+  const checklistItems = Array.isArray(stepOutput?.checklist_items) ? stepOutput.checklist_items : [];
+  const checklistTaskId = typeof stepOutput?.task_id === "string" ? stepOutput.task_id : null;
+  const checklistAssignmentCount = Number.isFinite(Number(stepOutput?.assignment_count)) ? Number(stepOutput.assignment_count) : null;
   const promptJsonRows = promptJson ? compactJsonRows(promptJson, 12) : [];
   const stepStatus = String(step?.status || "unknown");
+  const statusKey = stepStatus.toLowerCase();
   const startedAt = step?.started_at || step?.created_at || step?.startedAt || null;
-  const completedAt = step?.completed_at || step?.updated_at || step?.completedAt || null;
+  const completedAt = step?.completed_at || step?.completedAt || null;
+  const fallbackCompletedAt = completedAt || step?.updated_at || null;
   const startMs = toTimeMs(startedAt);
-  const endMs = toTimeMs(completedAt) ?? (startMs ? Date.now() : null);
+  const endMs = statusKey === "waiting"
+    ? (startMs ? Date.now() : null)
+    : (toTimeMs(fallbackCompletedAt) ?? (startMs ? Date.now() : null));
   const durationLabel = startMs && endMs ? formatDurationMs(Math.max(0, endMs - startMs)) : "n/a";
   const pendingTasks = tasks.filter((task) => normalizeTaskOpen(task?.status));
+  const timingLine = statusKey === "waiting"
+    ? `Started ${formatDateTime(startedAt)} • Waiting for reviewer action`
+    : `Started ${formatDateTime(startedAt)}${fallbackCompletedAt ? ` • Completed ${formatDateTime(fallbackCompletedAt)}` : ""}`;
 
   const findingRows = findings.map((finding, index) => {
     const result = normalizeResult(finding?.result || finding?.status);
@@ -211,7 +226,7 @@ export function WorkflowRunStepDetail({
           <div className="text-sm font-medium mb-1">What Happened</div>
           <div className="text-sm text-muted-foreground">{stepNarrative(stepStatus, findingRows.length, pendingTasks.length)}</div>
           <div className="text-xs text-muted-foreground mt-2">
-            Started {formatDateTime(startedAt)} • Completed {formatDateTime(completedAt)}
+            {timingLine}
           </div>
         </div>
 
@@ -353,6 +368,91 @@ export function WorkflowRunStepDetail({
                 {branchMatched != null ? <Badge variant={branchMatched ? "default" : "secondary"}>{branchMatched ? "Matched" : "Not Matched"}</Badge> : null}
               </div>
             </div>
+          ) : nodeType === "flow.route" ? (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline">Rule Router</Badge>
+                {branchRoute ? <Badge variant="outline">Route: {branchRoute}</Badge> : null}
+                {branchMatched != null ? <Badge variant={branchMatched ? "default" : "secondary"}>{branchMatched ? "Matched" : "Default"}</Badge> : null}
+              </div>
+            </div>
+          ) : nodeType === "flow.aggregate" ? (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline">Merge Results</Badge>
+                {typeof stepOutput?.mode === "string" ? <Badge variant="outline">Mode: {stepOutput.mode}</Badge> : null}
+                {Number.isFinite(Number(stepOutput?.count)) ? <Badge variant="outline">Count: {Number(stepOutput.count)}</Badge> : null}
+              </div>
+            </div>
+          ) : nodeType === "system.packet_check" ? (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline">Packet Check</Badge>
+                <Badge variant={stepOutput?.complete === true ? "default" : "destructive"}>
+                  {stepOutput?.complete === true ? "Complete" : "Incomplete"}
+                </Badge>
+                {Number.isFinite(Number(stepOutput?.total_docs)) ? <Badge variant="outline">Docs: {Number(stepOutput.total_docs)}</Badge> : null}
+                {packetMinDocs != null ? <Badge variant="outline">Min Docs: {packetMinDocs}</Badge> : null}
+                {packetRequiredCount != null ? <Badge variant="outline">Rules: {packetRequiredCount}</Badge> : null}
+              </div>
+              <div className="text-sm text-muted-foreground">
+                Verifies required filename/type rules and minimum doc count before packet approval.
+              </div>
+              {packetMissingRequirements.length > 0 ? (
+                <div className="rounded-md border border-border/30 bg-background/70 p-3 space-y-1">
+                  <div className="text-xs font-medium text-red-600">Missing Requirements</div>
+                  {packetMissingRequirements.slice(0, 8).map((row: any, index: number) => (
+                    <div key={`packet-missing-${index}`} className="text-sm">
+                      <span className="text-muted-foreground">{String(row?.kind || "rule")}:</span>{" "}
+                      {String(row?.value || "missing")}
+                      {Number.isFinite(Number(row?.actual)) ? ` (actual: ${Number(row.actual)})` : ""}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-emerald-700 dark:text-emerald-300">All packet requirements matched.</div>
+              )}
+              {packetMatchedRequirements.length > 0 ? (
+                <div className="rounded-md border border-border/30 bg-background/70 p-3 space-y-1">
+                  <div className="text-xs font-medium">Matched Requirements</div>
+                  {packetMatchedRequirements.slice(0, 8).map((row: any, index: number) => (
+                    <div key={`packet-match-${index}`} className="text-sm">
+                      <span className="text-muted-foreground">{String(row?.kind || "rule")}:</span>{" "}
+                      {String(row?.value || "matched")}
+                      {row?.doc_id ? ` -> ${labelForDoc?.(String(row.doc_id)) || String(row.doc_id)}` : ""}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {packetDocIds.length > 0 ? (
+                <div className="text-xs text-muted-foreground">
+                  Checked docs: {packetDocIds.length}
+                </div>
+              ) : null}
+            </div>
+          ) : nodeType === "human.checklist" ? (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline">Checklist Task</Badge>
+                {checklistTaskId ? <Badge variant="outline">Task: {checklistTaskId.slice(0, 8)}...</Badge> : null}
+                {checklistAssignmentCount != null ? <Badge variant="outline">Assignees: {checklistAssignmentCount}</Badge> : null}
+              </div>
+              <div className="text-sm text-muted-foreground">
+                This step creates a human task and pauses workflow execution until Accept/Reject.
+              </div>
+              {checklistItems.length > 0 ? (
+                <div className="rounded-md border border-border/30 bg-background/70 p-3 space-y-1">
+                  <div className="text-xs font-medium">Checklist</div>
+                  {checklistItems.map((item: any, index: number) => (
+                    <div key={`check-item-${index}`} className="text-sm">
+                      {index + 1}. {String(item || "")}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground">No checklist items configured for this task.</div>
+              )}
+            </div>
           ) : nodeType === "artifact.export_csv" ? (
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">
@@ -479,49 +579,6 @@ export function WorkflowRunStepDetail({
           </div>
         </div>
 
-        <details className="rounded-md border border-border/40 p-3 bg-background/60">
-          <summary className="cursor-pointer text-sm font-medium">Developer Data (Optional)</summary>
-          <div className="mt-3 space-y-3">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="rounded border border-border/30 p-2 bg-background/70">
-                <div className="text-xs font-medium mb-1">Input Summary</div>
-                {inputSummary.length === 0 ? (
-                  <div className="text-xs text-muted-foreground">No input fields.</div>
-                ) : (
-                  <div className="space-y-1">
-                    {inputSummary.map((row) => (
-                      <div key={row.key} className="text-xs">
-                        <span className="text-muted-foreground">{row.key}:</span> {row.value}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="rounded border border-border/30 p-2 bg-background/70">
-                <div className="text-xs font-medium mb-1">Output Summary</div>
-                {outputSummary.length === 0 ? (
-                  <div className="text-xs text-muted-foreground">No output fields.</div>
-                ) : (
-                  <div className="space-y-1">
-                    {outputSummary.map((row) => (
-                      <div key={row.key} className="text-xs">
-                        <span className="text-muted-foreground">{row.key}:</span> {row.value}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <details className="rounded border border-border/30 p-2 bg-background/70">
-              <summary className="cursor-pointer text-xs text-muted-foreground">Raw Step JSON (Developer)</summary>
-              <pre className="text-xs overflow-auto rounded-md border border-border/30 p-3 bg-background/80 mt-2">
-                {JSON.stringify(stripModelFields(step), null, 2)}
-              </pre>
-            </details>
-          </div>
-        </details>
       </div>
     </div>
   );

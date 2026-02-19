@@ -45,6 +45,17 @@ function resolveDefinitionNodeType(node: any): string {
   );
 }
 
+function resolveNodeDisplayLabel(nodeType: string, definitionNode?: any, step?: any): string {
+  const preferred = [
+    definitionNode?.title,
+    definitionNode?.name,
+    step?.input?.node?.title,
+    step?.input?.node?.name,
+  ].map((value) => String(value || '').trim()).find(Boolean);
+  if (preferred) return preferred;
+  return friendlyNodeLabel(nodeType);
+}
+
 export function nodeKindFromType(nodeType: string): WorkflowNodeKind {
   const key = normalizeNodeType(nodeType);
   if (!key) return 'unknown';
@@ -54,8 +65,8 @@ export function nodeKindFromType(nodeType: string): WorkflowNodeKind {
   if (key.startsWith('ai.') || key.includes('llm') || key.includes('gemini') || key.includes('openai')) return 'ai';
   if (key.startsWith('dms.')) return 'system';
   if (key.startsWith('artifact.')) return 'system';
-  if (key.includes('condition') || key.includes('branch')) return 'condition';
-  if (key.includes('transform') || key.includes('map') || key.includes('convert')) return 'transform';
+  if (key.includes('condition') || key.includes('branch') || key.includes('route')) return 'condition';
+  if (key.includes('transform') || key.includes('map') || key.includes('convert') || key.includes('aggregate') || key.includes('for_each')) return 'transform';
   if (key.includes('notify') || key.includes('email') || key.includes('slack')) return 'notification';
   if (key.startsWith('system.') || key.includes('evaluate') || key.includes('validate') || key.includes('reconcile')) return 'system';
   return 'unknown';
@@ -70,6 +81,7 @@ export function friendlyNodeLabel(nodeType: string): string {
   if (key === 'system.reconcile') return 'Reconcile Data';
   if (key === 'system.enumerate_docs') return 'Enumerate Documents';
   if (key === 'human.approval') return 'Human Approval';
+  if (key === 'human.checklist') return 'Checklist Task';
   if (key === 'human.legal_review') return 'Legal Review';
   if (key === 'human.task') return 'Human Task';
   if (key === 'human.review') return 'Human Review';
@@ -86,7 +98,11 @@ export function friendlyNodeLabel(nodeType: string): string {
   if (key === 'dms.move_document') return 'Move Document';
   if (key === 'system.validate') return 'Validate';
   if (key === 'system.reconcile') return 'Reconcile';
+  if (key === 'system.packet_check') return 'Packet Check';
   if (key === 'flow.branch') return 'Branch';
+  if (key === 'flow.route') return 'Rule Router';
+  if (key === 'flow.for_each') return 'For Each';
+  if (key === 'flow.aggregate') return 'Merge Results';
   if (key === 'artifact.export_csv') return 'Export CSV';
   if (!key) return 'Workflow Step';
   return key.split('.').map((part) => {
@@ -141,8 +157,20 @@ export function nodeExecutionDescription(nodeType: string): string {
   if (key === 'system.reconcile') {
     return 'System reconciliation step. Compares records and reports mismatches.';
   }
+  if (key === 'system.packet_check') {
+    return 'System packet check step. Verifies required document patterns/types are present.';
+  }
   if (key === 'flow.branch') {
     return 'Flow control step. Routes execution based on expression or truthy checks.';
+  }
+  if (key === 'flow.route') {
+    return 'Flow routing step. Selects one named route from rule expressions or value map.';
+  }
+  if (key === 'flow.for_each') {
+    return 'Flow transform step. Normalizes item collections for downstream processing.';
+  }
+  if (key === 'flow.aggregate') {
+    return 'Flow transform step. Merges outputs from multiple previous steps into one payload.';
   }
   if (key === 'artifact.export_csv') {
     return 'Artifact generation step. Exports rows as CSV and stores the file in DMS.';
@@ -170,8 +198,80 @@ function buildZigzagPosition(index: number) {
   };
 }
 
-export function buildDefinitionGraph(nodes: any[] = []): { nodes: WorkflowGraphNode[]; edges: WorkflowGraphEdge[] } {
-  const graphNodes: WorkflowGraphNode[] = (Array.isArray(nodes) ? nodes : []).map((node, index) => {
+type NormalizedDefinitionGraph = {
+  schemaVersion: 1 | 2;
+  nodes: any[];
+  edges: any[];
+};
+
+function normalizeDefinitionGraphInput(definitionOrNodes: any): NormalizedDefinitionGraph {
+  if (Array.isArray(definitionOrNodes)) {
+    return {
+      schemaVersion: 1,
+      nodes: definitionOrNodes,
+      edges: [],
+    };
+  }
+  const definition = definitionOrNodes && typeof definitionOrNodes === 'object'
+    ? definitionOrNodes
+    : {};
+  return {
+    schemaVersion: Number(definition?.schema_version) === 2 ? 2 : 1,
+    nodes: Array.isArray(definition?.nodes) ? definition.nodes : [],
+    edges: Array.isArray(definition?.edges) ? definition.edges : [],
+  };
+}
+
+function edgeIsActive(fromNode: WorkflowGraphNode | undefined, toNode: WorkflowGraphNode | undefined): boolean {
+  const fromDone = ['succeeded', 'failed', 'skipped', 'cancelled'].includes(String(fromNode?.status || '').toLowerCase());
+  const toRunning = ['running', 'waiting'].includes(String(toNode?.status || '').toLowerCase());
+  return fromDone && toRunning;
+}
+
+function buildEdgesFromDefinition(
+  definitionEdges: any[],
+  nodeIdToGraphId: Map<string, string>,
+  graphNodeById?: Map<string, WorkflowGraphNode>
+): WorkflowGraphEdge[] {
+  const out: WorkflowGraphEdge[] = [];
+  const used = new Set<string>();
+  for (let i = 0; i < definitionEdges.length; i += 1) {
+    const edge = definitionEdges[i] || {};
+    const fromNodeId = String(edge?.from || '').trim();
+    const toNodeId = String(edge?.to || '').trim();
+    if (!fromNodeId || !toNodeId) continue;
+
+    const from = nodeIdToGraphId.get(fromNodeId);
+    const to = nodeIdToGraphId.get(toNodeId);
+    if (!from || !to) continue;
+
+    const baseId = String(edge?.id || `${fromNodeId}_${toNodeId}_${i + 1}`).trim() || `${fromNodeId}_${toNodeId}_${i + 1}`;
+    let edgeId = baseId;
+    let suffix = 2;
+    while (used.has(edgeId)) {
+      edgeId = `${baseId}_${suffix}`;
+      suffix += 1;
+    }
+    used.add(edgeId);
+
+    const nextEdge: WorkflowGraphEdge = {
+      id: edgeId,
+      from,
+      to,
+    };
+    if (graphNodeById) {
+      const fromNode = graphNodeById.get(from);
+      const toNode = graphNodeById.get(to);
+      nextEdge.active = edgeIsActive(fromNode, toNode);
+    }
+    out.push(nextEdge);
+  }
+  return out;
+}
+
+export function buildDefinitionGraph(definitionOrNodes: any = []): { nodes: WorkflowGraphNode[]; edges: WorkflowGraphEdge[] } {
+  const normalized = normalizeDefinitionGraphInput(definitionOrNodes);
+  const graphNodes: WorkflowGraphNode[] = normalized.nodes.map((node, index) => {
     const nodeType = resolveDefinitionNodeType(node);
     const nodeId = String(node?.id || `step_${index + 1}`);
     return {
@@ -179,7 +279,7 @@ export function buildDefinitionGraph(nodes: any[] = []): { nodes: WorkflowGraphN
       index,
       nodeId,
       nodeType,
-      label: friendlyNodeLabel(nodeType),
+      label: resolveNodeDisplayLabel(nodeType, node, null),
       kind: nodeKindFromType(nodeType),
       outputKey: typeof node?.output === 'string' ? node.output : null,
       assignee: typeof node?.assignee === 'object' && node?.assignee ? node.assignee : null,
@@ -188,13 +288,22 @@ export function buildDefinitionGraph(nodes: any[] = []): { nodes: WorkflowGraphN
     };
   });
 
-  const edges: WorkflowGraphEdge[] = [];
-  for (let i = 0; i < graphNodes.length - 1; i += 1) {
-    edges.push({
-      id: `${graphNodes[i].id}->${graphNodes[i + 1].id}`,
-      from: graphNodes[i].id,
-      to: graphNodes[i + 1].id,
-    });
+  const nodeIdToGraphId = new Map<string, string>();
+  for (const node of graphNodes) {
+    nodeIdToGraphId.set(node.nodeId, node.id);
+  }
+
+  let edges: WorkflowGraphEdge[] = [];
+  if (normalized.schemaVersion === 2) {
+    edges = buildEdgesFromDefinition(normalized.edges, nodeIdToGraphId);
+  } else {
+    for (let i = 0; i < graphNodes.length - 1; i += 1) {
+      edges.push({
+        id: `${graphNodes[i].id}->${graphNodes[i + 1].id}`,
+        from: graphNodes[i].id,
+        to: graphNodes[i + 1].id,
+      });
+    }
   }
 
   return { nodes: graphNodes, edges };
@@ -243,52 +352,80 @@ export function buildRunGraph(steps: any[] = []): { nodes: WorkflowGraphNode[]; 
 
 function pickLatestStepByNode(steps: any[] = []): Map<string, any> {
   const out = new Map<string, any>();
+  const byNodeType = new Map<string, any>();
+  
   for (const step of steps || []) {
     const nodeId = String(step?.node_id || '').trim();
-    if (!nodeId) continue;
-    const prev = out.get(nodeId);
-    if (!prev) {
-      out.set(nodeId, step);
-      continue;
+    const nodeType = String(step?.node_type || '').trim().toLowerCase();
+    
+    if (nodeId) {
+      const prev = out.get(nodeId);
+      if (!prev) {
+        out.set(nodeId, step);
+        continue;
+      }
+      const prevAttempt = Number(prev?.attempt || 0);
+      const nextAttempt = Number(step?.attempt || 0);
+      if (nextAttempt > prevAttempt) {
+        out.set(nodeId, step);
+        continue;
+      }
+      if (nextAttempt < prevAttempt) continue;
+      const prevTs = new Date(prev?.started_at || prev?.completed_at || 0).getTime();
+      const nextTs = new Date(step?.started_at || step?.completed_at || 0).getTime();
+      if (nextTs >= prevTs) out.set(nodeId, step);
     }
-    const prevAttempt = Number(prev?.attempt || 0);
-    const nextAttempt = Number(step?.attempt || 0);
-    if (nextAttempt > prevAttempt) {
-      out.set(nodeId, step);
-      continue;
+    
+    if (nodeType && !byNodeType.has(nodeType)) {
+      byNodeType.set(nodeType, step);
     }
-    if (nextAttempt < prevAttempt) continue;
-    const prevTs = new Date(prev?.started_at || prev?.completed_at || 0).getTime();
-    const nextTs = new Date(step?.started_at || step?.completed_at || 0).getTime();
-    if (nextTs >= prevTs) out.set(nodeId, step);
   }
+  
+  (out as any).byNodeType = byNodeType;
   return out;
 }
 
 export function buildLiveRunGraph(
-  definitionNodes: any[] = [],
+  definitionOrNodes: any = [],
   steps: any[] = []
 ): { nodes: WorkflowGraphNode[]; edges: WorkflowGraphEdge[] } {
-  const defNodes = Array.isArray(definitionNodes) ? definitionNodes : [];
+  const normalized = normalizeDefinitionGraphInput(definitionOrNodes);
+  const defNodes = normalized.nodes;
   const stepList = Array.isArray(steps) ? steps : [];
   const latestByNode = pickLatestStepByNode(stepList);
   const definitionNodeIds = new Set<string>();
+  const definitionNodeIdToGraphNodeId = new Map<string, string>();
 
   const nodes: WorkflowGraphNode[] = defNodes.map((defNode, index) => {
     const defNodeId = String(defNode?.id || `step_${index + 1}`);
     definitionNodeIds.add(defNodeId);
-    const step = latestByNode.get(defNodeId) || null;
-    const nodeType = normalizeNodeType(step?.node_type || resolveDefinitionNodeType(defNode) || '');
+    let step = latestByNode.get(defNodeId) || null;
+    
+    const defNodeType = normalizeNodeType(resolveDefinitionNodeType(defNode) || '');
+    if (!step && defNodeType) {
+      const byNodeType = (latestByNode as any).byNodeType;
+      step = byNodeType?.get(defNodeType) || null;
+    }
+    
+    const nodeType = normalizeNodeType(step?.node_type || defNodeType || '');
+    
+    function extractStepStatus(s: any): string {
+      if (typeof s?.status === 'string') return s.status;
+      if (typeof s?.step_status === 'string') return s.step_status;
+      if (typeof s?.state === 'string') return s.state;
+      return 'pending';
+    }
+    
     return {
       id: String(step?.id || `def:${defNodeId}:${index}`),
       index,
       nodeId: defNodeId,
       nodeType,
-      label: friendlyNodeLabel(nodeType),
+      label: resolveNodeDisplayLabel(nodeType, defNode, step),
       kind: nodeKindFromType(nodeType),
       outputKey: typeof defNode?.output === 'string' ? defNode.output : null,
       assignee: typeof defNode?.assignee === 'object' && defNode?.assignee ? defNode.assignee : null,
-      status: typeof step?.status === 'string' ? step.status : 'pending',
+      status: extractStepStatus(step),
       durationMs: durationBetween(step?.started_at, step?.completed_at),
       position: buildZigzagPosition(index),
       raw: {
@@ -297,6 +434,9 @@ export function buildLiveRunGraph(
       },
     };
   });
+  for (const node of nodes) {
+    definitionNodeIdToGraphNodeId.set(node.nodeId, node.id);
+  }
 
   // Include runtime-only nodes (manual trigger, dynamic legal review, etc.) after template nodes.
   const runtimeOnly = stepList
@@ -318,7 +458,7 @@ export function buildLiveRunGraph(
       index,
       nodeId: String(step?.node_id || `runtime_${index + 1}`),
       nodeType,
-      label: friendlyNodeLabel(nodeType),
+      label: resolveNodeDisplayLabel(nodeType, null, step),
       kind: nodeKindFromType(nodeType),
       status: typeof step?.status === 'string' ? step.status : 'pending',
       durationMs: durationBetween(step?.started_at, step?.completed_at),
@@ -330,18 +470,21 @@ export function buildLiveRunGraph(
     });
   }
 
-  const edges: WorkflowGraphEdge[] = [];
-  for (let i = 0; i < nodes.length - 1; i += 1) {
-    const fromNode = nodes[i];
-    const toNode = nodes[i + 1];
-    const fromDone = ['succeeded', 'failed', 'skipped', 'cancelled'].includes(String(fromNode.status || '').toLowerCase());
-    const toRunning = ['running', 'waiting'].includes(String(toNode.status || '').toLowerCase());
-    edges.push({
-      id: `${fromNode.id}->${toNode.id}`,
-      from: fromNode.id,
-      to: toNode.id,
-      active: fromDone && toRunning,
-    });
+  const graphNodeById = new Map(nodes.map((node) => [node.id, node]));
+  let edges: WorkflowGraphEdge[] = [];
+  if (normalized.schemaVersion === 2) {
+    edges = buildEdgesFromDefinition(normalized.edges, definitionNodeIdToGraphNodeId, graphNodeById);
+  } else {
+    for (let i = 0; i < nodes.length - 1; i += 1) {
+      const fromNode = nodes[i];
+      const toNode = nodes[i + 1];
+      edges.push({
+        id: `${fromNode.id}->${toNode.id}`,
+        from: fromNode.id,
+        to: toNode.id,
+        active: edgeIsActive(fromNode, toNode),
+      });
+    }
   }
 
   return { nodes, edges };

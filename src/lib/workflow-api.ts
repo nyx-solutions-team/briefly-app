@@ -6,11 +6,16 @@ export type WorkflowConfig = {
   readOnlyMode: boolean;
   adminOnly: boolean;
   callerRole: string;
+  dagExecutorEnabled?: boolean;
+  dagExecutorEnv?: boolean | null;
 };
 
 export type WorkflowTemplate = {
   id: string;
-  org_id: string;
+  org_id: string | null;
+  template_scope?: 'org' | 'system';
+  source_template_id?: string | null;
+  source_template_version?: number | null;
   name: string;
   description: string | null;
   is_active: boolean;
@@ -59,10 +64,13 @@ export async function getWorkflowConfig(): Promise<WorkflowConfig> {
   return apiFetch(`/orgs/${orgId}/workflows/config`, { skipCache: true });
 }
 
-export async function listWorkflowTemplates(includeInactive = true): Promise<{ templates: WorkflowTemplate[] }> {
+export async function listWorkflowTemplates(includeInactive = true, includeSystem = true): Promise<{ templates: WorkflowTemplate[] }> {
   const orgId = getApiContext().orgId;
   if (!orgId) throw new Error('No org selected');
-  const suffix = includeInactive ? '?include_inactive=true' : '';
+  const qs = new URLSearchParams();
+  if (includeInactive) qs.set('include_inactive', 'true');
+  if (!includeSystem) qs.set('include_system', 'false');
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return apiFetch(`/orgs/${orgId}/workflows/templates${suffix}`, { skipCache: true });
 }
 
@@ -103,6 +111,21 @@ export async function createWorkflowTemplateVersion(
   const orgId = getApiContext().orgId;
   if (!orgId) throw new Error('No org selected');
   return apiFetch(`/orgs/${orgId}/workflows/templates/${templateId}/versions`, { method: 'POST', body, skipCache: true });
+}
+
+export async function forkWorkflowTemplate(
+  templateId: string,
+  body?: {
+    name?: string;
+    description?: string;
+    sourceVersion?: number;
+    isActive?: boolean;
+    changeNote?: string;
+  }
+): Promise<{ template: WorkflowTemplate; version: any; forkedFrom: { templateId: string; version: number; templateScope: 'org' | 'system' } }> {
+  const orgId = getApiContext().orgId;
+  if (!orgId) throw new Error('No org selected');
+  return apiFetch(`/orgs/${orgId}/workflows/templates/${templateId}/fork`, { method: 'POST', body: body || {}, skipCache: true });
 }
 
 export async function getWorkflowTemplateDefinition(templateId: string, version?: number): Promise<{

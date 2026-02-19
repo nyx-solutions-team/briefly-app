@@ -68,16 +68,18 @@ function parseCsvText(input: string): CsvParseResult {
   return { headers, rows: dataRows };
 }
 
-export default function UploadFilePreview({ 
-  file, 
-  previewUrl, 
+export default function UploadFilePreview({
+  file,
+  previewUrl,
   className,
-  height = '60vh' 
+  height = '60vh'
 }: UploadFilePreviewProps) {
   const extension = file.name.split('.').pop()?.toLowerCase() || '';
   const isPdf = extension === 'pdf';
   const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(extension);
   const isCsv = extension === 'csv' || file.type.toLowerCase().includes('csv');
+  const isDwg = ['dwg', 'dxf'].includes(extension) || file.type.toLowerCase().includes('acad') || file.type.toLowerCase().includes('dwg');
+  const isDocx = ['docx', 'doc'].includes(extension) || file.type.toLowerCase().includes('wordprocessingml') || file.type.toLowerCase().includes('msword');
   const isTextLike = (
     (file.type.startsWith('text/') && !isCsv) ||
     file.type === 'application/json' ||
@@ -209,8 +211,42 @@ export default function UploadFilePreview({
             <div className="text-sm text-muted-foreground">This file is empty.</div>
           )}
         </div>
+      ) : isDwg ? (
+        <div
+          className="w-full flex items-center justify-center text-muted-foreground"
+          style={{ height: typeof height === 'number' ? `${height}px` : height }}
+        >
+          <div className="text-center space-y-3">
+            <div className="text-5xl">📐</div>
+            <div className="text-sm font-semibold text-foreground">{file.name}</div>
+            <div className="text-xs text-muted-foreground max-w-[220px] mx-auto">
+              CAD drawing files cannot be previewed in the browser.
+              The file will be stored and available for download.
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {(file.size / 1024 / 1024).toFixed(2)} MB
+            </div>
+          </div>
+        </div>
+      ) : isDocx ? (
+        <div
+          className="w-full flex items-center justify-center text-muted-foreground"
+          style={{ height: typeof height === 'number' ? `${height}px` : height }}
+        >
+          <div className="text-center space-y-3">
+            <div className="text-5xl">📝</div>
+            <div className="text-sm font-semibold text-foreground">{file.name}</div>
+            <div className="text-xs text-muted-foreground max-w-[220px] mx-auto">
+              Word documents cannot be previewed here. Text will be extracted
+              automatically during processing.
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {(file.size / 1024 / 1024).toFixed(2)} MB
+            </div>
+          </div>
+        </div>
       ) : (
-        <div 
+        <div
           className="w-full flex items-center justify-center text-muted-foreground"
           style={{ height: typeof height === 'number' ? `${height}px` : height }}
         >

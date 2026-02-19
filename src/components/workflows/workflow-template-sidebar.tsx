@@ -12,6 +12,10 @@ export type WorkflowTemplateSidebarItem = {
   latestVersion?: number | null;
   isActive?: boolean;
   description?: string | null;
+  templateScope?: "org" | "system";
+  sourceTemplateId?: string | null;
+  sourceTemplateVersion?: number | null;
+  linkedForkId?: string | null;
 };
 
 type Props = {
@@ -20,9 +24,13 @@ type Props = {
   activeId?: string;
   layout?: "vertical" | "horizontal";
   onSelect: (id: string) => void;
+  onUseTemplate?: (id: string) => void;
+  onForkTemplate?: (id: string) => void;
+  onEditFork?: (id: string, linkedForkId: string | null) => void;
   onCreateNew?: () => void;
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  actioningTemplateId?: string | null;
 };
 
 export function WorkflowTemplateSidebar({
@@ -31,9 +39,13 @@ export function WorkflowTemplateSidebar({
   activeId,
   layout = "vertical",
   onSelect,
+  onUseTemplate,
+  onForkTemplate,
+  onEditFork,
   onCreateNew,
   onRefresh,
   isRefreshing,
+  actioningTemplateId = null,
 }: Props) {
   const [query, setQuery] = React.useState("");
 
@@ -46,6 +58,72 @@ export function WorkflowTemplateSidebar({
       return name.includes(q) || desc.includes(q) || String(item.id).toLowerCase().includes(q);
     });
   }, [items, query]);
+
+  const renderActions = (item: WorkflowTemplateSidebarItem, compact = false) => {
+    const scope = String(item.templateScope || "org").toLowerCase();
+    const isSystem = scope === "system";
+    const isFork = Boolean(item.sourceTemplateId);
+    const linkedForkId = item.linkedForkId || null;
+    const editingBusy = actioningTemplateId && actioningTemplateId === item.id;
+
+    const useLabel = compact ? "Use" : "Use Template";
+    const forkLabel = compact ? "Fork" : "Fork Template";
+    const editForkLabel = compact ? "Edit" : "Edit Fork";
+
+    return (
+      <div className={`flex items-center gap-1.5 ${compact ? "mt-1.5" : "mt-2.5"}`}>
+        {onUseTemplate ? (
+          <Button
+            size="sm"
+            variant="outline"
+            className={`${compact ? "h-6 px-2 text-[10px]" : "h-7 px-2.5 text-[10px]"}`}
+            disabled={Boolean(editingBusy)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onUseTemplate(item.id);
+            }}
+          >
+            {useLabel}
+          </Button>
+        ) : null}
+
+        {isSystem && onForkTemplate ? (
+          <Button
+            size="sm"
+            className={`${compact ? "h-6 px-2 text-[10px]" : "h-7 px-2.5 text-[10px]"}`}
+            disabled={Boolean(editingBusy)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onForkTemplate(item.id);
+            }}
+          >
+            {editingBusy ? "Forking..." : forkLabel}
+          </Button>
+        ) : null}
+
+        {onEditFork ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className={`${compact ? "h-6 px-2 text-[10px]" : "h-7 px-2.5 text-[10px]"}`}
+            disabled={Boolean(editingBusy)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onEditFork(item.id, linkedForkId);
+            }}
+          >
+            {editForkLabel}
+          </Button>
+        ) : null}
+
+        {isFork ? (
+          <Badge variant="outline" className={`${compact ? "h-5 text-[9px]" : "h-5 text-[10px]"}`}>
+            fork
+          </Badge>
+        ) : null}
+      </div>
+    );
+  };
 
   if (layout === "horizontal") {
     return (
@@ -80,10 +158,17 @@ export function WorkflowTemplateSidebar({
             {filtered.map((item) => {
               const active = item.id === activeId;
               return (
-                <button
+                <div
                   key={item.id}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => onSelect(item.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelect(item.id);
+                    }
+                  }}
                   className={`w-[220px] shrink-0 text-left rounded-md border px-2.5 py-2 transition-colors ${
                     active
                       ? "border-primary/50 bg-primary/10"
@@ -98,8 +183,12 @@ export function WorkflowTemplateSidebar({
                     <Badge variant="outline" className="text-[10px]">
                       v{item.latestVersion || "-"}
                     </Badge>
+                    <Badge variant="outline" className="text-[10px]">
+                      {String(item.templateScope || "org").toLowerCase() === "system" ? "system" : "org"}
+                    </Badge>
                   </div>
-                </button>
+                  {renderActions(item, true)}
+                </div>
               );
             })}
             {filtered.length === 0 ? (
@@ -145,10 +234,17 @@ export function WorkflowTemplateSidebar({
         {filtered.map((item) => {
           const active = item.id === activeId;
           return (
-            <button
+            <div
               key={item.id}
-              type="button"
+              role="button"
+              tabIndex={0}
               onClick={() => onSelect(item.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelect(item.id);
+                }
+              }}
               className={`w-full text-left rounded-lg border px-3 py-2.5 transition-all ${
                 active
                   ? "border-primary/50 bg-primary/10 shadow-[0_4px_14px_rgba(79,70,229,0.08)]"
@@ -168,8 +264,12 @@ export function WorkflowTemplateSidebar({
                 <Badge variant="outline" className="text-[10px] h-5">
                   v{item.latestVersion || "-"}
                 </Badge>
+                <Badge variant="outline" className="text-[10px] h-5">
+                  {String(item.templateScope || "org").toLowerCase() === "system" ? "system" : "org"}
+                </Badge>
               </div>
-            </button>
+              {renderActions(item)}
+            </div>
           );
         })}
         {filtered.length === 0 ? (
