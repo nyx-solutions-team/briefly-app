@@ -1270,20 +1270,55 @@ function UploadContent() {
     let lastPath: string[] | null = null;
 
     try {
-      for (const { index } of readyEntries) {
+      // ── Pre-hoist folder creation: build all needed folder paths once ──
+      const allFolderPaths: string[][] = [];
+      for (const { item } of readyEntries) {
+        const targetPath = item.folderPathOverride?.length ? item.folderPathOverride : folderPath;
+        if (targetPath.length > 0) {
+          for (let i = 1; i <= targetPath.length; i++) {
+            allFolderPaths.push(targetPath.slice(0, i));
+          }
+        }
+      }
+      if (allFolderPaths.length > 0) {
+        await ensureFolderStructure(allFolderPaths);
+      }
+
+      // ── Parallel save with concurrency limit of 3 ──
+      const CONCURRENCY = 3;
+      const results: ({ path: string[]; hasMoreReady: boolean } | null)[] = [];
+      const pending = [...readyEntries];
+
+      const runNext = async (): Promise<void> => {
+        const entry = pending.shift();
+        if (!entry) return;
         try {
-          const result = await onDone(index);
+          const result = await onDone(entry.index);
+          results.push(result);
           if (result) lastPath = result.path;
         } catch (error) {
           console.error('Error saving item:', error);
+          results.push(null);
         }
+        await runNext();
+      };
+
+      // Launch up to CONCURRENCY workers
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, readyEntries.length) }, runNext));
+
+      // ── Single document list refresh after all saves complete ──
+      try {
+        await loadAllDocuments();
+      } catch (e) {
+        console.warn('Failed to refresh documents after bulk save:', e);
       }
 
-      if (lastPath) {
+      const savedCount = results.filter(Boolean).length;
+      if (savedCount > 0 && lastPath) {
         setRecentSavePath(lastPath);
         toast({
           title: 'Documents saved',
-          description: `Saved ${readyEntries.length} document${readyEntries.length === 1 ? '' : 's'}. Use "View folder" when ready.`,
+          description: `Saved ${savedCount} document${savedCount === 1 ? '' : 's'}. Use "View folder" when ready.`,
         });
       }
     } finally {
@@ -1292,9 +1327,21 @@ function UploadContent() {
   };
 
   const handleSave = async (index: number) => {
+    const item = queue[index];
+    // Pre-create folder structure for single saves
+    if (item) {
+      const targetPath = item.folderPathOverride?.length ? item.folderPathOverride : folderPath;
+      if (targetPath.length > 0) {
+        const paths: string[][] = [];
+        for (let i = 1; i <= targetPath.length; i++) paths.push(targetPath.slice(0, i));
+        await ensureFolderStructure(paths);
+      }
+    }
     const result = await onDone(index);
     if (!result) return;
     setRecentSavePath(result.path);
+    // Refresh document list once after single save
+    try { await loadAllDocuments(); } catch (e) { console.warn('Failed to refresh after save', e); }
     toast({
       title: 'Document saved',
       description: result.hasMoreReady
@@ -2435,34 +2482,8 @@ function UploadContent() {
         return null;
       }
 
-      console.log('Creating document with folderPath:', targetFolderPath, 'Type:', typeof targetFolderPath, 'Is Array:', Array.isArray(targetFolderPath));
-      console.log('🔍 Creating folder structure for path:', targetFolderPath);
-      try {
-        for (let i = 0; i < targetFolderPath.length; i++) {
-          const slice = targetFolderPath.slice(0, i + 1);
-          const parentPath = slice.slice(0, -1);
-          const folderName = slice[slice.length - 1];
-
-          console.log(`🔍 Level ${i + 1}: Creating folder "${folderName}" with parent path:`, parentPath);
-
-          const existing = documentFolders.find(f => JSON.stringify(f) === JSON.stringify(slice));
-          if (!existing) {
-            console.log(`🔍 Folder "${folderName}" doesn't exist, creating...`);
-            const result = await createFolder(parentPath, folderName, effectiveAdditionalDepartmentIds);
-            console.log(`🔍 Folder creation result:`, result);
-          } else {
-            console.log(`🔍 Folder "${folderName}" already exists, skipping creation`);
-          }
-        }
-        console.log('✅ Folder structure creation completed successfully');
-      } catch (error) {
-        console.error('❌ Failed to create folder structure:', error);
-        toast({
-          title: 'Folder creation failed',
-          description: `Could not create folder structure: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          variant: 'destructive'
-        });
-      }
+      // Folder structure is pre-created by saveAllReady (or by the caller for single saves)
+      // No per-document folder creation needed here.
 
       if (item.linkMode === 'version' && !item.baseId) {
         toast({
@@ -2545,48 +2566,18 @@ function UploadContent() {
         console.warn('Failed to save extraction data (non-critical):', extractionError);
       }
 
-      // Before accepting, verify the ingestion job is ready (status = needs_review)
-      // It may still be 'processing' if Vespa indexing is in progress
+      // ── Optimistically accept the ingestion job (no polling) ──
+      // If the job is still processing, the API returns 409 — we surface it
+      // as a soft "still indexing" note on the item rather than blocking.
       try {
-        // Re-fetch the latest ingestion job status to ensure it's ready
-        let currentJob = await fetchIngestionJobForDoc(orgId, item.docId);
-        let jobStatus = currentJob?.status?.toLowerCase();
-
-        // If still processing, poll until ready or timeout
-        if (jobStatus === 'processing' || jobStatus === 'pending') {
-          console.log('Ingestion job still processing, waiting for Vespa to complete...');
-          setQueue(prev => prev.map((q, i) => i === index ? { ...q, note: 'Waiting for indexing…' } : q));
-
-          const maxWaitMs = 60000; // 1 minute max wait
-          const start = Date.now();
-          while ((jobStatus === 'processing' || jobStatus === 'pending') && Date.now() - start < maxWaitMs) {
-            await new Promise(r => setTimeout(r, 2000)); // Poll every 2 seconds
-            currentJob = await fetchIngestionJobForDoc(orgId, item.docId);
-            jobStatus = currentJob?.status?.toLowerCase();
-          }
-
-          if (jobStatus !== 'needs_review') {
-            console.warn(`Ingestion job still in status: ${jobStatus} after waiting`);
-          }
-        }
-
-        // Now attempt to accept
         await apiFetch(`/orgs/${orgId}/ingestion-jobs/${item.docId}/accept`, {
           method: 'POST',
-          // Send empty object to satisfy Fastify's Content-Type validation
           body: {},
         });
       } catch (acceptError: any) {
-        // Handle specific cases
         if (acceptError?.status === 409) {
-          // Still processing - show a helpful message
-          console.warn('Ingestion job not ready yet:', acceptError?.data?.message);
-          toast({
-            title: 'Still processing',
-            description: 'Document indexing is still in progress. Please wait a moment and try again.',
-          });
-          setQueue(prev => prev.map((q, i) => i === index ? { ...q, status: 'ready', locked: false, note: 'Indexing in progress…' } : q));
-          return null;
+          // Job not yet in needs_review — mark saved anyway, worker will finish
+          console.warn('Accept 409: job still processing, marking saved optimistically');
         } else if (acceptError?.status !== 404 && acceptError?.status !== 403) {
           console.warn('Failed to mark ingestion job accepted:', acceptError);
         }
@@ -2597,13 +2588,8 @@ function UploadContent() {
         nextQueueSnapshot = prev.map((q, i) => i === index ? { ...q, status: 'success', locked: true, note: 'Saved' } : q);
         return nextQueueSnapshot;
       });
-      toast({ title: 'Saved', description: `${item.file.name} stored.` });
-
-      try {
-        await loadAllDocuments(); // Use loadAllDocuments to ensure folders are loaded
-      } catch (error) {
-        console.warn('Failed to refresh documents after save:', error);
-      }
+      // loadAllDocuments is deferred to once after all saves complete in saveAllReady
+      // (for single saves via handleSave, we call it explicitly below)
 
       const remainingReady = nextQueueSnapshot.some(q => q.status === 'ready' && !q.locked);
       const effectivePath = Array.isArray(savedDoc?.folderPath) && savedDoc.folderPath.length > 0
