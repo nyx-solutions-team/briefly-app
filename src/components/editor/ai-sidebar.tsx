@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import type { Editor } from "@tiptap/react";
-import { AtSign, Loader2, X } from "lucide-react";
+import { AtSign, Loader2, X, Sparkles, Send, FileText } from "lucide-react";
 import { NodeSelection } from "@tiptap/pm/state";
 import { CellSelection, TableMap } from "@tiptap/pm/tables";
 
@@ -14,6 +14,11 @@ import { apiFetch, getApiContext } from "@/lib/api";
 import type { StoredDocument } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { extractTextFromTiptap } from "@/lib/tiptap-text";
+import { routeAndBuildPayload } from "@/lib/ai-context/context-router";
+import { useDiffManager } from "@/components/editor/diff/diff-manager";
+import { generateBlockDiff } from "@/components/editor/diff/diff-utils";
+import type { JSONContent } from "@tiptap/core";
+
 
 type ChatRole = "user" | "assistant";
 
@@ -31,13 +36,13 @@ type TableAction = "append_rows" | "insert_rows" | "update_rows" | "add_column" 
 
 type AssistantMeta =
   | {
-      kind: "selection";
-      status: SuggestionStatus;
-      selectionFrom: number;
-      selectionTo: number;
-      sourceText?: string;
-      validationError?: string;
-    }
+    kind: "selection";
+    status: SuggestionStatus;
+    selectionFrom: number;
+    selectionTo: number;
+    sourceText?: string;
+    validationError?: string;
+  }
   | {
     kind: "plain";
     status: SuggestionStatus;
@@ -111,6 +116,8 @@ type RequestContext =
   | {
     kind: "selection";
     modelPrompt: string;
+    context?: string;
+    docOverview?: string[];
     selectionFrom: number;
     selectionTo: number;
     selectedText: string;
@@ -118,6 +125,8 @@ type RequestContext =
   | {
     kind: "table_json";
     modelPrompt: string;
+    context?: string;
+    docOverview?: string[];
     insertPos: number;
     tableLabel?: string;
     columns: string[];
@@ -129,6 +138,8 @@ type RequestContext =
   | {
     kind: "table";
     modelPrompt: string;
+    context?: string;
+    docOverview?: string[];
     insertPos: number;
     columnCount: number; // output column count
     tableColumnCount: number;
@@ -144,6 +155,8 @@ type RequestContext =
   | {
     kind: "plain";
     modelPrompt: string;
+    context?: string;
+    docOverview?: string[];
     insertPos: number;
     applyLabel?: string;
     replaceDocument?: boolean;
@@ -212,6 +225,8 @@ type TableCellSnapshot = {
 type Props = {
   editor: Editor | null;
   className?: string;
+  docId: string;
+  versionId: number;
 };
 
 function inferTableAction(userPrompt: string): TableAction {
@@ -563,17 +578,18 @@ function isImproveDocumentIntent(userPrompt: string) {
   );
 }
 
+
 function isModifyExistingDocumentIntent(userPrompt: string) {
   const t = String(userPrompt || "").toLowerCase().trim();
   if (!t) return false;
 
   // If the user is clearly asking to create new content, don't force edit mode.
-  if (/\b(create|write|draft|generate)\b/.test(t) && !/\b(change|update|edit|modify|replace|rename|retitle)\b/.test(t)) {
+  if (/\b(create|write|draft|generate)\b/.test(t) && !/\b(change|update|edit|modify|replace|rename|retitle|summarize)\b/.test(t)) {
     return false;
   }
 
   return (
-    /\b(change|update|edit|modify|replace|revise|adjust|rename|retitle)\b/.test(t) ||
+    /\b(change|update|edit|modify|replace|revise|adjust|rename|retitle|summarize)\b/.test(t) ||
     /\b(double|halve|increase|decrease|multiply|divide)\b/.test(t) ||
     /\bfix\b/.test(t) ||
     /\bcorrect\b/.test(t)
@@ -1058,6 +1074,202 @@ function getSelectedText(editor: Editor, from: number, to: number) {
     return normalizeNewlines(text);
   } catch {
     return "";
+  }
+}
+
+type SelectionDiffRange = {
+  rawFrom: number;
+  rawTo: number;
+  normalizedFrom: number;
+  normalizedTo: number;
+  startIndex: number;
+  endIndex: number;
+  blockTypes: string[];
+  isSingleParagraphOrHeading: boolean;
+  isPureTableSelection: boolean;
+  isMixedSelection: boolean;
+};
+
+function getTopLevelPos(doc: any, index: number): number {
+  let pos = 0;
+  for (let i = 0; i < index; i += 1) {
+    pos += doc.child(i).nodeSize;
+  }
+  return pos;
+}
+
+function getTopLevelFamily(type: string): string {
+  if (type === "table") return "table";
+  if (type === "bulletList" || type === "orderedList" || type === "taskList") return "list";
+  if (type === "paragraph" || type === "heading" || type === "blockquote" || type === "callout" || type === "codeBlock") {
+    return "text";
+  }
+  return type || "other";
+}
+
+function normalizeSelectionRangeForDiff(editor: Editor, from: number, to: number): SelectionDiffRange | null {
+  const doc = editor.state.doc;
+  if (!doc || doc.childCount === 0) return null;
+
+  const docSize = doc.content.size;
+  const rawFrom = Math.max(0, Math.min(docSize, from));
+  const rawTo = Math.max(rawFrom, Math.min(docSize, to));
+  if (rawTo <= rawFrom) return null;
+
+  const fromResolved = doc.resolve(rawFrom);
+  const toProbe = Math.max(rawFrom + 1, rawTo - 1);
+  const toResolved = doc.resolve(Math.max(0, Math.min(docSize, toProbe)));
+
+  const startIndex = Math.max(0, Math.min(doc.childCount - 1, fromResolved.index(0)));
+  const endIndex = Math.max(startIndex, Math.min(doc.childCount - 1, toResolved.index(0)));
+
+  const normalizedFrom = getTopLevelPos(doc, startIndex);
+  const normalizedTo = getTopLevelPos(doc, endIndex) + doc.child(endIndex).nodeSize;
+
+  const blockTypes: string[] = [];
+  for (let i = startIndex; i <= endIndex; i += 1) {
+    blockTypes.push(String(doc.child(i)?.type?.name || ""));
+  }
+
+  const families = new Set(blockTypes.map(getTopLevelFamily));
+  const firstType = blockTypes[0] || "";
+
+  return {
+    rawFrom,
+    rawTo,
+    normalizedFrom,
+    normalizedTo,
+    startIndex,
+    endIndex,
+    blockTypes,
+    isSingleParagraphOrHeading:
+      startIndex === endIndex && (firstType === "paragraph" || firstType === "heading"),
+    isPureTableSelection: blockTypes.length > 0 && blockTypes.every((type) => type === "table"),
+    isMixedSelection: families.size > 1,
+  };
+}
+
+function inlineTextFromJsonNode(node: any): string {
+  if (!node) return "";
+  if (typeof node.text === "string") return node.text;
+  if (node.type === "hardBreak") return "\n";
+  if (!Array.isArray(node.content)) return "";
+  return node.content.map((child: any) => inlineTextFromJsonNode(child)).join("");
+}
+
+function renderStructuredSelectionText(content: any): string {
+  const lines: string[] = [];
+  const addLine = (value: string) => {
+    lines.push(String(value || "").replace(/\s+$/g, ""));
+  };
+
+  const renderListItem = (item: any, marker: string, indent = "") => {
+    const children = Array.isArray(item?.content) ? item.content : [];
+    const textParts: string[] = [];
+
+    for (const child of children) {
+      if (child?.type === "bulletList" || child?.type === "orderedList" || child?.type === "taskList") {
+        continue;
+      }
+      const text = inlineTextFromJsonNode(child).replace(/\n+/g, " ").trim();
+      if (text) textParts.push(text);
+    }
+
+    addLine(`${indent}${marker} ${textParts.join(" ")}`.trimEnd());
+
+    for (const child of children) {
+      if (child?.type === "bulletList" || child?.type === "orderedList" || child?.type === "taskList") {
+        walk(child, `${indent}  `);
+      }
+    }
+  };
+
+  const walk = (node: any, indent = "") => {
+    if (!node) return;
+    const type = String(node.type || "");
+    const children = Array.isArray(node.content) ? node.content : [];
+
+    if (type === "doc") {
+      for (const child of children) walk(child, indent);
+      return;
+    }
+
+    if (type === "bulletList") {
+      for (const item of children) renderListItem(item, "-", indent);
+      return;
+    }
+
+    if (type === "orderedList") {
+      const start = Number(node?.attrs?.start || 1);
+      for (let i = 0; i < children.length; i += 1) {
+        renderListItem(children[i], `${start + i}.`, indent);
+      }
+      return;
+    }
+
+    if (type === "taskList") {
+      for (const item of children) {
+        const checked = Boolean(item?.attrs?.checked);
+        renderListItem(item, checked ? "- [x]" : "- [ ]", indent);
+      }
+      return;
+    }
+
+    if (type === "table") {
+      for (const row of children) {
+        if (String(row?.type || "") !== "tableRow") continue;
+        const cells = Array.isArray(row?.content) ? row.content : [];
+        const values = cells
+          .map((cell: any) => inlineTextFromJsonNode(cell).replace(/\n+/g, " ").trim())
+          .map((value: string) => value || "")
+          .join(" | ");
+        addLine(`${indent}${values}`);
+      }
+      return;
+    }
+
+    if (type === "paragraph" || type === "heading" || type === "blockquote" || type === "codeBlock" || type === "callout") {
+      const text = inlineTextFromJsonNode(node).trim();
+      if (text) addLine(`${indent}${text}`);
+      return;
+    }
+
+    if (children.length > 0) {
+      for (const child of children) walk(child, indent);
+      return;
+    }
+
+    const leafText = inlineTextFromJsonNode(node).trim();
+    if (leafText) addLine(`${indent}${leafText}`);
+  };
+
+  walk(content);
+
+  return lines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function getSelectionTextForPrompt(editor: Editor, from: number, to: number): string {
+  const basic = normalizeNewlines(getSelectedText(editor, from, to)).trim();
+  const range = normalizeSelectionRangeForDiff(editor, from, to);
+  if (!range) return basic;
+
+  const coversNormalizedRange = range.rawFrom <= range.normalizedFrom + 1 && range.rawTo >= range.normalizedTo - 1;
+  if (range.isSingleParagraphOrHeading && !coversNormalizedRange) {
+    return basic;
+  }
+
+  try {
+    const slice = editor.state.doc.slice(range.normalizedFrom, range.normalizedTo);
+    const structured = renderStructuredSelectionText({
+      type: "doc",
+      content: slice.content.toJSON(),
+    });
+    return normalizeNewlines(structured || basic).trim();
+  } catch {
+    return basic;
   }
 }
 
@@ -1550,7 +1762,13 @@ function describeTableInstruction(instruction: TableJsonInstruction): { title: s
 type PreviewTableData = {
   headers: string[];
   rows: string[][];
+  rowDiffKinds?: Array<"none" | "insert" | "delete" | "update">;
+  cellDiffKinds?: Record<string, "none" | "insert" | "delete" | "update">;
 };
+
+function previewCellKey(rowIndex: number, colIndex: number) {
+  return `${rowIndex}:${colIndex}`;
+}
 
 function splitHeaderLine(headersLine: string, fallbackCount: number): string[] {
   const parts = String(headersLine || "")
@@ -1572,11 +1790,19 @@ function buildTablePreviewFromMeta(meta: Extract<AssistantMeta, { kind: "table" 
       const body = meta.rows.slice(1).map((r) =>
         Array.from({ length: headers.length }, (_, i) => coerceCellValue(r?.[i]))
       );
-      return { headers, rows: body };
+      return {
+        headers,
+        rows: body,
+        rowDiffKinds: body.map(() => "insert"),
+      };
     }
     const headers = splitHeaderLine(meta.headersLine, meta.outputColumnCount);
     const rows = meta.rows.map((r) => Array.from({ length: headers.length }, (_, i) => coerceCellValue(r?.[i])));
-    return { headers, rows };
+    return {
+      headers,
+      rows,
+      rowDiffKinds: rows.map(() => "insert"),
+    };
   }
 
   if (meta.action === "add_column") {
@@ -1586,14 +1812,28 @@ function buildTablePreviewFromMeta(meta: Extract<AssistantMeta, { kind: "table" 
       String(rowKeys[i] || `Row ${i + 1}`),
       coerceCellValue(r?.[0]),
     ]);
-    return { headers: ["Row", colName], rows };
+    const cellDiffKinds: Record<string, "none" | "insert" | "delete" | "update"> = {};
+    rows.forEach((_row: string[], rowIndex: number) => {
+      cellDiffKinds[previewCellKey(rowIndex, 1)] = "insert";
+    });
+    return {
+      headers: ["Row", colName],
+      rows,
+      rowDiffKinds: rows.map(() => "update"),
+      cellDiffKinds,
+    };
   }
 
   const headers = splitHeaderLine(meta.headersLine, meta.outputColumnCount);
   const rows = meta.rows.map((r) =>
     Array.from({ length: headers.length }, (_, i) => coerceCellValue(r?.[i]))
   );
-  return { headers, rows };
+  const rowDiffKind = meta.action === "update_rows" ? "update" : "insert";
+  return {
+    headers,
+    rows,
+    rowDiffKinds: rows.map(() => rowDiffKind),
+  };
 }
 
 function buildTableJsonPreviewFromMeta(meta: Extract<AssistantMeta, { kind: "table_json" }>): PreviewTableData | null {
@@ -1625,7 +1865,11 @@ function buildTableJsonPreviewFromMeta(meta: Extract<AssistantMeta, { kind: "tab
         ? Array.from({ length: headers.length }, (_, i) => coerceCellValue(row?.[i]))
         : mapRowObjectToValues(headers, row)
     ));
-    return { headers, rows };
+    return {
+      headers,
+      rows,
+      rowDiffKinds: rows.map(() => "insert"),
+    };
   }
 
   if (instruction.action === "add_column") {
@@ -1633,7 +1877,16 @@ function buildTableJsonPreviewFromMeta(meta: Extract<AssistantMeta, { kind: "tab
     if (values.length === 0) return null;
     const colName = String(data.column_name || "").trim() || "Value";
     const rows = values.map((v: any, i: number) => [String(rowKeys[i] || `Row ${i + 1}`), coerceCellValue(v)]);
-    return { headers: ["Row", colName], rows };
+    const cellDiffKinds: Record<string, "none" | "insert" | "delete" | "update"> = {};
+    rows.forEach((_row: string[], rowIndex: number) => {
+      cellDiffKinds[previewCellKey(rowIndex, 1)] = "insert";
+    });
+    return {
+      headers: ["Row", colName],
+      rows,
+      rowDiffKinds: rows.map(() => "update"),
+      cellDiffKinds,
+    };
   }
 
   if (instruction.action === "update_cell") {
@@ -1646,21 +1899,38 @@ function buildTableJsonPreviewFromMeta(meta: Extract<AssistantMeta, { kind: "tab
         coerceCellValue(u.value),
       ]);
     if (rows.length === 0) return null;
-    return { headers: ["Row", "Column", "Value"], rows };
+    const cellDiffKinds: Record<string, "none" | "insert" | "delete" | "update"> = {};
+    rows.forEach((_row: string[], rowIndex: number) => {
+      cellDiffKinds[previewCellKey(rowIndex, 2)] = "update";
+    });
+    return {
+      headers: ["Row", "Column", "Value"],
+      rows,
+      rowDiffKinds: rows.map(() => "update"),
+      cellDiffKinds,
+    };
   }
 
   if (instruction.action === "delete_row") {
     const rowsRef = Array.isArray(data.rows) ? data.rows : [];
     const rows = rowsRef.map((r: any) => [String(r ?? "")]).filter((r: string[]) => r[0].trim());
     if (rows.length === 0) return null;
-    return { headers: ["Rows to Delete"], rows };
+    return {
+      headers: ["Rows to Delete"],
+      rows,
+      rowDiffKinds: rows.map(() => "delete"),
+    };
   }
 
   if (instruction.action === "delete_column") {
     const colsRef = Array.isArray(data.columns) ? data.columns : [];
     const rows = colsRef.map((c: any) => [String(c ?? "")]).filter((r: string[]) => r[0].trim());
     if (rows.length === 0) return null;
-    return { headers: ["Columns to Delete"], rows };
+    return {
+      headers: ["Columns to Delete"],
+      rows,
+      rowDiffKinds: rows.map(() => "delete"),
+    };
   }
 
   return null;
@@ -1695,7 +1965,7 @@ function buildSelectionAttachment(editor: Editor): AttachedContextSnapshot | nul
     };
   }
 
-  const raw = getSelectedText(editor, sel.from, sel.to);
+  const raw = getSelectionTextForPrompt(editor, sel.from, sel.to);
   const text = normalizeNewlines(raw).trim();
   if (!text) return null;
 
@@ -2462,8 +2732,30 @@ function fillTableCell(editor: Editor, tablePos: number, rowIndex: number, colum
   }
 }
 
+function parseIndexRef(ref: any): number | null {
+  if (typeof ref === "number" && Number.isFinite(ref)) return Math.trunc(ref);
+  if (typeof ref !== "string") return null;
+
+  const raw = ref.trim().toLowerCase();
+  if (!raw) return null;
+
+  if (/^\d+$/.test(raw)) return Number(raw);
+
+  const ordinalMatch = raw.match(/(\d+)(?:st|nd|rd|th)\b/);
+  if (ordinalMatch) return Number(ordinalMatch[1]);
+
+  const rowOrColMatch = raw.match(/(?:row|rows|col|column|columns)\s*#?\s*(\d+)\b/);
+  if (rowOrColMatch) return Number(rowOrColMatch[1]);
+
+  const trailingNumber = raw.match(/#\s*(\d+)\s*$/);
+  if (trailingNumber) return Number(trailingNumber[1]);
+
+  return null;
+}
+
 function resolveColumnIndex(columns: string[], ref: any): number | null {
-  const n = typeof ref === "number" ? ref : (typeof ref === "string" && ref.trim().match(/^\d+$/) ? Number(ref.trim()) : NaN);
+  const parsed = parseIndexRef(ref);
+  const n = parsed == null ? NaN : parsed;
   if (Number.isFinite(n)) {
     if (n >= 0 && n < columns.length) return n;
     if (n >= 1 && n <= columns.length) return n - 1;
@@ -2473,14 +2765,25 @@ function resolveColumnIndex(columns: string[], ref: any): number | null {
   if (!name) return null;
   const key = normalizeSectionKey(name);
   if (!key) return null;
+
+  // Prefer exact match first.
   for (let i = 0; i < columns.length; i += 1) {
     if (normalizeSectionKey(columns[i]) === key) return i;
   }
+
+  // Then allow fuzzy contains match to handle values like "column Monthly Price".
+  for (let i = 0; i < columns.length; i += 1) {
+    const candidate = normalizeSectionKey(columns[i]);
+    if (!candidate) continue;
+    if (candidate.includes(key) || key.includes(candidate)) return i;
+  }
+
   return null;
 }
 
 function resolveBodyRowIndex(rowKeys: string[], ref: any): number | null {
-  const n = typeof ref === "number" ? ref : (typeof ref === "string" && ref.trim().match(/^\d+$/) ? Number(ref.trim()) : NaN);
+  const parsed = parseIndexRef(ref);
+  const n = parsed == null ? NaN : parsed;
   if (Number.isFinite(n)) {
     if (n >= 0 && n < rowKeys.length) return n;
     if (n >= 1 && n <= rowKeys.length) return n - 1;
@@ -2490,9 +2793,19 @@ function resolveBodyRowIndex(rowKeys: string[], ref: any): number | null {
   if (!keyRaw) return null;
   const key = normalizeSectionKey(keyRaw);
   if (!key) return null;
+
+  // Prefer exact row-key match first.
   for (let i = 0; i < rowKeys.length; i += 1) {
     if (normalizeSectionKey(rowKeys[i]) === key) return i;
   }
+
+  // Then allow fuzzy contains match to handle values like "row Enterprise".
+  for (let i = 0; i < rowKeys.length; i += 1) {
+    const candidate = normalizeSectionKey(rowKeys[i]);
+    if (!candidate) continue;
+    if (candidate.includes(key) || key.includes(candidate)) return i;
+  }
+
   return null;
 }
 
@@ -2519,7 +2832,217 @@ function mapRowObjectToValues(columns: string[], rowObj: any): string[] {
   return out;
 }
 
-export function AiSidebar({ editor, className }: Props) {
+function normalizeTableMatrixWidth(rows: string[][], minWidth = 1): string[][] {
+  const width = Math.max(minWidth, rows.reduce((max, row) => Math.max(max, row.length), 0));
+  return rows.map((row) => Array.from({ length: width }, (_, i) => coerceCellValue(row?.[i])));
+}
+
+function tableMatrixFromNode(tableNode: any, columnCount: number): string[][] {
+  const out: string[][] = [];
+  const width = Math.max(1, columnCount || 1);
+
+  for (let r = 0; r < (tableNode?.childCount || 0); r += 1) {
+    const rowNode = tableNode.child(r);
+    const row: string[] = [];
+    const rowWidth = Math.max(width, rowNode?.childCount || 0);
+    for (let c = 0; c < rowWidth; c += 1) {
+      const cell = rowNode?.child(c);
+      row.push(cell ? nodePlainText(cell) : "");
+    }
+    out.push(row);
+  }
+
+  return normalizeTableMatrixWidth(out, width);
+}
+
+function tableNodeJsonFromMatrix(rows: string[][], hasHeaderRow: boolean, attrs?: Record<string, any>): JSONContent {
+  const normalized = normalizeTableMatrixWidth(rows, 1);
+  return {
+    type: "table",
+    attrs,
+    content: normalized.map((row, rowIndex) => ({
+      type: "tableRow",
+      content: row.map((value) => ({
+        type: hasHeaderRow && rowIndex === 0 ? "tableHeader" : "tableCell",
+        content: buildCellParagraphContent(value),
+      })),
+    })),
+  };
+}
+
+function buildSuggestedTableNodeForInstruction(
+  tableNode: any,
+  instruction: TableJsonInstruction,
+  options: {
+    hasHeaderRow: boolean;
+    columnCount: number;
+    columns: string[];
+    activeCell: { rowIndex: number; colIndex: number } | null;
+  }
+): JSONContent | null {
+  const hasHeaderRow = Boolean(options.hasHeaderRow);
+  const bodyStart = hasHeaderRow ? 1 : 0;
+  let rows = tableMatrixFromNode(tableNode, options.columnCount);
+  if (rows.length === 0) return null;
+
+  const getColumns = () => {
+    if (!rows.length) return [] as string[];
+    if (hasHeaderRow) {
+      return rows[0].map((v, i) => String(v || "").trim() || `Column ${i + 1}`);
+    }
+    const width = rows[0].length;
+    return Array.from({ length: width }, (_, i) => String(options.columns?.[i] || "").trim() || `Column ${i + 1}`);
+  };
+
+  const getRowKeys = () => rows
+    .slice(bodyStart)
+    .map((r) => String(r?.[0] ?? "").trim());
+
+  const action = instruction.action;
+  const data = instruction.data || {};
+
+  if (action === "add_column") {
+    const columnName = String(data.column_name || "").trim();
+    const values = Array.isArray(data.values) ? data.values : null;
+    if (!columnName || !values) return null;
+
+    const bodyRowCount = Math.max(0, rows.length - bodyStart);
+    if (values.length !== bodyRowCount) return null;
+
+    const currentColumns = getColumns();
+    let targetColIndex: number | null = hasHeaderRow ? resolveColumnIndex(currentColumns, columnName) : null;
+
+    if (targetColIndex == null) {
+      targetColIndex = rows[0].length;
+      rows = rows.map((row) => row.concat(""));
+      if (hasHeaderRow && rows[0]) rows[0][targetColIndex] = columnName;
+    } else if (hasHeaderRow && rows[0]) {
+      rows[0][targetColIndex] = columnName;
+    }
+
+    for (let i = 0; i < values.length; i += 1) {
+      const rowIndex = bodyStart + i;
+      if (!rows[rowIndex]) continue;
+      rows[rowIndex][targetColIndex] = coerceCellValue(values[i]);
+    }
+  } else if (action === "add_row") {
+    const rowsRaw = Array.isArray(data.rows) ? data.rows : [];
+    const rowsPayload = rowsRaw.length > 0 && rowsRaw.every((cell: any) => isPrimitiveCellValue(cell))
+      ? [rowsRaw]
+      : rowsRaw;
+    if (rowsPayload.length === 0) return null;
+
+    const columns = getColumns();
+    const rowKeys = getRowKeys();
+    const afterRef = data.after_row;
+    const beforeRef = data.before_row;
+
+    let anchorBodyIndex: number | null = null;
+    let mode: "after" | "before" = "after";
+
+    if (afterRef != null) {
+      const idx = resolveBodyRowIndex(rowKeys, afterRef);
+      if (idx != null) {
+        anchorBodyIndex = idx;
+        mode = "after";
+      }
+    }
+    if (anchorBodyIndex == null && beforeRef != null) {
+      const idx = resolveBodyRowIndex(rowKeys, beforeRef);
+      if (idx != null) {
+        anchorBodyIndex = idx;
+        mode = "before";
+      }
+    }
+
+    if (anchorBodyIndex == null) {
+      anchorBodyIndex = Math.max(0, rowKeys.length - 1);
+      mode = "after";
+    }
+
+    let insertBodyIndex = rowKeys.length === 0
+      ? 0
+      : (mode === "before" ? anchorBodyIndex : anchorBodyIndex + 1);
+
+    for (const rowPayload of rowsPayload) {
+      const width = Math.max(1, rows[0]?.length || columns.length || options.columnCount || 1);
+      const values = Array.isArray(rowPayload)
+        ? Array.from({ length: width }, (_, i) => coerceCellValue(rowPayload?.[i]))
+        : Array.from({ length: width }, (_, i) => coerceCellValue(mapRowObjectToValues(columns, rowPayload)?.[i]));
+
+      const targetIndex = Math.max(0, Math.min(rows.length - bodyStart, insertBodyIndex));
+      rows.splice(bodyStart + targetIndex, 0, values);
+      insertBodyIndex = targetIndex + 1;
+    }
+  } else if (action === "update_cell") {
+    const updates = Array.isArray(data.updates) ? data.updates : [data];
+    const columns = getColumns();
+    const rowKeys = getRowKeys();
+
+    for (const u of updates) {
+      if (!u) continue;
+      const bodyIndex = resolveBodyRowIndex(rowKeys, u.row);
+      const colIndex = resolveColumnIndex(columns, u.column);
+      if (bodyIndex == null || colIndex == null) return null;
+      const rowIndex = bodyStart + bodyIndex;
+      if (!rows[rowIndex]) return null;
+      while (rows[rowIndex].length <= colIndex) rows[rowIndex].push("");
+      rows[rowIndex][colIndex] = coerceCellValue(u.value);
+    }
+  } else if (action === "delete_row") {
+    const rowsRefs = Array.isArray(data.rows) ? data.rows : [];
+    if (rowsRefs.length === 0) return null;
+
+    let indices = rowsRefs
+      .map((r: any) => resolveBodyRowIndex(getRowKeys(), r))
+      .filter((v: any) => typeof v === "number") as number[];
+
+    if (indices.length === 0 && options.activeCell && options.activeCell.rowIndex >= bodyStart) {
+      indices = [options.activeCell.rowIndex - bodyStart];
+    }
+    if (indices.length === 0) return null;
+
+    const unique = Array.from(new Set(indices)).sort((a, b) => b - a);
+    for (const bodyIndex of unique) {
+      const rowIndex = bodyStart + bodyIndex;
+      if (rowIndex < 0 || rowIndex >= rows.length) continue;
+      rows.splice(rowIndex, 1);
+    }
+    if (rows.length === 0 || (hasHeaderRow && rows.length < 1)) return null;
+  } else if (action === "delete_column") {
+    const colsRefs = Array.isArray(data.columns) ? data.columns : [];
+    if (colsRefs.length === 0) return null;
+
+    let indices = colsRefs
+      .map((c: any) => resolveColumnIndex(getColumns(), c))
+      .filter((v: any) => typeof v === "number") as number[];
+
+    if (indices.length === 0 && options.activeCell) {
+      indices = [options.activeCell.colIndex];
+    }
+    if (indices.length === 0) return null;
+
+    const currentWidth = rows[0]?.length || 0;
+    const unique = Array.from(new Set(indices)).filter((idx) => idx >= 0 && idx < currentWidth).sort((a, b) => b - a);
+    if (unique.length === 0 || unique.length >= currentWidth) return null;
+
+    rows = rows.map((row) => {
+      const next = row.slice();
+      unique.forEach((idx) => {
+        if (idx >= 0 && idx < next.length) next.splice(idx, 1);
+      });
+      return next;
+    });
+  } else {
+    return null;
+  }
+
+  rows = normalizeTableMatrixWidth(rows, 1);
+  if (rows.length === 0 || rows[0].length === 0) return null;
+  return tableNodeJsonFromMatrix(rows, hasHeaderRow, tableNode?.attrs || undefined);
+}
+
+export function AiSidebar({ editor, className, docId, versionId }: Props) {
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [prompt, setPrompt] = React.useState("");
   const [loading, setLoading] = React.useState(false);
@@ -2527,6 +3050,14 @@ export function AiSidebar({ editor, className }: Props) {
   const bottomRef = React.useRef<HTMLDivElement | null>(null);
   const promptRef = React.useRef<HTMLTextAreaElement | null>(null);
   const mentionMenuRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Diff manager integration (optional - will be null if not wrapped in provider)
+  let diffManager: ReturnType<typeof useDiffManager> | null = null;
+  try {
+    diffManager = useDiffManager();
+  } catch {
+    // Not wrapped in DiffManagerProvider - that's okay
+  }
 
   const [attached, setAttached] = React.useState<AttachedContextSnapshot | null>(null);
   const [autoCandidate, setAutoCandidate] = React.useState<AttachedContextSnapshot | null>(null);
@@ -2642,20 +3173,166 @@ export function AiSidebar({ editor, className }: Props) {
     }
 
     const normalizedText = preserveSelectionFormattingStyle(meta.sourceText || "", text);
-    const inline = assistantTextToInlineContent(normalizedText);
-    if (!inline) {
-      setError("Nothing to apply.");
+
+    const applyDirectInline = (errorMessage?: string) => {
+      const inline = assistantTextToInlineContent(normalizedText);
+      if (!inline) {
+        setError(errorMessage || "Nothing to apply.");
+        return;
+      }
+      if (errorMessage) setError(errorMessage);
+      editor
+        .chain()
+        .focus()
+        .insertContentAt({ from: meta.selectionFrom, to: meta.selectionTo }, inline as any)
+        .run();
+      updateAssistantStatus(messageId, "applied");
+    };
+
+    const applyDirectRange = (range: SelectionDiffRange, errorMessage?: string) => {
+      const structured = assistantTextToTiptapContent(normalizedText);
+      if (structured && structured.length > 0) {
+        if (errorMessage) setError(errorMessage);
+        editor
+          .chain()
+          .focus()
+          .insertContentAt({ from: range.normalizedFrom, to: range.normalizedTo }, structured as any)
+          .run();
+        updateAssistantStatus(messageId, "applied");
+        return;
+      }
+      applyDirectInline(errorMessage || "Could not build structured range replacement. Applied direct text replacement.");
+    };
+
+    const range = normalizeSelectionRangeForDiff(editor, meta.selectionFrom, meta.selectionTo);
+    if (!range) {
+      applyDirectInline("Could not resolve selection range. Applied direct text replacement.");
       return;
     }
 
-    editor
-      .chain()
-      .focus()
-      .insertContentAt({ from: meta.selectionFrom, to: meta.selectionTo }, inline as any)
-      .run();
+    // If diff manager is available, trigger inline diff mode
+    if (diffManager) {
+      try {
+        console.log("[Diff] Starting diff creation for selection edit");
 
-    updateAssistantStatus(messageId, "applied");
-  }, [editor, updateAssistantStatus]);
+        // Keep single paragraph/heading on the existing block preview path.
+        if (range.isSingleParagraphOrHeading) {
+          const inline = assistantTextToInlineContent(normalizedText);
+          if (!inline) {
+            setError("Nothing to apply.");
+            return;
+          }
+
+          const originalNode = editor.state.doc.nodeAt(range.normalizedFrom);
+          if (!originalNode) {
+            console.warn("[Diff] Could not find node at normalized block position, falling back to direct apply");
+            applyDirectInline("Could not render block preview. Applied direct text replacement.");
+            return;
+          }
+
+          const originalContent = originalNode.toJSON() as JSONContent;
+          const suggestedContent: JSONContent = {
+            type: originalContent.type,
+            attrs: originalContent.attrs,
+            content: inline as any,
+          };
+
+          const diffSegments = generateBlockDiff(originalContent, suggestedContent);
+          const diffId = diffManager.addDiff({
+            rawFrom: range.rawFrom,
+            rawTo: range.rawTo,
+            normalizedFrom: range.normalizedFrom,
+            normalizedTo: range.normalizedTo,
+            previewKind: "block",
+            originalContent,
+            suggestedContent,
+            diff: diffSegments,
+          });
+
+          console.log(`[Diff] Added block diff with ID: ${diffId}`);
+          updateAssistantStatus(messageId, "applied");
+          return;
+        }
+
+        // Heterogeneous/multi-block selection path: range-replace preview.
+        const structured = assistantTextToTiptapContent(normalizedText);
+        if (!structured || structured.length === 0) {
+          applyDirectRange(range, "Could not build range-replace preview. Applied direct replacement.");
+          return;
+        }
+
+        const originalSlice = editor.state.doc.slice(range.normalizedFrom, range.normalizedTo);
+        const originalContent: JSONContent = {
+          type: "doc",
+          content: originalSlice.content.toJSON() as any,
+        };
+        const suggestedContent: JSONContent = {
+          type: "doc",
+          content: structured as any,
+        };
+
+        const diffSegments = generateBlockDiff(originalContent, suggestedContent);
+        const diffId = diffManager.addDiff({
+          rawFrom: range.rawFrom,
+          rawTo: range.rawTo,
+          normalizedFrom: range.normalizedFrom,
+          normalizedTo: range.normalizedTo,
+          previewKind: "range_replace",
+          originalContent,
+          suggestedContent,
+          diff: diffSegments,
+        });
+
+        console.log(`[Diff] Added range-replace diff with ID: ${diffId}`, {
+          pureTable: range.isPureTableSelection,
+          mixed: range.isMixedSelection,
+          blockTypes: range.blockTypes,
+        });
+        updateAssistantStatus(messageId, "applied");
+
+      } catch (error) {
+        console.error("[Diff] Failed to create diff:", error);
+        applyDirectRange(range, "Failed to render diff preview. Applied direct replacement.");
+      }
+    } else {
+      console.log("[Diff] No diff manager available, applying directly");
+      if (range.isSingleParagraphOrHeading) {
+        applyDirectInline();
+      } else {
+        applyDirectRange(range);
+      }
+    }
+  }, [editor, updateAssistantStatus, diffManager]);
+
+  // Track which messages have been auto-applied to prevent duplicates
+  const autoAppliedSelectionRef = React.useRef<Set<string>>(new Set());
+  const autoAppliedTableRef = React.useRef<Set<string>>(new Set());
+
+  // Auto-apply selection edits as inline diffs (no button click needed)
+  React.useEffect(() => {
+    if (!diffManager || !editor) return;
+
+    // Find the latest pending selection edit that hasn't been auto-applied yet
+    const latestSelectionEdit = messages
+      .filter((m) =>
+        m.role === "assistant" &&
+        m.meta?.kind === "selection" &&
+        m.meta?.status === "pending" &&
+        !autoAppliedSelectionRef.current.has(m.id)
+      )
+      .pop();
+
+    if (!latestSelectionEdit || !latestSelectionEdit.meta) return;
+
+    const meta = latestSelectionEdit.meta as Extract<AssistantMeta, { kind: "selection" }>;
+
+    // Mark as auto-applied before calling to prevent duplicate calls
+    autoAppliedSelectionRef.current.add(latestSelectionEdit.id);
+
+    // Auto-apply the diff
+    console.log("[AutoApply] Triggering automatic diff for message:", latestSelectionEdit.id);
+    applySelection(latestSelectionEdit.id, meta, latestSelectionEdit.content);
+  }, [messages, diffManager, editor, applySelection]);
 
   const applyPlain = React.useCallback((messageId: string, meta: Extract<AssistantMeta, { kind: "plain" }>, text: string) => {
     if (!editor) {
@@ -3152,8 +3829,73 @@ export function AiSidebar({ editor, className }: Props) {
       return safeTextSelectionPosForCell(cellPos, cellNode);
     };
 
+    const getActiveCellLocationInAnchorTable = () => {
+      const $head = editor.state.selection.$head;
+      for (let d = $head.depth; d > 1; d -= 1) {
+        const role = $head.node(d)?.type?.spec?.tableRole;
+        if (role !== "cell" && role !== "header_cell") continue;
+        const rowDepth = d - 1;
+        const tableDepth = d - 2;
+        if (tableDepth <= 0) return null;
+        const tablePos = $head.before(tableDepth);
+        if (tablePos !== anchor.tablePos) return null;
+        return {
+          rowIndex: $head.index(tableDepth),
+          colIndex: $head.index(rowDepth),
+        };
+      }
+      return null;
+    };
+
     const action = meta.instruction.action;
     const data = meta.instruction.data || {};
+
+    if (diffManager) {
+      try {
+        const activeCell = getActiveCellLocationInAnchorTable();
+        const suggestedTable = buildSuggestedTableNodeForInstruction(tableNode, meta.instruction, {
+          hasHeaderRow,
+          columnCount,
+          columns,
+          activeCell,
+        });
+
+        if (!suggestedTable) {
+          setError("Could not build table diff preview for this instruction.");
+          return;
+        }
+
+        const originalTable = tableNode.toJSON() as JSONContent;
+        const originalContent: JSONContent = {
+          type: "doc",
+          content: [originalTable],
+        };
+        const suggestedContent: JSONContent = {
+          type: "doc",
+          content: [suggestedTable],
+        };
+
+        const diffSegments = generateBlockDiff(originalContent, suggestedContent);
+        const diffId = diffManager.addDiff({
+          rawFrom: anchor.tablePos,
+          rawTo: anchor.tablePos + tableNode.nodeSize,
+          normalizedFrom: anchor.tablePos,
+          normalizedTo: anchor.tablePos + tableNode.nodeSize,
+          previewKind: "range_replace",
+          originalContent,
+          suggestedContent,
+          diff: diffSegments,
+        });
+
+        console.log(`[Diff] Added table range-replace diff with ID: ${diffId}`, { action });
+        updateAssistantStatus(messageId, "applied");
+        return;
+      } catch (error) {
+        console.error("[Diff] Failed to build table diff preview:", error);
+        setError("Could not render table diff preview.");
+        return;
+      }
+    }
 
     if (action === "add_column") {
       const columnName = String(data.column_name || "").trim();
@@ -3342,10 +4084,22 @@ export function AiSidebar({ editor, className }: Props) {
       }
 
       // Delete bottom-up by resolved indices to avoid shifting.
-      const indices = rowsRefs
+      let indices = rowsRefs
         .map((r: any) => resolveBodyRowIndex(rowKeys, r))
         .filter((v: any) => typeof v === "number")
-        .sort((a: number, b: number) => b - a);
+        .sort((a: number, b: number) => b - a) as number[];
+
+      if (indices.length === 0) {
+        const active = getActiveCellLocationInAnchorTable();
+        if (active && active.rowIndex >= bodyStart) {
+          indices = [active.rowIndex - bodyStart];
+        }
+      }
+
+      if (indices.length === 0) {
+        setError("Could not apply: could not resolve target row.");
+        return;
+      }
 
       for (const bodyIndex of indices) {
         const rowIndex = bodyStart + bodyIndex;
@@ -3372,10 +4126,20 @@ export function AiSidebar({ editor, className }: Props) {
         return;
       }
 
-      const indices = colsRefs
+      let indices = colsRefs
         .map((c: any) => resolveColumnIndex(columns, c))
         .filter((v: any) => typeof v === "number")
-        .sort((a: number, b: number) => b - a);
+        .sort((a: number, b: number) => b - a) as number[];
+
+      if (indices.length === 0) {
+        const active = getActiveCellLocationInAnchorTable();
+        if (active) indices = [active.colIndex];
+      }
+
+      if (indices.length === 0) {
+        setError("Could not apply: could not resolve target column.");
+        return;
+      }
 
       for (const colIndex of indices) {
         const rowIndex = hasHeaderRow ? 0 : Math.min(bodyStart, Math.max(0, tableNode.childCount - 1));
@@ -3396,7 +4160,41 @@ export function AiSidebar({ editor, className }: Props) {
     }
 
     setError("AI returned invalid table instruction");
-  }, [editor, updateAssistantStatus]);
+  }, [editor, updateAssistantStatus, diffManager]);
+
+  React.useEffect(() => {
+    if (!editor) return;
+
+    const latestPendingTableEdit = messages
+      .filter((m) =>
+        m.role === "assistant" &&
+        (m.meta?.kind === "table_json" || m.meta?.kind === "table") &&
+        m.meta?.status === "pending" &&
+        !autoAppliedTableRef.current.has(m.id)
+      )
+      .pop();
+
+    if (!latestPendingTableEdit || !latestPendingTableEdit.meta) return;
+
+    const meta = latestPendingTableEdit.meta as Extract<AssistantMeta, { kind: "table_json" | "table" }>;
+
+    const canAutoApply = meta.kind === "table_json"
+      ? Boolean(meta.instruction) && !Boolean(meta.instructionError)
+      : !Boolean(meta.parseError) && Array.isArray(meta.rows) && meta.rows.length > 0;
+
+    if (!canAutoApply) return;
+
+    autoAppliedTableRef.current.add(latestPendingTableEdit.id);
+
+    if (meta.kind === "table_json") {
+      console.log("[AutoApply] Triggering automatic table-json apply for message:", latestPendingTableEdit.id);
+      applyTableJson(latestPendingTableEdit.id, meta);
+      return;
+    }
+
+    console.log("[AutoApply] Triggering automatic table apply for message:", latestPendingTableEdit.id);
+    applyTable(latestPendingTableEdit.id, meta);
+  }, [messages, editor, applyTableJson, applyTable]);
 
   const send = React.useCallback(async () => {
     const userPrompt = prompt.trim();
@@ -3540,13 +4338,17 @@ export function AiSidebar({ editor, className }: Props) {
       | { selectionFrom: number; selectionTo: number; text: string }
       | null = null;
 
+    const inTable = editor.isActive("table");
+    // Expanded strict edit list to include 'summarize' so it picks up the current section context implicitly
+    const isStrictLocalEdit = /\b(fix|typo|grammar|spelling|rewrite|rephrase|summarize)\b/i.test(userPrompt);
+
     if (!effectiveAttachment || effectiveAttachment.kind === "document") {
       const sectionQuery = parseSectionEditTarget(userPrompt);
       if (sectionQuery) {
         const headingIdx = getHeadingIndexByQuery(editor, sectionQuery);
         const range = headingIdx != null ? getSectionRangeByHeadingIndex(editor, headingIdx) : null;
         if (range) {
-          const text = normalizeNewlines(getSelectedText(editor, range.start, range.end)).trim();
+          const text = getSelectionTextForPrompt(editor, range.start, range.end);
           if (text) {
             inferredSectionSelection = {
               selectionFrom: range.start,
@@ -3556,15 +4358,74 @@ export function AiSidebar({ editor, className }: Props) {
           }
         }
       }
+
+      // Implicit fallback: If no explicit attachment/target, check for implicit cursor context
+      if (!inferredSectionSelection && !effectiveAttachment && !inTable && (isModifyExistingDocumentIntent(userPrompt) || isStrictLocalEdit)) {
+        const { $from } = editor.state.selection;
+
+        // Find heading above
+        let start = 0;
+        let level = 1;
+        let found = false;
+
+        editor.state.doc.nodesBetween(0, $from.pos, (node, pos) => {
+          if (node.type.name === 'heading') {
+            start = pos;
+            level = node.attrs.level;
+            found = true;
+          }
+        });
+
+        if (found) {
+          let end = editor.state.doc.content.size;
+          let stop = false;
+          // Scan forward
+          editor.state.doc.nodesBetween(start + 1, editor.state.doc.content.size, (node, pos) => {
+            if (stop) return false;
+            // Stop at next heading of same or higher importance (lower level number)
+            if (node.type.name === 'heading' && node.attrs.level <= level) {
+              end = pos;
+              stop = true;
+              return false;
+            }
+          });
+
+          // Get text and ensure it's not empty
+          const text = normalizeNewlines(editor.state.doc.textBetween(start, end, '\n')).trim();
+          if (text && text.length > 0) {
+            console.log("[ImplicitContext] Found implicit section:", text.slice(0, 50) + "...");
+            inferredSectionSelection = {
+              selectionFrom: start,
+              selectionTo: end,
+              text
+            };
+          } else {
+            console.warn("[ImplicitContext] Found section but text was empty.");
+          }
+        }
+      }
     }
 
-    const inTable = editor.isActive("table");
     const hasCellsAttachment = effectiveAttachment?.kind === "cells";
     const hasTableAttachment = effectiveAttachment?.kind === "table";
     const likelyTableEdit = isLikelyTableEditPrompt(userPrompt);
+    const selectionShape = normalizeSelectionRangeForDiff(
+      editor,
+      editor.state.selection.from,
+      editor.state.selection.to
+    );
+    const isMixedSelection = Boolean(
+      selectionShape
+      && (selectionShape.blockTypes.length > 1 || selectionShape.isMixedSelection)
+    );
 
     // For table edits: ALWAYS use JSON-only mode (no pipe-table fallback).
-    const tableJsonIntent = !docIntent && (inTable || hasCellsAttachment || hasTableAttachment || likelyTableEdit);
+    const tableJsonIntent = !docIntent && (
+      hasCellsAttachment
+      || hasTableAttachment
+      || (inTable && !isMixedSelection)
+      || (likelyTableEdit && !isMixedSelection)
+    );
 
     if (tableJsonIntent) {
       let tableInfo: TableRuntimeInfo | null = null;
@@ -3650,122 +4511,48 @@ export function AiSidebar({ editor, className }: Props) {
         expectedAddRowCount,
         selectedCells,
       };
-    } else if (effectiveAttachment?.kind === "selection" || inferredSectionSelection) {
-      const selected = effectiveAttachment?.kind === "selection"
-        ? {
-          selectionFrom: effectiveAttachment.selectionFrom,
-          selectionTo: effectiveAttachment.selectionTo,
-          text: effectiveAttachment.text,
-        }
-        : inferredSectionSelection;
-
-      if (!selected) {
-        setError("Could not resolve section to edit.");
-        return;
-      }
-      request = {
-        kind: "selection",
-        modelPrompt: `Edit the following text:\n\n${selected.text}\n\nInstruction:\n${userPrompt}\n\nRules:\n- Return the FULL revised text (not a fragment).\n- Keep the existing content and structure unless the instruction explicitly asks to remove/rewrite.\n- Preserve the current formatting style (line breaks, numbering layout, and spacing style) unless explicitly asked to reformat.\n- If adding content, include the original text plus additions.\n- Return plain editor text only (no markdown syntax).\n- Do NOT use markdown markers like #, ##, **, __, \` or code fences.\n- If you add a list, use plain lines with '1. ...' or '- ...'.\n\nReturn only edited text.`,
-        selectionFrom: selected.selectionFrom,
-        selectionTo: selected.selectionTo,
-        selectedText: selected.text,
-      };
-    } else if (effectiveAttachment?.kind === "document") {
-      const docText = docAttachment?.text || buildDocumentAttachmentFull(editor)?.text || "";
-      if (docText.trim()) {
-        if (isSummarizeDocumentIntent(userPrompt)) {
-          request = {
-            kind: "plain",
-            modelPrompt: `Summarize the following document in at least 5 bullet points.\n\nDocument:\n${docText}\n\nReturn ONLY bullet points. Each bullet must start with "- ".`,
-            insertPos: defaultInsertPos,
-            applyLabel: "Insert Summary",
-          };
-        } else if (isExecutiveSummaryIntent(userPrompt)) {
-          request = {
-            kind: "plain",
-            modelPrompt: `Write an executive summary for the following document.\n\nDocument:\n${docText}\n\nReturn ONLY the content in this format:\nExecutive Summary\n- bullet\n- bullet\n- bullet\n\nUse at least 5 bullets.`,
-            insertPos: 0,
-            applyLabel: "Insert at Top",
-          };
-        } else if (isImproveDocumentIntent(userPrompt)) {
-          request = {
-            kind: "plain",
-            modelPrompt: `Improve the following document for clarity, structure, and professionalism. Preserve the meaning and existing section order unless explicitly asked. Do NOT add commentary. Return ONLY the improved document text.\n\nDocument:\n${docText}`,
-            insertPos: 0,
-            replaceDocument: true,
-          };
-        } else if (isModifyExistingDocumentIntent(userPrompt)) {
-          request = {
-            kind: "plain",
-            modelPrompt: `Edit the following document according to the instruction.\n\nInstruction:\n${userPrompt}\n\nDocument:\n${docText}\n\nRules:\n- Return the FULL revised document.\n- Preserve existing structure, section order, and formatting unless the instruction explicitly asks otherwise.\n- Keep all unchanged content intact.\n- Apply ONLY the requested modifications.\n- For numeric/currency updates, keep values internally consistent (line items, subtotal, tax, total).\n\n${getPlainEditorFormattingRules()}\n\nReturn ONLY the revised document text.`,
-            insertPos: 0,
-            replaceDocument: true,
-          };
-        } else {
-          request = {
-            kind: "plain",
-            modelPrompt: `Write content for:\n\n${userPrompt}${insertionDirective}\n\nDocument context:\n${docText}\n\n${getPlainEditorFormattingRules()}\n\nReturn only text.`,
-            insertPos: defaultInsertPos,
-          };
-        }
-      } else {
-        // Empty document: still allow generation from prompt-only instead of hard failing.
-        if (isExecutiveSummaryIntent(userPrompt)) {
-          request = {
-            kind: "plain",
-            modelPrompt: `Draft an executive summary for this request:\n\n${userPrompt}\n\nReturn ONLY the content in this format:\nExecutive Summary\n- bullet\n- bullet\n- bullet\n\nUse at least 5 bullets.`,
-            insertPos: 0,
-            applyLabel: "Insert at Top",
-          };
-        } else if (isSummarizeDocumentIntent(userPrompt)) {
-          request = {
-            kind: "plain",
-            modelPrompt: `Create a concise summary for this request in at least 5 bullet points:\n\n${userPrompt}\n\nReturn ONLY bullet points. Each bullet must start with "- ".`,
-            insertPos: defaultInsertPos,
-            applyLabel: "Insert Summary",
-          };
-        } else if (isImproveDocumentIntent(userPrompt)) {
-          request = {
-            kind: "plain",
-            modelPrompt: `The current document is empty. Create a polished first draft for:\n\n${userPrompt}\n\n${getPlainEditorFormattingRules()}\n\nReturn ONLY the document text.`,
-            insertPos: 0,
-          };
-        } else {
-          request = {
-            kind: "plain",
-            modelPrompt: `Write content for:\n\n${userPrompt}${insertionDirective}\n\n${getPlainEditorFormattingRules()}\n\nReturn only text.`,
-            insertPos: defaultInsertPos,
-          };
-        }
-      }
     } else {
-      const docText = buildDocumentAttachmentFull(editor)?.text || "";
-      const colMatch = userPrompt.match(/(\d+)\s*[- ]?column\b/i);
-      const wantsTable = /\btable\b/i.test(userPrompt) && Boolean(colMatch);
-      const columnCount = colMatch ? Number(colMatch[1]) : NaN;
+      const payload = await routeAndBuildPayload(userPrompt, editor, docId, versionId);
+      // console.log(`[ContextRouter] Mode: ${payload.mode}, Overview: ${payload.docOverview ? "Included" : "Skipped"}`);
+      // console.log(`[ContextRouter] Mode: ${payload.mode}, Overview: ${payload.docOverview ? "Included" : "Skipped"}`);
 
-      if (wantsTable && Number.isFinite(columnCount) && columnCount >= 2 && columnCount <= 10) {
-        const exampleRow = Array.from({ length: columnCount }, (_, i) => `value${i + 1}`).join(" | ");
-        const placeholderHeaders = Array.from({ length: columnCount }, (_, i) => `Column ${i + 1}`).join(" | ");
+      if (effectiveAttachment?.kind === "selection" || inferredSectionSelection) {
+        const selected = (effectiveAttachment?.kind === "selection")
+          ? {
+            selectionFrom: effectiveAttachment.selectionFrom,
+            selectionTo: effectiveAttachment.selectionTo,
+            text: effectiveAttachment.text,
+          }
+          : inferredSectionSelection;
 
+        if (!selected) {
+          setError("Could not resolve section to edit.");
+          return;
+        }
         request = {
-          kind: "table",
-          modelPrompt: `The table has ${columnCount} columns.\n\nInstruction:\n${userPrompt}\n\nThe FIRST row must be the column headers.\nReturn at least 2 rows total.\nEach row must have EXACTLY ${columnCount} columns separated by |.\nDo NOT return markdown.\n\nReturn ONLY rows in format:\n${exampleRow}`,
-          insertPos: defaultInsertPos,
-          columnCount,
-          tableColumnCount: columnCount,
-          headersLine: placeholderHeaders,
-          tableAction: "create_table",
-          hasHeaderRow: true,
-          bodyRowCount: 0,
+          kind: "selection",
+          modelPrompt: `Text to Edit:\n${selected.text}\n\nContext:\n${payload.content}\n\nInstruction:\n${userPrompt}\n\nRules:\n- Return the FULL revised text for the 'Text to Edit'.\n- Keep the existing content and structure unless the instruction explicitly asks to remove/rewrite.\n- Preserve the current formatting style (line breaks, numbering layout, and spacing style) unless explicitly asked to reformat.\n- If adding content, include the original text plus additions.\n- Return plain editor text only (no markdown syntax).\n- Do NOT use markdown markers like #, ##, **, __, \` or code fences.\n- If you add a list, use plain lines with '1. ...' or '- ...'.\n\nReturn only edited text.`,
+          selectionFrom: selected.selectionFrom,
+          selectionTo: selected.selectionTo,
+          selectedText: selected.text,
+          context: payload.content,
+          docOverview: payload.docOverview,
         };
       } else {
+        const isSummary = isSummarizeDocumentIntent(userPrompt) || isExecutiveSummaryIntent(userPrompt);
+        let promptTemplate = `Write content for:\n\n${userPrompt}${insertionDirective}\n\nContext:\n${payload.content}\n\n${getPlainEditorFormattingRules()}\n\nReturn only text.`;
+
+        if (isSummary) {
+          promptTemplate = `Summarize the following request/context in at least 5 bullet points:\n\nRequest: ${userPrompt}\n\nContext:\n${payload.content}\n\nReturn ONLY bullet points. Each bullet must start with "- ".`;
+        }
+
         request = {
           kind: "plain",
-          modelPrompt: docText.trim()
-            ? `Write content for:\n\n${userPrompt}${insertionDirective}\n\nDocument context:\n${docText}\n\n${getPlainEditorFormattingRules()}\n\nReturn only text.`
-            : `Write content for:\n\n${userPrompt}${insertionDirective}\n\n${getPlainEditorFormattingRules()}\n\nReturn only text.`,
+          modelPrompt: promptTemplate,
           insertPos: defaultInsertPos,
+          applyLabel: isSummary ? "Insert Summary" : undefined,
+          context: payload.content,
+          docOverview: payload.docOverview,
         };
       }
     }
@@ -3842,7 +4629,10 @@ export function AiSidebar({ editor, className }: Props) {
         const bodyObj: any = {
           kind: request.kind,
           modelPrompt: request.modelPrompt,
+          context: request.context,
+          docOverview: request.docOverview,
           ...(request.kind === "table" ? { tableColumnCount: request.columnCount } : {}),
+
           ...(request.kind === "table_json" && opts.forceNoJsonMode ? { forceNoJsonMode: true } : {}),
         };
         try {
@@ -4130,11 +4920,22 @@ export function AiSidebar({ editor, className }: Props) {
   }, [attached, editor, loading, manualFiles, prompt, suppressedSignature]);
 
   return (
-    <div className={cn("flex h-full flex-col rounded-xl border border-border/40 bg-background/60", className)}>
-      <div className="shrink-0 px-4 py-4 border-b border-border/40 bg-background/80">
-        <div className="text-base font-semibold">AI Assistant</div>
-        <div className="mt-0.5 text-xs text-muted-foreground">
-          Prototype
+    <div className={cn("flex h-full flex-col rounded-xl border border-border/20 bg-background/40 shadow-xl backdrop-blur-xl", className)}>
+      <div className="shrink-0 px-5 py-5 border-b border-border/10 bg-gradient-to-br from-indigo-50/30 via-transparent to-transparent">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 shadow-sm transition-transform hover:scale-105">
+              <Sparkles className="h-4.5 w-4.5 text-white" />
+            </div>
+            <div>
+              <div className="text-[15px] font-semibold text-foreground/90 tracking-tight">AI Studio</div>
+              <div className="text-[9px] font-bold text-indigo-500/70 uppercase tracking-[0.2em]">
+                Premium Content Assistant
+              </div>
+            </div>
+          </div>
+
+
         </div>
       </div>
 
@@ -4167,45 +4968,60 @@ export function AiSidebar({ editor, className }: Props) {
             })();
 
             return (
-              <div key={m.id} className={cn("flex min-w-0", isUser ? "justify-end" : "justify-start")}>
+              <div key={m.id} className={cn("flex min-w-0 mb-4", isUser ? "justify-end" : "justify-start")}>
                 <div
                   className={cn(
-                    "min-w-0 rounded-2xl px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words",
+                    "min-w-0 rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words transition-all duration-200 animate-in fade-in slide-in-from-bottom-2",
                     isUser
-                      ? "max-w-[92%] bg-primary/10 text-foreground border border-border/40"
+                      ? "max-w-[90%] bg-indigo-50/80 text-indigo-950 border border-indigo-100/50 shadow-sm rounded-tr-none"
                       : cn(
-                        "bg-background border border-border/60",
-                        meta?.kind === "table" || meta?.kind === "table_json" ? "max-w-full" : "max-w-[92%]"
+                        "bg-background border border-border/40 text-foreground/90 shadow-sm rounded-tl-none",
+                        meta?.kind === "table" || meta?.kind === "table_json" ? "max-w-full" : "max-w-[90%]"
                       )
                   )}
                 >
                   {isUser && m.attachment && (
-                    <div className="mb-1 inline-flex items-center gap-2 rounded-full border border-border/50 bg-background/60 px-2 py-0.5 text-[11px] text-muted-foreground">
-                      <span className="truncate max-w-[260px]">{m.attachment.label}</span>
+                    <div className="mb-2 block">
+                      <div className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200/40 bg-indigo-100/30 px-2 py-1 text-[10px] font-medium text-indigo-600/80 shadow-sm">
+                        <FileText className="h-3 w-3" />
+                        <span className="truncate max-w-[200px]">{m.attachment.label}</span>
+                      </div>
                     </div>
                   )}
-                  {m.content}
+                  <div className={cn(isUser ? "text-indigo-950/90" : "text-foreground/80")}>
+                    {m.content}
+                  </div>
 
                   {!isUser && meta?.kind === "table" && (
-                    <div className="mt-2 rounded-md border border-border/50 bg-muted/10 p-2">
-                      <div className="text-[11px] text-muted-foreground mb-1">
-                        {meta.action === "update_rows"
-                          ? "Preview updates"
-                          : meta.action === "add_column"
-                            ? `Preview values${meta.newColumnName ? ` (${meta.newColumnName})` : ""}`
-                            : meta.action === "create_table"
-                              ? "Preview table"
-                              : meta.action === "insert_rows"
-                                ? "Preview inserted rows"
-                                : "Preview rows"}
+                    <div className="mt-2 overflow-hidden rounded-xl border border-slate-200/80 bg-white/90 shadow-sm">
+                      <div className="flex items-center justify-between border-b border-slate-200/70 bg-slate-50/80 px-3 py-2">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-slate-600">
+                          {meta.action === "update_rows"
+                            ? "Table updates"
+                            : meta.action === "add_column"
+                              ? `Column values${meta.newColumnName ? ` (${meta.newColumnName})` : ""}`
+                              : meta.action === "create_table"
+                                ? "New table"
+                                : meta.action === "insert_rows"
+                                  ? "Inserted rows"
+                                  : "Rows preview"}
+                        </div>
+                        <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                          AI preview
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 border-b border-slate-200/60 bg-white px-3 py-1.5 text-[10px] text-slate-600">
+                        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" />Added</span>
+                        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" />Updated</span>
+                        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-rose-500" />Deleted</span>
                       </div>
                       {tablePreview ? (
-                        <div className="w-full max-w-full overflow-x-auto rounded-lg border border-border/40 bg-background/50 shadow-inner">
-                          <table className="w-max min-w-full table-auto text-[11px] md:text-xs">
-                            <thead className="bg-muted/60">
+                        <div className="w-full max-w-full overflow-hidden bg-white">
+                          <table className="w-full table-fixed text-[10px] leading-tight">
+                            <thead className="bg-slate-50 text-slate-600">
                               <tr>
                                 {tablePreview.headers.map((h, i) => (
-                                  <th key={`${m.id}-table-h-${i}`} className="border-b border-r border-border/30 px-3 py-1.5 text-left font-semibold last:border-r-0 text-muted-foreground">
+                                  <th key={`${m.id}-table-h-${i}`} className="max-w-0 border-b border-r border-slate-200 px-1.5 py-1 text-left font-semibold last:border-r-0">
                                     {h}
                                   </th>
                                 ))}
@@ -4213,9 +5029,30 @@ export function AiSidebar({ editor, className }: Props) {
                             </thead>
                             <tbody>
                               {tablePreview.rows.map((row, ri) => (
-                                <tr key={`${m.id}-table-r-${ri}`} className="align-top hover:bg-muted/20 transition-colors">
+                                <tr
+                                  key={`${m.id}-table-r-${ri}`}
+                                  className={cn(
+                                    "align-top",
+                                    tablePreview.rowDiffKinds?.[ri] === "insert" && "bg-emerald-100/70",
+                                    tablePreview.rowDiffKinds?.[ri] === "delete" && "bg-rose-100/70",
+                                    tablePreview.rowDiffKinds?.[ri] === "update" && "bg-amber-100/70",
+                                    !tablePreview.rowDiffKinds?.[ri] && "odd:bg-white even:bg-slate-50/35"
+                                  )}
+                                >
                                   {tablePreview.headers.map((_, ci) => (
-                                    <td key={`${m.id}-table-c-${ri}-${ci}`} className="border-b border-r border-border/20 px-3 py-1.5 whitespace-normal break-words last:border-r-0">
+                                    <td
+                                      key={`${m.id}-table-c-${ri}-${ci}`}
+                                      className={cn(
+                                        "border-b border-r border-slate-200/80 px-3 py-2 whitespace-normal break-words text-slate-700 last:border-r-0",
+                                        "max-w-0 px-1.5 py-1 whitespace-nowrap overflow-hidden text-ellipsis",
+                                        tablePreview.rowDiffKinds?.[ri] === "insert" && !tablePreview.cellDiffKinds?.[previewCellKey(ri, ci)] && "bg-emerald-100/80 text-emerald-950",
+                                        tablePreview.rowDiffKinds?.[ri] === "delete" && !tablePreview.cellDiffKinds?.[previewCellKey(ri, ci)] && "bg-rose-100/80 text-rose-950",
+                                        tablePreview.rowDiffKinds?.[ri] === "update" && !tablePreview.cellDiffKinds?.[previewCellKey(ri, ci)] && "bg-amber-100/80 text-amber-950",
+                                        tablePreview.cellDiffKinds?.[previewCellKey(ri, ci)] === "insert" && "bg-emerald-200/80 text-emerald-950 font-medium",
+                                        tablePreview.cellDiffKinds?.[previewCellKey(ri, ci)] === "delete" && "bg-rose-200/80 text-rose-950 font-medium line-through",
+                                        tablePreview.cellDiffKinds?.[previewCellKey(ri, ci)] === "update" && "bg-amber-200/80 text-amber-950 font-medium"
+                                      )}
+                                    >
                                       {coerceCellValue(row?.[ci])}
                                     </td>
                                   ))}
@@ -4225,28 +5062,36 @@ export function AiSidebar({ editor, className }: Props) {
                           </table>
                         </div>
                       ) : meta.rows.length > 0 ? (
-                        <div className="text-xs whitespace-pre-wrap font-mono">
+                        <div className="bg-white px-3 py-2 text-xs whitespace-pre-wrap font-mono text-slate-700">
                           {(meta.rows || []).map((r) => r.join(" | ")).join("\n")}
                         </div>
                       ) : (
-                        <div className="text-xs text-muted-foreground">No valid rows parsed.</div>
+                        <div className="px-3 py-2 text-xs text-slate-500">No valid rows parsed.</div>
                       )}
                       {meta.parseError && (
-                        <div className="mt-2 text-[11px] text-destructive">{meta.parseError}</div>
+                        <div className="border-t border-rose-200/60 bg-rose-50/70 px-3 py-2 text-[11px] text-rose-700">{meta.parseError}</div>
                       )}
                     </div>
                   )}
 
                   {!isUser && meta?.kind === "table_json" && (
-                    <div className="mt-2 rounded-md border border-border/50 bg-muted/10 p-2">
-                      <div className="text-[11px] text-muted-foreground mb-1">Table instruction</div>
+                    <div className="mt-2 overflow-hidden rounded-xl border border-slate-200/80 bg-white/90 shadow-sm">
+                      <div className="flex items-center justify-between border-b border-slate-200/70 bg-slate-50/80 px-3 py-2">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-slate-600">Table instruction</div>
+                        <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-medium text-slate-500">JSON</span>
+                      </div>
+                      <div className="flex items-center gap-2 border-b border-slate-200/60 bg-white px-3 py-1.5 text-[10px] text-slate-600">
+                        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" />Added</span>
+                        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" />Updated</span>
+                        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-rose-500" />Deleted</span>
+                      </div>
                       {tableJsonPreview ? (
-                        <div className="w-full max-w-full overflow-x-auto rounded-lg border border-border/40 bg-background/50 shadow-inner">
-                          <table className="w-max min-w-full table-auto text-[11px] md:text-xs">
-                            <thead className="bg-muted/60">
+                        <div className="w-full max-w-full overflow-hidden bg-white">
+                          <table className="w-full table-fixed text-[10px] leading-tight">
+                            <thead className="bg-slate-50 text-slate-600">
                               <tr>
                                 {tableJsonPreview.headers.map((h, i) => (
-                                  <th key={`${m.id}-json-h-${i}`} className="border-b border-r border-border/30 px-3 py-1.5 text-left font-semibold last:border-r-0 text-muted-foreground">
+                                  <th key={`${m.id}-json-h-${i}`} className="max-w-0 border-b border-r border-slate-200 px-1.5 py-1 text-left font-semibold last:border-r-0">
                                     {h}
                                   </th>
                                 ))}
@@ -4254,9 +5099,30 @@ export function AiSidebar({ editor, className }: Props) {
                             </thead>
                             <tbody>
                               {tableJsonPreview.rows.map((row, ri) => (
-                                <tr key={`${m.id}-json-r-${ri}`} className="align-top hover:bg-muted/20 transition-colors">
+                                <tr
+                                  key={`${m.id}-json-r-${ri}`}
+                                  className={cn(
+                                    "align-top",
+                                    tableJsonPreview.rowDiffKinds?.[ri] === "insert" && "bg-emerald-100/70",
+                                    tableJsonPreview.rowDiffKinds?.[ri] === "delete" && "bg-rose-100/70",
+                                    tableJsonPreview.rowDiffKinds?.[ri] === "update" && "bg-amber-100/70",
+                                    !tableJsonPreview.rowDiffKinds?.[ri] && "odd:bg-white even:bg-slate-50/35"
+                                  )}
+                                >
                                   {tableJsonPreview.headers.map((_, ci) => (
-                                    <td key={`${m.id}-json-c-${ri}-${ci}`} className="border-b border-r border-border/20 px-3 py-1.5 whitespace-normal break-words last:border-r-0">
+                                    <td
+                                      key={`${m.id}-json-c-${ri}-${ci}`}
+                                      className={cn(
+                                        "border-b border-r border-slate-200/80 px-3 py-2 whitespace-normal break-words text-slate-700 last:border-r-0",
+                                        "max-w-0 px-1.5 py-1 whitespace-nowrap overflow-hidden text-ellipsis",
+                                        tableJsonPreview.rowDiffKinds?.[ri] === "insert" && !tableJsonPreview.cellDiffKinds?.[previewCellKey(ri, ci)] && "bg-emerald-100/80 text-emerald-950",
+                                        tableJsonPreview.rowDiffKinds?.[ri] === "delete" && !tableJsonPreview.cellDiffKinds?.[previewCellKey(ri, ci)] && "bg-rose-100/80 text-rose-950",
+                                        tableJsonPreview.rowDiffKinds?.[ri] === "update" && !tableJsonPreview.cellDiffKinds?.[previewCellKey(ri, ci)] && "bg-amber-100/80 text-amber-950",
+                                        tableJsonPreview.cellDiffKinds?.[previewCellKey(ri, ci)] === "insert" && "bg-emerald-200/80 text-emerald-950 font-medium",
+                                        tableJsonPreview.cellDiffKinds?.[previewCellKey(ri, ci)] === "delete" && "bg-rose-200/80 text-rose-950 font-medium line-through",
+                                        tableJsonPreview.cellDiffKinds?.[previewCellKey(ri, ci)] === "update" && "bg-amber-200/80 text-amber-950 font-medium"
+                                      )}
+                                    >
                                       {coerceCellValue(row?.[ci])}
                                     </td>
                                   ))}
@@ -4266,10 +5132,10 @@ export function AiSidebar({ editor, className }: Props) {
                           </table>
                         </div>
                       ) : meta.preview ? (
-                        <div className="text-xs text-muted-foreground">{meta.preview}</div>
+                        <div className="px-3 py-2 text-xs text-slate-600">{meta.preview}</div>
                       ) : null}
                       {meta.instructionError && (
-                        <div className="mt-2 text-[11px] text-destructive">{meta.instructionError}</div>
+                        <div className="border-t border-rose-200/60 bg-rose-50/70 px-3 py-2 text-[11px] text-rose-700">{meta.instructionError}</div>
                       )}
                     </div>
                   )}
@@ -4365,7 +5231,7 @@ export function AiSidebar({ editor, className }: Props) {
                           onClick={() => applySelection(m.id, meta, m.content)}
                           disabled={Boolean(meta.validationError)}
                         >
-                          Replace Selection
+                          {diffManager ? "Preview Changes" : "Replace Selection"}
                         </Button>
                       )}
 
@@ -4499,64 +5365,70 @@ export function AiSidebar({ editor, className }: Props) {
         </div>
       </ScrollArea>
 
-      <div className="shrink-0 border-t border-border/40 p-3 bg-background/80">
+      <div className="shrink-0 border-t border-border/10 p-4 bg-background/20">
         {(attached || manualFiles.length > 0) && (
-          <div className="mb-2 flex flex-wrap items-center gap-2">
+          <div className="mb-3 flex flex-wrap items-center gap-2 px-1">
             {attached && (
-              <div className="inline-flex items-center gap-2 rounded-full border border-border/50 bg-background/70 px-2.5 py-1 text-xs">
-                <span className="text-muted-foreground">Attached</span>
-                <span className="max-w-[240px] truncate">{attached.label}</span>
+              <div className="inline-flex items-center gap-2 rounded-lg border border-indigo-200/30 bg-indigo-50/50 px-2.5 py-1.5 text-[10px] font-semibold text-indigo-600/90 shadow-sm animate-in zoom-in-95">
+                <div className="flex h-4 w-4 items-center justify-center rounded bg-indigo-100/40">
+                  <FileText className="h-2.5 w-2.5" />
+                </div>
+                <span className="max-w-[200px] truncate">{attached.label}</span>
                 <button
                   type="button"
-                  className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full hover:bg-muted"
+                  className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-indigo-200/50 transition-colors"
                   aria-label="Remove attachment"
                   onClick={() => {
                     setSuppressedSignature(attached.signature);
                     setAttached(null);
                   }}
                 >
-                  <X className="h-3.5 w-3.5" />
+                  <X className="h-3 w-3" />
                 </button>
               </div>
             )}
 
             {manualFiles.map((file) => (
-              <div key={file.id} className="inline-flex items-center gap-2 rounded-full border border-border/50 bg-background/70 px-2.5 py-1 text-xs">
-                <span className="text-muted-foreground">File</span>
-                <span className="max-w-[220px] truncate" title={`${file.filename} - ${formatFolderPath(file.folderPath)}`}>
+              <div key={file.id} className="inline-flex items-center gap-2 rounded-lg border border-border/50 bg-muted/30 px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground shadow-sm animate-in zoom-in-95">
+                <div className="flex h-4 w-4 items-center justify-center rounded bg-muted">
+                  <AtSign className="h-2.5 w-2.5" />
+                </div>
+                <span className="max-w-[160px] truncate" title={`${file.filename} - ${formatFolderPath(file.folderPath)}`}>
                   {file.filename}
                 </span>
                 <button
                   type="button"
-                  className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full hover:bg-muted"
+                  className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-muted-foreground/10 transition-colors"
                   aria-label={`Remove file ${file.filename}`}
                   onClick={() => {
                     setManualFiles((prev) => prev.filter((f) => f.id !== file.id));
                   }}
                 >
-                  <X className="h-3.5 w-3.5" />
+                  <X className="h-3 w-3" />
                 </button>
               </div>
             ))}
           </div>
         )}
 
-        <div className="relative flex items-end gap-2">
+        <div className="relative flex items-end gap-2 bg-white/50 border border-border/30 rounded-2xl p-1 shadow-sm backdrop-blur-sm focus-within:ring-2 focus-within:ring-indigo-500/10 focus-within:border-indigo-500/20 transition-all">
           {mentionOpen && (
             <div
               ref={mentionMenuRef}
-              className="absolute bottom-[calc(100%+8px)] left-0 z-20 min-w-[220px] rounded-lg border border-border/60 bg-background shadow-lg p-1.5"
+              className="absolute bottom-[calc(100%+8px)] left-0 z-20 min-w-[240px] rounded-xl border border-border/30 bg-background shadow-2xl p-1 animate-in fade-in slide-in-from-bottom-2 backdrop-blur-md"
             >
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted/70"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[11px] font-semibold text-foreground/80 hover:bg-muted transition-colors"
                 onClick={() => {
                   setMentionOpen(false);
                   setPickerOpen(true);
                 }}
               >
-                <AtSign className="h-3.5 w-3.5 text-muted-foreground" />
-                <span>Add file context</span>
+                <div className="flex h-5 w-5 items-center justify-center rounded-md bg-indigo-50 text-indigo-600 border border-indigo-100/50">
+                  <AtSign className="h-3 w-3" />
+                </div>
+                <span>Attach Document Context</span>
               </button>
             </div>
           )}
@@ -4566,8 +5438,8 @@ export function AiSidebar({ editor, className }: Props) {
               ref={promptRef}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Ask the assistant... (type @ to attach files)"
-              className="min-h-[44px] max-h-40 resize-none pr-10"
+              placeholder="Message AI Assistant..."
+              className="min-h-[44px] max-h-48 resize-none border-none bg-transparent py-3.5 pl-4 pr-10 shadow-none focus-visible:ring-0 text-sm leading-relaxed text-foreground/90 placeholder:text-muted-foreground/50"
               onKeyDown={(e) => {
                 if (e.key === "@" && !e.ctrlKey && !e.metaKey && !e.altKey) {
                   e.preventDefault();
@@ -4586,7 +5458,7 @@ export function AiSidebar({ editor, className }: Props) {
               type="button"
               variant="ghost"
               size="icon"
-              className="absolute right-1.5 top-1.5 h-7 w-7 rounded-md text-muted-foreground"
+              className="absolute right-1 top-2.5 h-8 w-8 rounded-lg text-muted-foreground/60 hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
               aria-label="Attach files"
               title="Attach files (@)"
               onClick={() => {
@@ -4600,18 +5472,28 @@ export function AiSidebar({ editor, className }: Props) {
           </div>
           <Button
             type="button"
-            className="h-10 px-3"
+            className={cn(
+              "h-10 w-10 shrink-0 rounded-xl transition-all duration-300 shadow-sm",
+              loading
+                ? "bg-red-500 hover:bg-red-600 text-white"
+                : "bg-indigo-600 hover:bg-indigo-700 text-white"
+            )}
             onClick={() => {
               if (loading) stop();
               else void send();
             }}
             disabled={!loading && !canSend}
           >
-            {loading ? "Stop" : "Send"}
+            {loading ? <X className="h-4 w-4" /> : <Send className="h-4 w-4" />}
           </Button>
         </div>
-        <div className="mt-2 text-[11px] text-muted-foreground">
-          Enter to send - Shift+Enter for newline - Esc to stop - @ to attach files
+        <div className="mt-2.5 px-1 flex items-center justify-between text-[10px] text-muted-foreground/60">
+          <div className="flex items-center gap-3">
+            <span>Enter to send</span>
+            <span className="h-1 w-1 rounded-full bg-border/40" />
+            <span>@ to attach</span>
+          </div>
+          <div className="font-medium opacity-50">Esc to stop</div>
         </div>
 
         <FinderPicker
@@ -4624,8 +5506,8 @@ export function AiSidebar({ editor, className }: Props) {
           onConfirm={({ docs }) => {
             const next = Array.isArray(docs)
               ? docs
-                  .filter((doc): doc is StoredDocument => Boolean(doc?.id))
-                  .map((doc) => normalizePickedDoc(doc))
+                .filter((doc): doc is StoredDocument => Boolean(doc?.id))
+                .map((doc) => normalizePickedDoc(doc))
               : [];
             setManualFiles(next);
           }}

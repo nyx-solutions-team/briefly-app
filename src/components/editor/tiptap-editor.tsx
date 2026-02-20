@@ -56,6 +56,7 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
+  Columns3,
   ChevronRight,
   Trash2,
   Rows3,
@@ -68,6 +69,8 @@ import {
 import { CalloutBlock, type CalloutTone } from "@/components/editor/extensions/callout";
 import { applyHeadingLevel } from "@/components/editor/heading-command";
 import { DividerBlock } from "@/components/editor/extensions/divider";
+import { DiffMarksExtension } from "@/components/editor/diff/diff-marks-extension";
+import { useDiffManager } from "@/components/editor/diff/diff-manager";
 import { cn } from "@/lib/utils";
 
 export type TipTapEditorValue = JSONContent;
@@ -159,7 +162,7 @@ class NotionLikeTableView extends TableView {
     rightButton.setAttribute("contenteditable", "false");
     rightButton.setAttribute("data-editor-block-ui", "true");
     rightButton.setAttribute("aria-label", "Add column");
-    rightButton.setAttribute("title", "Drag to add/remove columns (diagonal adds/removes rows)" );
+    rightButton.setAttribute("title", "Drag to add/remove columns (diagonal adds/removes rows)");
     rightButton.textContent = "+";
     rightButton.addEventListener("pointerdown", this.handleRightAddPointerDown);
 
@@ -1239,6 +1242,7 @@ export function TipTapEditor({
   const [hoverMenuOpen, setHoverMenuOpen] = React.useState(false);
   const [hoverColorPanel, setHoverColorPanel] = React.useState<"text" | "background" | null>(null);
   const [hoverTableCell, setHoverTableCell] = React.useState<HoverTableCellState | null>(null);
+  const [tableQuickMenu, setTableQuickMenu] = React.useState<"row" | "column" | null>(null);
   const [isHoveringTableBottomBuffer, setIsHoveringTableBottomBuffer] = React.useState(false);
   const [isDraggingBlock, setIsDraggingBlock] = React.useState(false);
   const [selectedBlockIndices, setSelectedBlockIndices] = React.useState<number[]>([]);
@@ -1252,12 +1256,29 @@ export function TipTapEditor({
   const hoverColorPanelRef = React.useRef<"text" | "background" | null>(null);
   const hoverUiInteractingRef = React.useRef(false);
 
+  // Diff manager integration (optional - will be null if not wrapped in provider)
+  let diffManager: ReturnType<typeof useDiffManager> | null = null;
+  try {
+    diffManager = useDiffManager();
+  } catch {
+    // Not wrapped in DiffManagerProvider - that's okay
+  }
+
   const toolbarStickyStyle = React.useMemo<React.CSSProperties | undefined>(() => {
     if (!stickyToolbar) return undefined;
     return {
       ["--editor-toolbar-sticky-top" as any]: `${Math.max(0, Number(toolbarStickyOffset) || 0)}px`,
     };
   }, [stickyToolbar, toolbarStickyOffset]);
+
+  // Create a ref to store active diffs so the extension always has access to the latest state
+  const activeDiffsRef = React.useRef<Map<string, any>>(new Map());
+
+  // Ref for diffManager so extension callbacks always access the latest value (avoids stale closure)
+  const diffManagerRef = React.useRef(diffManager);
+  React.useEffect(() => {
+    diffManagerRef.current = diffManager;
+  }, [diffManager]);
 
   const editor = useEditor({
     // Next.js renders client components on the server for the initial HTML.
@@ -1293,18 +1314,67 @@ export function TipTapEditor({
       Placeholder.configure({
         placeholder,
       }),
+      DiffMarksExtension.configure({
+        getActiveDiffs: () => activeDiffsRef.current,
+        onAccept: (diffId) => {
+          console.log("[TipTap] onAccept called with diffId:", diffId);
+          const dm = diffManagerRef.current;
+          console.log("[TipTap] diffManager (from ref) exists:", !!dm);
+          if (dm) {
+            dm.acceptDiff(diffId);
+            // After accept, schedule ref update and decoration refresh
+            setTimeout(() => {
+              if (diffManagerRef.current) {
+                activeDiffsRef.current = diffManagerRef.current.activeDiffs;
+                console.log("[TipTap] Updated ref after accept, active diffs:", activeDiffsRef.current.size);
+              }
+            }, 50);
+          }
+        },
+        onReject: (diffId) => {
+          console.log("[TipTap] onReject called with diffId:", diffId);
+          const dm = diffManagerRef.current;
+          if (dm) {
+            dm.rejectDiff(diffId);
+            // After reject, schedule ref update and decoration refresh
+            setTimeout(() => {
+              if (diffManagerRef.current) {
+                activeDiffsRef.current = diffManagerRef.current.activeDiffs;
+                console.log("[TipTap] Updated ref after reject, active diffs:", activeDiffsRef.current.size);
+              }
+            }, 50);
+          }
+        },
+      }),
     ],
     content: value ?? DEFAULT_DOC,
     editorProps: {
       attributes: {
-        class: "tiptap-editor",
+        class: "tiptap-editor focus:outline-none max-w-none prose prose-headings:font-display font-default",
         spellcheck: "true",
       },
     },
     onUpdate: ({ editor }) => {
       onChange?.(editor.getJSON());
     },
+    onCreate: ({ editor }) => {
+      onEditorReady?.(editor);
+    },
   });
+
+  // Update ref when diffManager changes
+  React.useEffect(() => {
+    if (diffManager) {
+      console.log("[TipTap] Diff state changed, updating decorations. Active diffs:", diffManager.activeDiffs.size, "renderVersion:", diffManager.renderVersion);
+      activeDiffsRef.current = diffManager.activeDiffs;
+
+      // Force editor update to refresh decorations
+      if (editor && !editor.isDestroyed) {
+        // Dispatching a transaction explicitly triggers decoration updates
+        editor.view.dispatch(editor.state.tr.setMeta("diffUpdate", true));
+      }
+    }
+  }, [diffManager, editor]);
 
   React.useEffect(() => {
     if (!editor) return;
@@ -1577,6 +1647,34 @@ export function TipTapEditor({
     if (hoverMenuOpen) return;
     setHoverColorPanel(null);
   }, [hoverMenuOpen]);
+
+  React.useEffect(() => {
+    if (!hoverMenuOpen) return;
+    setTableQuickMenu(null);
+  }, [hoverMenuOpen]);
+
+  React.useEffect(() => {
+    if (!tableQuickMenu) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-editor-block-ui='true']")) return;
+      setTableQuickMenu(null);
+    };
+
+    window.addEventListener("mousedown", onPointerDown, true);
+    return () => window.removeEventListener("mousedown", onPointerDown, true);
+  }, [tableQuickMenu]);
+
+  React.useEffect(() => {
+    if (hoverBlock?.nodeType === "table") return;
+    setTableQuickMenu(null);
+  }, [hoverBlock]);
+
+  React.useEffect(() => {
+    if (hoverTableCell) return;
+    setTableQuickMenu(null);
+  }, [hoverTableCell]);
 
   React.useEffect(() => {
     hoverColorPanelRef.current = hoverColorPanel;
@@ -2163,6 +2261,30 @@ export function TipTapEditor({
   const ensureHoverTableSelection = React.useCallback(() => {
     if (!editor || !hoverBlock || hoverBlock.nodeType !== "table") return false;
 
+    // Prefer hovered cell so row/column actions target what the user points at,
+    // not whichever table cell happened to be focused previously.
+    if (hoverTableCell) {
+      const probePos = Math.max(0, Math.min(editor.state.doc.content.size, hoverTableCell.pos));
+      const $probe = editor.state.doc.resolve(probePos);
+      const $cell = cellAround($probe) ?? cellNear($probe);
+      if ($cell) {
+        let tablePos: number | null = null;
+        for (let d = $cell.depth; d > 0; d -= 1) {
+          if ($cell.node(d).type.spec.tableRole !== "table") continue;
+          tablePos = $cell.before(d);
+          break;
+        }
+
+        if (tablePos === hoverBlock.pos) {
+          const target = Math.max(1, Math.min(editor.state.doc.content.size, $cell.pos + 1));
+          const tr = editor.state.tr.setSelection(TextSelection.near(editor.state.doc.resolve(target)));
+          editor.view.dispatch(tr);
+          editor.view.focus();
+          return true;
+        }
+      }
+    }
+
     // Prefer the current selection when it's already inside the hovered table.
     if (isInTable(editor.state)) {
       const $head = editor.state.selection.$head;
@@ -2174,15 +2296,27 @@ export function TipTapEditor({
       }
     }
 
-    // Otherwise, require a hovered cell to avoid defaulting to the first row/column.
-    if (!hoverTableCell) return false;
+    return false;
+  }, [editor, hoverBlock, hoverTableCell]);
+
+  const focusHoverTableCell = React.useCallback(() => {
+    if (!editor || !hoverBlock || hoverBlock.nodeType !== "table" || !hoverTableCell) return false;
 
     const probePos = Math.max(0, Math.min(editor.state.doc.content.size, hoverTableCell.pos));
     const $probe = editor.state.doc.resolve(probePos);
     const $cell = cellAround($probe) ?? cellNear($probe);
     if (!$cell) return false;
 
-    const tr = editor.state.tr.setSelection(CellSelection.create(editor.state.doc, $cell.pos));
+    let tablePos: number | null = null;
+    for (let d = $cell.depth; d > 0; d -= 1) {
+      if ($cell.node(d).type.spec.tableRole !== "table") continue;
+      tablePos = $cell.before(d);
+      break;
+    }
+    if (tablePos !== hoverBlock.pos) return false;
+
+    const target = Math.max(1, Math.min(editor.state.doc.content.size, $cell.pos + 1));
+    const tr = editor.state.tr.setSelection(TextSelection.near(editor.state.doc.resolve(target)));
     editor.view.dispatch(tr);
     editor.view.focus();
     return true;
@@ -2217,11 +2351,13 @@ export function TipTapEditor({
     const pos = getChildPos(doc, 0, index);
     const node = doc.child(index);
     const tr = editor.state.tr;
-    if (node?.type?.spec?.selectable) {
+
+    if (node?.type?.name === "table" && node?.type?.spec?.selectable) {
       tr.setSelection(NodeSelection.create(doc, pos));
     } else {
       tr.setSelection(TextSelection.near(doc.resolve(Math.min(doc.content.size, pos + 1))));
     }
+
     editor.view.dispatch(tr);
     editor.view.focus();
   }, [editor]);
@@ -2904,40 +3040,40 @@ export function TipTapEditor({
   }, [deleteActiveBlocks]);
 
   const addTableRowFromHover = React.useCallback(() => {
-    if (!editor || !ensureHoverTableSelection()) return;
+    if (!editor || !(focusHoverTableCell() || ensureHoverTableSelection())) return;
     editor.chain().focus().addRowAfter().run();
     setHoverMenuOpen(false);
-  }, [editor, ensureHoverTableSelection]);
+  }, [editor, ensureHoverTableSelection, focusHoverTableCell]);
 
   const addTableColumnFromHover = React.useCallback(() => {
-    if (!editor || !ensureHoverTableSelection()) return;
+    if (!editor || !(focusHoverTableCell() || ensureHoverTableSelection())) return;
     editor.chain().focus().addColumnAfter().run();
     setHoverMenuOpen(false);
-  }, [editor, ensureHoverTableSelection]);
+  }, [editor, ensureHoverTableSelection, focusHoverTableCell]);
 
   const addTableRowBeforeFromHover = React.useCallback(() => {
-    if (!editor || !ensureHoverTableSelection()) return;
+    if (!editor || !(focusHoverTableCell() || ensureHoverTableSelection())) return;
     editor.chain().focus().addRowBefore().run();
     setHoverMenuOpen(false);
-  }, [editor, ensureHoverTableSelection]);
+  }, [editor, ensureHoverTableSelection, focusHoverTableCell]);
 
   const deleteTableRowFromHover = React.useCallback(() => {
-    if (!editor || !ensureHoverTableSelection()) return;
+    if (!editor || !(focusHoverTableCell() || ensureHoverTableSelection())) return;
     editor.chain().focus().deleteRow().run();
     setHoverMenuOpen(false);
-  }, [editor, ensureHoverTableSelection]);
+  }, [editor, ensureHoverTableSelection, focusHoverTableCell]);
 
   const addTableColumnBeforeFromHover = React.useCallback(() => {
-    if (!editor || !ensureHoverTableSelection()) return;
+    if (!editor || !(focusHoverTableCell() || ensureHoverTableSelection())) return;
     editor.chain().focus().addColumnBefore().run();
     setHoverMenuOpen(false);
-  }, [editor, ensureHoverTableSelection]);
+  }, [editor, ensureHoverTableSelection, focusHoverTableCell]);
 
   const deleteTableColumnFromHover = React.useCallback(() => {
-    if (!editor || !ensureHoverTableSelection()) return;
+    if (!editor || !(focusHoverTableCell() || ensureHoverTableSelection())) return;
     editor.chain().focus().deleteColumn().run();
     setHoverMenuOpen(false);
-  }, [editor, ensureHoverTableSelection]);
+  }, [editor, ensureHoverTableSelection, focusHoverTableCell]);
 
   const mergeOrSplitCellFromHover = React.useCallback(() => {
     if (!editor || !ensureHoverTableSelection()) return;
@@ -3064,6 +3200,32 @@ export function TipTapEditor({
     hoveredBlockIndex !== null
     && selectedBlockIndices.includes(hoveredBlockIndex)
   );
+
+  const tableCellActionAnchors = React.useMemo(() => {
+    if (!hoverBlock || hoverBlock.nodeType !== "table" || !hoverTableCell) return null;
+
+    const rowHeight = Math.max(18, hoverTableCell.bottom - hoverTableCell.top);
+    const colWidth = Math.max(18, hoverTableCell.right - hoverTableCell.left);
+    const rowCenter = hoverTableCell.top + rowHeight / 2;
+    const colCenter = hoverTableCell.left + colWidth / 2;
+
+    const rowIconTop = Math.max(8, rowCenter - 9);
+    const rowIconLeft = Math.max(8, hoverBlock.left - 26);
+    const colIconTop = Math.max(8, hoverTableCell.top - 10);
+    const colIconLeft = Math.max(8, colCenter - 9);
+
+    return {
+      rowIconTop,
+      rowIconLeft,
+      colIconTop,
+      colIconLeft,
+      rowMenuTop: Math.max(8, rowCenter - 14),
+      rowMenuLeft: rowIconLeft + 24,
+      colMenuTop: colIconTop + 24,
+      colMenuLeft: Math.max(8, colCenter - 24),
+    };
+  }, [hoverBlock, hoverTableCell]);
+
   return (
     <div className={cn("rounded-lg border bg-card/50 border-border/40", className)}>
       {showToolbar && (
@@ -3100,55 +3262,231 @@ export function TipTapEditor({
               onMouseLeave={onHoverUiLeave}
               onMouseDownCapture={(event) => {
                 if (event.button !== 0) return;
-                // For tables, keep the user's cell cursor where it is.
-                // Selecting the table block here can move selection to the first cell,
-                // which makes row/column actions target the wrong place.
-                if (hoverBlock?.nodeType === "table") return;
+                event.preventDefault();
+                event.stopPropagation();
+                // Notion-like: allow selecting table blocks directly from the gutter
+                // so users don't need the table menu action.
                 selectHoverBlockFromGutter(event);
               }}
               style={{
                 left: blockControlsLeft,
                 top: hoverBlock.top + 4,
               }}
+            >
+              <div
+                className={cn(
+                  "flex items-center gap-1 rounded-md border border-border/70 bg-background/95 px-1 py-0.5 shadow-sm",
+                  isHoverBlockSelected && "border-primary/55 bg-primary/10"
+                )}
               >
-                <div
+                <button
+                  type="button"
+                  className="inline-flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    insertBlockBelow();
+                  }}
+                  aria-label="Add block below"
+                  title="Add block below"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
                   className={cn(
-                    "flex items-center gap-1 rounded-md border border-border/70 bg-background/95 px-1 py-0.5 shadow-sm",
-                    isHoverBlockSelected && "border-primary/55 bg-primary/10"
+                    "inline-flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted",
+                    isDraggingBlock ? "cursor-grabbing" : "cursor-grab"
                   )}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    startDragBlock(event);
+                  }}
+                  aria-label="Drag block / open block menu"
+                  title="Drag to move selected blocks, click to open menu"
+                >
+                  <GripVertical className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Table add controls are rendered in the table node view (NotionLikeTableView). */}
+
+            {tableCellActionAnchors && (
+              <>
+                <div
+                  className="absolute z-30"
+                  data-editor-block-ui="true"
+                  onMouseEnter={onHoverUiEnter}
+                  onMouseLeave={onHoverUiLeave}
+                  style={{
+                    left: tableCellActionAnchors.rowIconLeft,
+                    top: tableCellActionAnchors.rowIconTop,
+                  }}
                 >
                   <button
                     type="button"
-                    className="inline-flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted"
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      insertBlockBelow();
-                    }}
-                    aria-label="Add block below"
-                    title="Add block below"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
                     className={cn(
-                      "inline-flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted",
-                      isDraggingBlock ? "cursor-grabbing" : "cursor-grab"
+                      "inline-flex h-5 w-5 items-center justify-center rounded-md border border-border/70 bg-background/95 text-muted-foreground shadow-sm transition-colors hover:bg-muted",
+                      tableQuickMenu === "row" && "bg-muted text-foreground"
                     )}
                     onMouseDown={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
-                      startDragBlock(event);
+                      setHoverMenuOpen(false);
+                      setTableQuickMenu((prev) => (prev === "row" ? null : "row"));
                     }}
-                    aria-label="Drag block / open block menu"
-                    title="Drag to move selected blocks, click to open menu"
+                    aria-label="Row actions"
+                    title="Row actions"
                   >
-                    <GripVertical className="h-3.5 w-3.5" />
+                    <Rows3 className="h-3.5 w-3.5" />
                   </button>
                 </div>
-              </div>
 
-              {/* Table add controls are rendered in the table node view (NotionLikeTableView). */}
+                <div
+                  className="absolute z-30"
+                  data-editor-block-ui="true"
+                  onMouseEnter={onHoverUiEnter}
+                  onMouseLeave={onHoverUiLeave}
+                  style={{
+                    left: tableCellActionAnchors.colIconLeft,
+                    top: tableCellActionAnchors.colIconTop,
+                  }}
+                >
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex h-5 w-5 items-center justify-center rounded-md border border-border/70 bg-background/95 text-muted-foreground shadow-sm transition-colors hover:bg-muted",
+                      tableQuickMenu === "column" && "bg-muted text-foreground"
+                    )}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setHoverMenuOpen(false);
+                      setTableQuickMenu((prev) => (prev === "column" ? null : "column"));
+                    }}
+                    aria-label="Column actions"
+                    title="Column actions"
+                  >
+                    <Columns3 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </>
+            )}
+
+            {hoverBlock.nodeType === "table" && tableQuickMenu && tableCellActionAnchors && (
+              <div
+                className="absolute left-0 z-40 min-w-[210px] rounded-md border border-border/70 bg-background/95 p-1 shadow-lg"
+                data-editor-block-ui="true"
+                onMouseEnter={onHoverUiEnter}
+                onMouseLeave={onHoverUiLeave}
+                style={{
+                  left: tableQuickMenu === "row" ? tableCellActionAnchors.rowMenuLeft : tableCellActionAnchors.colMenuLeft,
+                  top: tableQuickMenu === "row" ? tableCellActionAnchors.rowMenuTop : tableCellActionAnchors.colMenuTop,
+                }}
+              >
+                {tableQuickMenu === "row" ? (
+                  <>
+                    <div className="px-2 py-1 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">Row actions</div>
+                    <button
+                      type="button"
+                      disabled={!canRunTableCellActions}
+                      className="flex h-7 w-full items-center gap-2 rounded-sm px-2 text-xs text-muted-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        addTableRowBeforeFromHover();
+                        setTableQuickMenu(null);
+                      }}
+                    >
+                      <ArrowUp className="h-3.5 w-3.5" />
+                      Insert row above
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canRunTableCellActions}
+                      className="flex h-7 w-full items-center gap-2 rounded-sm px-2 text-xs text-muted-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        addTableRowFromHover();
+                        setTableQuickMenu(null);
+                      }}
+                    >
+                      <ArrowDown className="h-3.5 w-3.5" />
+                      Insert row below
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canRunTableCellActions}
+                      className="mt-1 flex h-7 w-full items-center gap-2 rounded-sm px-2 text-xs text-muted-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        mergeOrSplitCellFromHover();
+                        setTableQuickMenu(null);
+                      }}
+                    >
+                      <Rows3 className="h-3.5 w-3.5" />
+                      Merge / split cell
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canRunTableCellActions}
+                      className="mt-1 flex h-7 w-full items-center gap-2 rounded-sm px-2 text-xs text-destructive transition-colors hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        deleteTableRowFromHover();
+                        setTableQuickMenu(null);
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete row
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="px-2 py-1 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">Column actions</div>
+                    <button
+                      type="button"
+                      disabled={!canRunTableCellActions}
+                      className="flex h-7 w-full items-center gap-2 rounded-sm px-2 text-xs text-muted-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        addTableColumnBeforeFromHover();
+                        setTableQuickMenu(null);
+                      }}
+                    >
+                      <ArrowLeft className="h-3.5 w-3.5" />
+                      Insert column left
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canRunTableCellActions}
+                      className="flex h-7 w-full items-center gap-2 rounded-sm px-2 text-xs text-muted-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        addTableColumnFromHover();
+                        setTableQuickMenu(null);
+                      }}
+                    >
+                      <ArrowRight className="h-3.5 w-3.5" />
+                      Insert column right
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canRunTableCellActions}
+                      className="mt-1 flex h-7 w-full items-center gap-2 rounded-sm px-2 text-xs text-destructive transition-colors hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        deleteTableColumnFromHover();
+                        setTableQuickMenu(null);
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete column
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
 
             {hoverMenuOpen && (
               <div
@@ -3272,84 +3610,6 @@ export function TipTapEditor({
                   </>
                 )}
 
-                {hoverBlock.nodeType === "table" && (
-                  <>
-                    <div className="my-1 h-px bg-border/70" />
-                    <button
-                      type="button"
-                      disabled={!canRunTableCellActions}
-                      className="flex h-7 w-full items-center gap-2 rounded-sm px-2 text-xs text-muted-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
-                      onMouseDown={(event) => { event.preventDefault(); addTableRowBeforeFromHover(); }}
-                    >
-                      <ArrowUp className="h-3.5 w-3.5" />
-                      Insert row above
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!canRunTableCellActions}
-                      className="flex h-7 w-full items-center gap-2 rounded-sm px-2 text-xs text-muted-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
-                      onMouseDown={(event) => { event.preventDefault(); addTableRowFromHover(); }}
-                    >
-                      <ArrowDown className="h-3.5 w-3.5" />
-                      Insert row below
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!canRunTableCellActions}
-                      className="flex h-7 w-full items-center gap-2 rounded-sm px-2 text-xs text-muted-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
-                      onMouseDown={(event) => { event.preventDefault(); addTableColumnBeforeFromHover(); }}
-                    >
-                      <ArrowLeft className="h-3.5 w-3.5" />
-                      Insert column left
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!canRunTableCellActions}
-                      className="flex h-7 w-full items-center gap-2 rounded-sm px-2 text-xs text-muted-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
-                      onMouseDown={(event) => { event.preventDefault(); addTableColumnFromHover(); }}
-                    >
-                      <ArrowRight className="h-3.5 w-3.5" />
-                      Insert column right
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!canRunTableCellActions}
-                      className="flex h-7 w-full items-center gap-2 rounded-sm px-2 text-xs text-muted-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
-                      onMouseDown={(event) => { event.preventDefault(); mergeOrSplitCellFromHover(); }}
-                    >
-                      <Rows3 className="h-3.5 w-3.5" />
-                      Merge / split cell
-                    </button>
-                  </>
-                )}
-                {hoverBlock.nodeType === "table" && (
-                  <button
-                    type="button"
-                    disabled={!canRunTableCellActions}
-                    className="mt-1 flex h-7 w-full items-center gap-2 rounded-sm px-2 text-xs text-destructive transition-colors hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      deleteTableRowFromHover();
-                    }}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Delete row
-                  </button>
-                )}
-                {hoverBlock.nodeType === "table" && (
-                  <button
-                    type="button"
-                    disabled={!canRunTableCellActions}
-                    className="mt-1 flex h-7 w-full items-center gap-2 rounded-sm px-2 text-xs text-destructive transition-colors hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      deleteTableColumnFromHover();
-                    }}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Delete column
-                    </button>
-                  )}
               </div>
             )}
 

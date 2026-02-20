@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { motion } from 'framer-motion';
 import AppLayout from '@/components/layout/app-layout';
 import { useAuth } from '@/hooks/use-auth';
 import { AccessDenied } from '@/components/access-denied';
@@ -36,12 +37,15 @@ import { apiFetch, getApiContext, ssePost } from '@/lib/api';
 import MermaidDiagram from '@/components/ai-elements/mermaid-diagram';
 import { DocumentResultsTable } from '@/components/ai-elements/document-results-table';
 import { ResultsSidebar } from '@/components/ai-elements/results-sidebar';
+import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import { useSettings } from '@/hooks/use-settings';
 import { Bot, FileText, ChevronDown, Sparkles, Globe, FileSpreadsheet, FileArchive, FileImage, FileVideo, FileAudio, FileCode, File as FileGeneric, Eye, Layers, Check, Loader2, X, Download, Search, FilePlus, MessageSquare, ChevronRight } from 'lucide-react';
+import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, XAxis, YAxis } from 'recharts';
 import { cn } from '@/lib/utils';
 import { type ChatContext } from '@/components/chat-context-selector';
 import { createFolderChatEndpoint } from '@/lib/folder-utils';
 import BrieflyChatBox from '@/components/ai-elements/briefly-chat-box';
+import { TemplateTray } from '@/components/chat/template-tray';
 import { FinderPicker } from '@/components/pickers/finder-picker';
 import { useDocuments } from '@/hooks/use-documents';
 import { ActionCenter, type CitationMeta, type ActionCenterTab, type GeneratedPdfPreview } from '@/components/action-center';
@@ -205,6 +209,242 @@ function toGeneratedPdfPreview(doc?: GeneratedDocumentMetadata | null): Generate
   };
 }
 
+const CHART_PALETTE = ['#FF7A30', '#FF9A5C', '#FFB37E', '#FFCBA1', '#F97316', '#FB923C'] as const;
+
+function friendlyColumnName(value?: string | null): string {
+  const raw = String(value || '').trim();
+  if (!raw) return 'Value';
+  return raw
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatCompactNumber(value: number): string {
+  if (!Number.isFinite(value)) return '0';
+  return new Intl.NumberFormat('en-US', {
+    notation: 'compact',
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function formatExactNumber(value: number): string {
+  if (!Number.isFinite(value)) return '0';
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return '0%';
+  return new Intl.NumberFormat('en-US', {
+    style: 'percent',
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function normalizeChartSpec(metadata?: ChatResultsMetadata | null): ChatChartSpec | null {
+  if (!metadata) return null;
+  const candidate = metadata.chart_spec || metadata.chartSpec;
+  if (!candidate || typeof candidate !== 'object') return null;
+
+  const rawPoints = Array.isArray(candidate.points) ? candidate.points : [];
+  const points = rawPoints
+    .map((point: any, index: number): ChatChartPoint | null => {
+      const numericValue = Number(point?.value);
+      if (!Number.isFinite(numericValue)) return null;
+      const rawLabel = String(point?.label || `Item ${index + 1}`).trim();
+      return {
+        label: rawLabel || `Item ${index + 1}`,
+        value: numericValue,
+      };
+    })
+    .filter((point): point is ChatChartPoint => Boolean(point));
+
+  if (points.length < 2) return null;
+
+  const requestedType = String(candidate.type || 'bar').toLowerCase();
+  const chartType = requestedType === 'line' || requestedType === 'pie' ? requestedType : 'bar';
+
+  return {
+    type: chartType,
+    title: typeof candidate.title === 'string' ? candidate.title : undefined,
+    valueColumn: typeof candidate.valueColumn === 'string' ? candidate.valueColumn : undefined,
+    labelColumn:
+      typeof candidate.labelColumn === 'string'
+        ? candidate.labelColumn
+        : candidate.labelColumn === null
+          ? null
+          : undefined,
+    points,
+    truncated: Boolean(candidate.truncated),
+  };
+}
+
+function getChartNotice(metadata?: ChatResultsMetadata | null): string | null {
+  const notice = metadata?.chart_notice || metadata?.chartNotice;
+  if (typeof notice !== 'string') return null;
+  const trimmed = notice.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function InlineResponseChart({ spec }: { spec: ChatChartSpec }) {
+  const points = Array.isArray(spec.points) ? spec.points : [];
+  if (points.length < 2) return null;
+
+  const chartType = spec.type === 'line' || spec.type === 'pie' ? spec.type : 'bar';
+  const valueLabel = friendlyColumnName(spec.valueColumn || 'value');
+  const title = spec.title || `${valueLabel} by ${friendlyColumnName(spec.labelColumn || 'label')}`;
+  const chartData = points.map((point) => ({ label: point.label, value: point.value }));
+  const totalValue = chartData.reduce((sum, entry) => sum + entry.value, 0);
+  const highestEntry = chartData.reduce((best, entry) => (entry.value > best.value ? entry : best), chartData[0]);
+  const lowestEntry = chartData.reduce((best, entry) => (entry.value < best.value ? entry : best), chartData[0]);
+  const shareEnabled = totalValue > 0 && chartData.every((entry) => entry.value >= 0);
+  const legendRows = chartData.map((entry, index) => {
+    const share = shareEnabled ? entry.value / totalValue : null;
+    return {
+      ...entry,
+      share,
+      color: chartType === 'pie' ? CHART_PALETTE[index % CHART_PALETTE.length] : '#FF7A30',
+    };
+  });
+  const chartConfig = useMemo(
+    () => ({
+      value: {
+        label: valueLabel,
+        color: '#FF7A30',
+      },
+    }),
+    [valueLabel]
+  );
+
+  return (
+    <div className="mt-2 sm:mt-3 rounded-xl border border-border/50 bg-muted/10 p-3 sm:p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs sm:text-sm font-semibold text-foreground">{title}</p>
+        <Badge variant="outline" className="text-[10px] sm:text-xs">
+          {points.length} point{points.length === 1 ? '' : 's'}
+        </Badge>
+      </div>
+
+      <ChartContainer config={chartConfig} className="mt-2 h-[260px] w-full !aspect-auto">
+        {chartType === 'line' ? (
+          <LineChart data={chartData} margin={{ top: 8, right: 12, left: 6, bottom: 24 }}>
+            <CartesianGrid vertical={false} />
+            <XAxis
+              dataKey="label"
+              tickLine={false}
+              axisLine={false}
+              tickMargin={8}
+              interval={0}
+              angle={-24}
+              textAnchor="end"
+              height={64}
+            />
+            <YAxis
+              tickLine={false}
+              axisLine={false}
+              width={72}
+              tickFormatter={(value) => formatCompactNumber(Number(value))}
+            />
+            <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatCompactNumber(Number(value))} />} />
+            <Line dataKey="value" type="monotone" stroke="var(--color-value)" strokeWidth={2.5} dot={{ r: 3 }} activeDot={{ r: 4 }} />
+          </LineChart>
+        ) : chartType === 'pie' ? (
+          <PieChart>
+            <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatCompactNumber(Number(value))} />} />
+            <Pie data={chartData} dataKey="value" nameKey="label" cx="50%" cy="50%" innerRadius={44} outerRadius={90} paddingAngle={2}>
+              {chartData.map((entry, index) => (
+                <Cell key={`${entry.label}-${index}`} fill={CHART_PALETTE[index % CHART_PALETTE.length]} />
+              ))}
+            </Pie>
+          </PieChart>
+        ) : (
+          <BarChart data={chartData} margin={{ top: 8, right: 12, left: 6, bottom: 24 }}>
+            <CartesianGrid vertical={false} />
+            <XAxis
+              dataKey="label"
+              tickLine={false}
+              axisLine={false}
+              tickMargin={8}
+              interval={0}
+              angle={-24}
+              textAnchor="end"
+              height={64}
+            />
+            <YAxis
+              tickLine={false}
+              axisLine={false}
+              width={72}
+              tickFormatter={(value) => formatCompactNumber(Number(value))}
+            />
+            <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatCompactNumber(Number(value))} />} />
+            <Bar dataKey="value" fill="var(--color-value)" radius={[8, 8, 0, 0]} />
+          </BarChart>
+        )}
+      </ChartContainer>
+
+      <div className="mt-3 rounded-lg border border-border/40 bg-background/50 p-2.5 sm:p-3">
+        <div className="grid gap-2 sm:grid-cols-3">
+          <div className="rounded-md border border-border/50 bg-muted/40 px-2.5 py-2">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Total</p>
+            <p className="text-xs sm:text-sm font-semibold text-foreground tabular-nums">{formatExactNumber(totalValue)}</p>
+          </div>
+          <div className="rounded-md border border-border/50 bg-muted/40 px-2.5 py-2">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Highest</p>
+            <p className="truncate text-xs sm:text-sm font-semibold text-foreground" title={highestEntry.label}>
+              {highestEntry.label}
+            </p>
+            <p className="text-[11px] text-muted-foreground tabular-nums">{formatExactNumber(highestEntry.value)}</p>
+          </div>
+          <div className="rounded-md border border-border/50 bg-muted/40 px-2.5 py-2">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Lowest</p>
+            <p className="truncate text-xs sm:text-sm font-semibold text-foreground" title={lowestEntry.label}>
+              {lowestEntry.label}
+            </p>
+            <p className="text-[11px] text-muted-foreground tabular-nums">{formatExactNumber(lowestEntry.value)}</p>
+          </div>
+        </div>
+
+        <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          Data Details
+        </p>
+        <div className="space-y-1.5">
+          {legendRows.map((entry, index) => (
+            <div key={`${entry.label}-${index}`} className="flex items-center justify-between gap-3 text-xs sm:text-sm">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: entry.color }}
+                  aria-hidden
+                />
+                <span className="w-5 shrink-0 text-[11px] text-muted-foreground tabular-nums">{index + 1}.</span>
+                <span className="truncate text-foreground" title={entry.label}>
+                  {entry.label}
+                </span>
+              </div>
+              <div className="flex shrink-0 items-center gap-3">
+                {entry.share !== null ? (
+                  <span className="text-[11px] text-muted-foreground tabular-nums">
+                    {formatPercent(entry.share)}
+                  </span>
+                ) : null}
+                <span className="font-medium tabular-nums text-foreground">
+                  {formatExactNumber(entry.value)}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {spec.truncated ? (
+        <p className="mt-2 text-[11px] sm:text-xs text-muted-foreground">Showing a subset of points for readability.</p>
+      ) : null}
+    </div>
+  );
+}
+
 const TEMPLATE_SELECTOR_STATUSES = new Set(['ok', 'template_required', 'invalid_template']);
 const DOCUMENT_WORKFLOW_AWAITING_INPUT_STATUSES = new Set([
   'collecting_details',
@@ -212,8 +452,286 @@ const DOCUMENT_WORKFLOW_AWAITING_INPUT_STATUSES = new Set([
   'awaiting_missing_fields',
 ]);
 
+function normalizeWorkflowFieldLabel(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[_()]/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractMissingFieldCandidates(
+  missingField: string | { key?: string; label?: string }
+): string[] {
+  if (typeof missingField === 'string') {
+    const normalized = normalizeWorkflowFieldLabel(missingField);
+    return normalized ? [normalized] : [];
+  }
+  const tokens = [
+    normalizeWorkflowFieldLabel(String(missingField?.key || '')),
+    normalizeWorkflowFieldLabel(String(missingField?.label || '')),
+  ].filter(Boolean);
+  return Array.from(new Set(tokens));
+}
+
+function userInputLikelyFulfillsMissingFields(
+  input: string,
+  missingFields: Array<string | { key?: string; label?: string }>
+): boolean {
+  const text = String(input || '').trim();
+  if (!text || !Array.isArray(missingFields) || missingFields.length === 0) return false;
+  const normalizedInput = normalizeWorkflowFieldLabel(text);
+  if (!normalizedInput) return false;
+
+  return missingFields.every((field) => {
+    const candidates = extractMissingFieldCandidates(field);
+    if (candidates.length === 0) return false;
+    return candidates.some((candidate) => {
+      const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const explicitPattern = new RegExp(`\\b${escaped}\\b\\s*(?::|=|\\bto\\b)`, 'i');
+      if (explicitPattern.test(text)) return true;
+      // Accept relaxed mentions for short trailing turns.
+      return normalizedInput.includes(candidate);
+    });
+  });
+}
+
 function buildTemplateSelectPrompt(template: DocumentTemplateOption): string {
   return `Template selected: template_id "${template.template_id}". Continue document generation with this template.`;
+}
+
+function getIslandCategory(templateId: string): string {
+  const id = templateId.toLowerCase();
+  if (id.includes('sale_deed')) return 'Legal';
+  if (id.includes('invoice') || id.includes('gst')) return 'Finance';
+  if (id.includes('development')) return 'Legal';
+  if (id.includes('tds')) return 'Tax';
+  if (id.includes('payment')) return 'Finance';
+  return 'Document';
+}
+
+function SelectedTemplateIsland({
+  templateName,
+  templateId,
+  badge,
+  hasCapturedValues,
+  onAutofill,
+}: {
+  templateName: string;
+  templateId: string;
+  badge?: string;
+  hasCapturedValues: boolean;
+  onAutofill: () => void;
+}) {
+  const islandRef = React.useRef<HTMLDivElement>(null);
+  const [autofillState, setAutofillState] = React.useState<'idle' | 'working' | 'done'>('idle');
+
+  // Entrance animation
+  React.useEffect(() => {
+    const island = islandRef.current;
+    if (!island) return;
+    const t = setTimeout(() => {
+      island.style.opacity = '1';
+      island.style.transform = 'translateY(0) scale(1)';
+    }, 300);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Use a ref to always have the latest onAutofill callback (avoids stale closure in setTimeout)
+  const onAutofillRef = React.useRef(onAutofill);
+  onAutofillRef.current = onAutofill;
+
+  const handleAutofill = () => {
+    if (autofillState !== 'idle') return;
+    setAutofillState('working');
+
+    // Fire autofill IMMEDIATELY — don't wait for animation (avoids stale closure bug)
+    onAutofillRef.current();
+
+    // Visual feedback only (decorative, does not block the actual call)
+    setTimeout(() => {
+      setAutofillState('done');
+
+      // Haptic pulse on island
+      const island = islandRef.current;
+      if (island) {
+        island.animate(
+          [
+            { transform: 'scale(1)', boxShadow: '0 8px 30px rgba(0, 0, 0, 0.04)' },
+            { transform: 'scale(1.02)', boxShadow: '0 20px 50px rgba(255, 122, 48, 0.15)' },
+            { transform: 'scale(1)', boxShadow: '0 8px 30px rgba(0, 0, 0, 0.04)' },
+          ],
+          { duration: 400, easing: 'cubic-bezier(0.19, 1, 0.22, 1)' }
+        );
+      }
+    }, 1200);
+  };
+
+  const category = getIslandCategory(templateId);
+
+  return (
+    <div style={{ perspective: '1000px' }}>
+      <style>{`
+        @keyframes island-status-pulse {
+          0% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.6); opacity: 0; }
+          100% { transform: scale(1); opacity: 1; }
+        }
+      `}</style>
+      <div
+        ref={islandRef}
+        style={{
+          height: '52px',
+          background: 'rgba(255, 255, 255, 0.85)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+          border: '1px solid rgba(255, 122, 48, 0.2)',
+          borderRadius: '16px',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 16px',
+          gap: '16px',
+          boxShadow: '0 8px 30px rgba(0, 0, 0, 0.04), inset 0 0 0 1px rgba(255, 255, 255, 0.5)',
+          opacity: 0,
+          transform: 'translateY(12px) scale(0.98)',
+          transition: 'all 0.5s cubic-bezier(0.19, 1, 0.22, 1)',
+          cursor: 'default',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.boxShadow = '0 12px 40px rgba(255, 122, 48, 0.1)';
+          e.currentTarget.style.transform = 'translateY(-2px)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.boxShadow = '0 8px 30px rgba(0, 0, 0, 0.04), inset 0 0 0 1px rgba(255, 255, 255, 0.5)';
+          e.currentTarget.style.transform = 'translateY(0) scale(1)';
+        }}
+      >
+        {/* Left: Doc Identity */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div
+            style={{
+              width: '28px',
+              height: '28px',
+              background: '#FFF5F0',
+              color: '#FF7A30',
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <FileText style={{ width: '16px', height: '16px' }} />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+            <span
+              style={{
+                fontSize: '10px',
+                fontWeight: 800,
+                textTransform: 'uppercase' as const,
+                color: '#6B7280',
+                letterSpacing: '0.05em',
+              }}
+            >
+              {category}
+            </span>
+            <h3
+              style={{
+                fontSize: '14px',
+                fontWeight: 700,
+                color: '#111827',
+                margin: 0,
+                whiteSpace: 'nowrap' as const,
+              }}
+            >
+              {templateName}
+            </h3>
+          </div>
+        </div>
+
+        {/* Divider */}
+        <div style={{ width: '1px', height: '20px', background: 'rgba(0,0,0,0.06)' }} />
+
+        {/* Center: Prompt with Autofill */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {!hasCapturedValues ? (
+            <p style={{ fontSize: '13px', color: '#6B7280', fontWeight: 500, margin: 0, whiteSpace: 'nowrap' as const }}>
+              Add details or type{' '}
+              <span
+                onClick={handleAutofill}
+                style={{
+                  background: autofillState === 'working' ? '#111827' : autofillState === 'done' ? '#FF7A30' : '#FF7A30',
+                  color: 'white',
+                  padding: '3px 10px',
+                  borderRadius: '6px',
+                  fontWeight: 800,
+                  fontSize: '11px',
+                  cursor: autofillState === 'idle' ? 'pointer' : 'default',
+                  transition: 'all 0.2s',
+                  display: 'inline-block',
+                  boxShadow: '0 4px 10px rgba(255, 122, 48, 0.2)',
+                  pointerEvents: autofillState === 'idle' ? 'auto' : 'none',
+                }}
+                onMouseEnter={(e) => {
+                  if (autofillState === 'idle') {
+                    e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
+                    e.currentTarget.style.filter = 'brightness(1.1)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = '';
+                  e.currentTarget.style.filter = '';
+                }}
+              >
+                {autofillState === 'idle' ? 'autofill' : autofillState === 'working' ? 'AI Working...' : 'Autofilled ✓'}
+              </span>
+            </p>
+          ) : (
+            <p style={{ fontSize: '13px', color: '#6B7280', fontWeight: 500, margin: 0 }}>
+              Fields captured
+            </p>
+          )}
+        </div>
+
+        {/* Divider */}
+        <div style={{ width: '1px', height: '20px', background: 'rgba(0,0,0,0.06)' }} />
+
+        {/* Right: Status */}
+        <div
+          style={{
+            background: '#F3F4F6',
+            padding: '6px 12px',
+            borderRadius: '8px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            marginLeft: 'auto',
+          }}
+        >
+          <div
+            style={{
+              width: '6px',
+              height: '6px',
+              background: '#FF7A30',
+              borderRadius: '50%',
+              animation: 'island-status-pulse 2s infinite',
+            }}
+          />
+          <span
+            style={{
+              fontSize: '11px',
+              fontWeight: 800,
+              textTransform: 'uppercase' as const,
+              color: '#111827',
+              letterSpacing: '0.02em',
+            }}
+          >
+            Selected
+          </span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function isDocumentCreationKickoffPrompt(input: string): boolean {
@@ -866,8 +1384,7 @@ function resolveWorkflowStepState(options: {
 }
 
 function buildDocumentWorkflowSteps(
-  message: Message,
-  hasSelectedTemplateInFlow: boolean
+  message: Message
 ): DocumentWorkflowStep[] | null {
   const workflow = message.metadata?.document_workflow;
   const workflowStatus = String(workflow?.status || '').trim().toLowerCase();
@@ -880,20 +1397,27 @@ function buildDocumentWorkflowSteps(
   const hasDocumentSignals = Boolean(workflow) || hasGeneratedDocument || Boolean(documentTool);
   if (!hasDocumentSignals) return null;
   const isTemplateSelectionStage = TEMPLATE_SELECTOR_STATUSES.has(workflowStatus);
-  if (isTemplateSelectionStage && !hasSelectedTemplateInFlow) {
-    return null;
-  }
+  // Never show workflow progress while the user is still choosing a template.
+  if (isTemplateSelectionStage) return null;
 
   const isStreaming = Boolean(message.isStreaming);
   const hasCapturedValues = hasAnyCapturedDocumentFields(workflow);
   const hasContent = String(message.content || '').trim().length > 0;
   const workflowIsComplete = ['completed', 'done', 'success'].includes(workflowStatus);
   const workflowCreatingPdf = ['creating_pdf', 'generating_pdf', 'rendering_pdf'].includes(workflowStatus);
-  const waitingForInput = TEMPLATE_SELECTOR_STATUSES.has(workflowStatus) || workflowStatus === 'collecting_details';
+  const waitingForInput = DOCUMENT_WORKFLOW_AWAITING_INPUT_STATUSES.has(workflowStatus);
   const workflowHasError =
     ['error', 'failed', 'failure'].includes(workflowStatus) ||
     Boolean(workflow?.error) ||
     toolStatus === 'error';
+  const workflowCanRender =
+    hasGeneratedDocument ||
+    workflowIsComplete ||
+    workflowCreatingPdf ||
+    workflowStatus === 'generating_response' ||
+    workflowStatus === 'responding' ||
+    workflowHasError;
+  if (!workflowCanRender) return null;
 
   const extractCompleted = hasCapturedValues || workflowIsComplete || hasGeneratedDocument || workflowCreatingPdf;
   const extractInProgress =
@@ -906,7 +1430,8 @@ function buildDocumentWorkflowSteps(
       (workflowCreatingPdf && (isStreaming || toolStatus === 'in_progress')) ||
       (
         hasCapturedValues &&
-        (isStreaming || toolStatus === 'in_progress' || workflowStatus === 'collecting_details')
+        !waitingForInput &&
+        (isStreaming || toolStatus === 'in_progress')
       )
     );
 
@@ -1493,6 +2018,20 @@ type DocumentTemplateOption = {
   publisher?: string;
 };
 
+type ChatChartPoint = {
+  label: string;
+  value: number;
+};
+
+type ChatChartSpec = {
+  type?: string;
+  title?: string;
+  valueColumn?: string;
+  labelColumn?: string | null;
+  points?: ChatChartPoint[];
+  truncated?: boolean;
+};
+
 type ChatResultsMetadata = {
   list_mode?: boolean;
   results_data?: Array<Record<string, any>>;
@@ -1501,6 +2040,10 @@ type ChatResultsMetadata = {
   total_count?: number;
   has_more?: boolean;
   query_type?: string | null;
+  chart_spec?: ChatChartSpec | null;
+  chart_notice?: string | null;
+  chartSpec?: ChatChartSpec | null;
+  chartNotice?: string | null;
   generated_document?: GeneratedDocumentMetadata | null;
   document_workflow?: {
     type?: string;
@@ -2065,6 +2608,13 @@ export default function TestAgentEnhancedPage() {
     if (isDocumentCreationKickoffPrompt(input)) {
       setHasSelectedTemplateInFlow(false);
       setSelectedTemplateCardMessageId(null);
+      setSelectedTemplateCard(null);
+      // Close any open preview sidebar from a previous flow
+      setGeneratedPdfPreview(null);
+      setPreviewDocId(null);
+      setPreviewDocPage(null);
+      setPreviewCitation(null);
+      setIsActionCenterOpen(false);
     }
     if (isTemplateSelectionMessage) {
       setHasSelectedTemplateInFlow(true);
@@ -2152,28 +2702,35 @@ export default function TestAgentEnhancedPage() {
 
       // Add assistant message placeholder
       const assistantId = `assistant_${Date.now()}`;
-      const lastAssistantWorkflowStatus = (() => {
+      const lastAssistantWorkflow = (() => {
         for (let i = messages.length - 1; i >= 0; i -= 1) {
           const msg = messages[i];
           if (msg.role !== 'assistant') continue;
-          const status = String(msg.metadata?.document_workflow?.status || '').trim().toLowerCase();
-          if (status) return status;
+          const wf = msg.metadata?.document_workflow;
+          const status = String(wf?.status || '').trim().toLowerCase();
+          if (!status) continue;
+          return {
+            status,
+            missingFields: Array.isArray(wf?.missing_fields) ? wf.missing_fields : [],
+          };
         }
-        return '';
+        return null;
       })();
-      const hasActiveDocumentInputStep = DOCUMENT_WORKFLOW_AWAITING_INPUT_STATUSES.has(lastAssistantWorkflowStatus);
+      const hasActiveDocumentInputStep = Boolean(
+        lastAssistantWorkflow?.status &&
+        DOCUMENT_WORKFLOW_AWAITING_INPUT_STATUSES.has(lastAssistantWorkflow.status)
+      );
+      const finalDataSubmitted =
+        hasActiveDocumentInputStep &&
+        userInputLikelyFulfillsMissingFields(input, lastAssistantWorkflow?.missingFields || []);
       const shouldBootstrapDocWorkflow =
+        !isTemplateSelectionMessage &&
         hasSelectedTemplateInFlow &&
         Boolean(selectedTemplateCard?.template_id) &&
-        (
-          isTemplateSelectionMessage ||
-          (
-            hasActiveDocumentInputStep &&
-            !isDocumentCreationKickoffPrompt(input) &&
-            !overrideOptions?.skipUserMessage
-          )
-        );
-      const bootstrapWorkflowStatus = isTemplateSelectionMessage ? 'collecting_details' : 'creating_pdf';
+        !isDocumentCreationKickoffPrompt(input) &&
+        !overrideOptions?.skipUserMessage &&
+        finalDataSubmitted;
+      const bootstrapWorkflowStatus = 'creating_pdf';
       const assistantMessage: Message = {
         id: assistantId,
         role: 'assistant',
@@ -2430,6 +2987,14 @@ export default function TestAgentEnhancedPage() {
                 if (hasCompleted) return;
                 hasCompleted = true;
                 const meta = data.metadata && typeof data.metadata === 'object' ? data.metadata as ChatResultsMetadata : null;
+                // Safety: template listing responses must never carry a stale generated_document
+                if (
+                  meta?.document_workflow &&
+                  (meta.document_workflow as any)?.status === 'ok' &&
+                  Array.isArray((meta.document_workflow as any)?.templates)
+                ) {
+                  (meta as any).generated_document = null;
+                }
                 const listMode = Boolean(meta?.list_mode);
                 let finalContent = data.full_content || streamingContent;
                 if (listMode) {
@@ -2601,6 +3166,27 @@ export default function TestAgentEnhancedPage() {
     handleSubmit(buildTemplateSelectPrompt(template), orgContext, { deepResearchEnabled: false, skipUserMessage: true });
   }, [handleSubmit]);
 
+  // Map template_id → sample PDF filename in public/templates/
+  const TEMPLATE_PREVIEW_PDF_MAP: Record<string, string> = {
+    sales_deed_v1: 'sales_deed_v2.pdf',
+    gst_tax_invoice_v1: 'gst_invoice.pdf',
+    development_agreement_v1: 'development_agreement.pdf',
+    tds_certificate_v1: 'tds_certificate.pdf',
+    payment_advice_v1: 'payment_advice.pdf',
+  };
+
+  const handleTemplatePreview = useCallback((template: DocumentTemplateOption) => {
+    const pdfFile = TEMPLATE_PREVIEW_PDF_MAP[template.template_id];
+    if (!pdfFile) return;
+    setGeneratedPdfPreview({
+      title: `${template.name} — Sample Preview`,
+      fileName: pdfFile,
+      previewUrl: `/templates/${pdfFile}`,
+    });
+    setActionCenterTab('preview');
+    setIsActionCenterOpen(true);
+  }, []);
+
   return (
     <AppLayout collapseSidebar={isActionCenterPinned}>
       <div className={cn("flex w-full h-full", isActionCenterPinned && "gap-0")}>
@@ -2639,8 +3225,8 @@ export default function TestAgentEnhancedPage() {
             <div className="flex flex-col flex-1 min-h-0 overflow-hidden relative">
 
               {/* Messages Area - Flex Grow */}
-              <div className="flex-1 overflow-y-auto px-2 sm:px-3 md:px-4 scrollbar-hide" ref={scrollAreaRef}>
-                <div className="w-full max-w-[98%] mx-auto py-4 sm:py-6 md:py-8 space-y-4 sm:space-y-6 md:space-y-8 min-h-full">
+              <div className="flex-1 overflow-x-hidden overflow-y-auto px-2 sm:px-3 md:px-4 scrollbar-hide" ref={scrollAreaRef}>
+                <div className="w-full max-w-full mx-auto py-4 sm:py-6 md:py-8 space-y-4 sm:space-y-6 md:space-y-8 min-h-full" style={{ overflowX: 'hidden' }}>
                   {messages.map((message, idx) => {
                     console.log('Rendering message:', message);
                     return (
@@ -2725,7 +3311,7 @@ export default function TestAgentEnhancedPage() {
                                 <Bot className={cn("h-3.5 w-3.5 sm:h-4 sm:w-4", themeColors.primary)} />
                               </div>
                             </div>
-                            <div className="flex-1 min-w-0 space-y-2 sm:space-y-3 md:space-y-4">
+                            <div className="flex-1 min-w-0 space-y-2 sm:space-y-3 md:space-y-4 overflow-hidden">
                               {/* Agent activity using Task component */}
                               {(() => {
                                 const { steps: activitySteps, tools, primaryStatus, primaryStatusState } = buildActivityInsights(message);
@@ -2855,70 +3441,183 @@ export default function TestAgentEnhancedPage() {
                               })()}
 
                               {(() => {
-                                const workflowSteps = buildDocumentWorkflowSteps(message, hasSelectedTemplateInFlow);
+                                const workflowSteps = buildDocumentWorkflowSteps(message);
                                 if (!workflowSteps) return null;
-                                const workflowStatusLabel: Record<WorkflowStepState, string> = {
-                                  pending: 'Pending',
-                                  in_progress: 'In progress',
-                                  completed: 'Completed',
-                                  error: 'Needs attention',
+
+                                // Calculate progress for the neural line
+                                const completedCount = workflowSteps.filter(s => s.state === 'completed').length;
+                                const activeIdx = workflowSteps.findIndex(s => s.state === 'in_progress');
+                                const totalSteps = workflowSteps.length;
+                                // Line progress: completed steps fill segments, active step fills half
+                                const lineProgress = activeIdx >= 0
+                                  ? ((activeIdx + 0.5) / totalSteps) * 100
+                                  : (completedCount / totalSteps) * 100;
+
+                                const chipIcons: Record<string, React.ReactNode> = {
+                                  extract: (
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ width: 18, height: 18 }}>
+                                      <path d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M7 21H5a2 2 0 01-2-2v-2M21 17v2a2 2 0 01-2 2h-2M7 12h10" />
+                                    </svg>
+                                  ),
+                                  create_pdf: (
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ width: 18, height: 18 }}>
+                                      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                                      <polyline points="14 2 14 8 20 8" />
+                                    </svg>
+                                  ),
+                                  respond: (
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ width: 18, height: 18 }}>
+                                      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+                                    </svg>
+                                  ),
+                                };
+
+                                const statePercent = (state: WorkflowStepState) => {
+                                  if (state === 'completed') return '100%';
+                                  if (state === 'in_progress') return '...';
+                                  if (state === 'error') return '!';
+                                  return '0%';
                                 };
 
                                 return (
-                                  <div className="rounded-xl border border-zinc-200 bg-white p-3.5 sm:p-4 dark:border-zinc-700 dark:bg-zinc-900/60">
-                                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400">
-                                      Document Workflow
-                                    </p>
-                                    <div className="mt-3 flex items-center gap-1.5 overflow-x-auto pb-1 sm:gap-2">
-                                      {workflowSteps.map((step, idx) => (
-                                        <React.Fragment key={step.key}>
+                                  <div style={{ position: 'relative', width: '100%', maxWidth: '850px', padding: '20px 0' }}>
+                                    <style>{`
+                                      @keyframes wf-ring-pulse {
+                                        0% { transform: scale(1); opacity: 0.5; }
+                                        100% { transform: scale(1.5); opacity: 0; }
+                                      }
+                                    `}</style>
+
+                                    {/* Neural Thread SVG */}
+                                    <svg
+                                      style={{
+                                        position: 'absolute',
+                                        top: '50%',
+                                        left: '10%',
+                                        width: '80%',
+                                        zIndex: 0,
+                                        transform: 'translateY(-50%)',
+                                        overflow: 'visible',
+                                      }}
+                                      viewBox="0 0 400 2"
+                                      fill="none"
+                                    >
+                                      {/* Background track */}
+                                      <path d="M0 1H400" stroke="#FFDCC9" strokeWidth="2" />
+                                      {/* Animated progress */}
+                                      <path
+                                        d="M0 1H400"
+                                        stroke="#FF7A30"
+                                        strokeWidth="2"
+                                        strokeDasharray="400"
+                                        strokeDashoffset={400 - (lineProgress / 100) * 400}
+                                        style={{ transition: 'stroke-dashoffset 0.8s ease-in-out' }}
+                                      />
+                                    </svg>
+
+                                    {/* Chips */}
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', position: 'relative', zIndex: 1 }}>
+                                      {workflowSteps.map((step) => {
+                                        const isActive = step.state === 'in_progress';
+                                        const isCompleted = step.state === 'completed';
+                                        const isError = step.state === 'error';
+
+                                        return (
                                           <div
-                                            className={cn(
-                                              "flex flex-1 flex-col gap-2 rounded-xl border p-2.5 transition-all duration-300 min-w-[120px] sm:min-w-0",
-                                              step.state === 'completed' && "border-primary bg-primary text-primary-foreground shadow-sm shadow-primary/20",
-                                              step.state === 'in_progress' && "border-primary/40 bg-primary/5 text-primary dark:bg-primary/20",
-                                              step.state === 'pending' && "border-zinc-200 bg-zinc-50/50 text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/40",
-                                              step.state === 'error' && "border-destructive/30 bg-destructive/5 text-destructive dark:bg-destructive/10"
-                                            )}
+                                            key={step.key}
+                                            style={{
+                                              background: isCompleted ? '#FFF9F6' : '#FFFFFF',
+                                              border: `1.5px solid ${isCompleted ? '#FF7A30' : isActive ? '#FFDCC9' : '#F1F5F9'}`,
+                                              padding: '14px 24px',
+                                              borderRadius: '20px',
+                                              position: 'relative',
+                                              transition: 'all 0.5s cubic-bezier(0.2, 1, 0.3, 1)',
+                                              width: '200px',
+                                              cursor: 'default',
+                                              boxShadow: isActive
+                                                ? '0 12px 20px -8px rgba(255, 122, 48, 0.15)'
+                                                : '0 4px 6px -1px rgba(0, 0, 0, 0.05)',
+                                              transform: isActive ? 'translateY(-4px)' : 'none',
+                                            }}
                                           >
-                                            <div className="flex items-center justify-between">
-                                              <div className={cn(
-                                                "flex h-7 w-7 items-center justify-center rounded-lg border border-current/20 bg-current/5",
-                                                step.state === 'completed' && "bg-white/10"
-                                              )}>
-                                                {step.icon}
-                                              </div>
-                                              <div className={cn(
-                                                "flex h-5 w-5 items-center justify-center rounded-full border border-current/20",
-                                                step.state === 'completed' && "bg-white/20 border-white/40"
-                                              )}>
-                                                {step.state === 'completed' ? (
-                                                  <Check className="h-2.5 w-2.5" />
-                                                ) : step.state === 'in_progress' ? (
-                                                  <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                                                ) : step.state === 'error' ? (
-                                                  <X className="h-2.5 w-2.5" />
-                                                ) : (
-                                                  <span className="h-1 w-1 rounded-full bg-current/40" />
+                                            {/* Chip Inner */}
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', position: 'relative', zIndex: 2 }}>
+                                              {/* Icon Box */}
+                                              <div
+                                                style={{
+                                                  width: '36px',
+                                                  height: '36px',
+                                                  borderRadius: '10px',
+                                                  background: isCompleted ? '#FF7A30' : isActive ? '#FFF5F0' : '#F8FAFC',
+                                                  display: 'flex',
+                                                  alignItems: 'center',
+                                                  justifyContent: 'center',
+                                                  color: isCompleted ? 'white' : isActive ? '#FF7A30' : '#64748B',
+                                                  position: 'relative',
+                                                  transition: 'all 0.3s',
+                                                }}
+                                              >
+                                                {chipIcons[step.key] || step.icon}
+                                                {/* Pulse ring for active */}
+                                                {isActive && (
+                                                  <div
+                                                    style={{
+                                                      position: 'absolute',
+                                                      width: '100%',
+                                                      height: '100%',
+                                                      borderRadius: '10px',
+                                                      border: '2px solid #FF7A30',
+                                                      animation: 'wf-ring-pulse 1.5s infinite',
+                                                    }}
+                                                  />
                                                 )}
                                               </div>
+
+                                              {/* Content */}
+                                              <div>
+                                                <span
+                                                  style={{
+                                                    display: 'block',
+                                                    fontSize: '13px',
+                                                    fontWeight: 700,
+                                                    color: isError ? '#DC2626' : '#0F172A',
+                                                    whiteSpace: 'nowrap',
+                                                  }}
+                                                >
+                                                  {step.label}
+                                                </span>
+                                                <span
+                                                  style={{
+                                                    display: 'block',
+                                                    fontSize: '11px',
+                                                    fontFamily: "'JetBrains Mono', monospace",
+                                                    color: isError ? '#DC2626' : '#FF7A30',
+                                                    fontWeight: 800,
+                                                    opacity: isActive || isCompleted || isError ? 1 : 0,
+                                                    transition: 'opacity 0.3s',
+                                                  }}
+                                                >
+                                                  {statePercent(step.state)}
+                                                </span>
+                                              </div>
                                             </div>
-                                            <div>
-                                              <p className="truncate text-[10px] font-bold leading-none tracking-tight sm:text-[11px]">
-                                                {step.label}
-                                              </p>
-                                              <p className="mt-1 text-[9px] font-medium opacity-70 sm:text-[10px]">
-                                                {workflowStatusLabel[step.state]}
-                                              </p>
-                                            </div>
+
+                                            {/* Glow Layer */}
+                                            {isCompleted && (
+                                              <div
+                                                style={{
+                                                  position: 'absolute',
+                                                  inset: 0,
+                                                  borderRadius: '20px',
+                                                  background: 'radial-gradient(circle at center, #FF7A30 0%, transparent 70%)',
+                                                  opacity: 0.08,
+                                                  zIndex: 1,
+                                                }}
+                                              />
+                                            )}
                                           </div>
-                                          {idx < workflowSteps.length - 1 && (
-                                            <div className="flex shrink-0 items-center justify-center px-0.5 opacity-20">
-                                              <ChevronRight className="h-4 w-4" />
-                                            </div>
-                                          )}
-                                        </React.Fragment>
-                                      ))}
+                                        );
+                                      })}
                                     </div>
                                   </div>
                                 );
@@ -2957,62 +3656,11 @@ export default function TestAgentEnhancedPage() {
                                 if (!showTemplateCards) return null;
 
                                 return (
-                                  <div className="rounded-2xl border border-zinc-200 bg-white p-3.5 sm:p-4 dark:border-zinc-800 dark:bg-zinc-950">
-                                    <div className="mb-3 flex items-start justify-between gap-3">
-                                      <div className="min-w-0">
-                                        <div className="flex items-center gap-2 text-zinc-900 dark:text-zinc-100">
-                                          <Sparkles className="h-4 w-4 text-zinc-500 dark:text-zinc-300" />
-                                          <p className="text-sm font-semibold tracking-tight">Choose A Template</p>
-                                        </div>
-                                        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Select one template to begin your draft.</p>
-                                      </div>
-                                      <span className="shrink-0 rounded-full border border-zinc-300 bg-zinc-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
-                                        {templates.length} options
-                                      </span>
-                                    </div>
-                                    <div className="-mx-1 overflow-x-auto pb-1">
-                                      <div className="flex min-w-max gap-2.5 px-1">
-                                        {templates.map((template) => (
-                                          <button
-                                            key={template.template_id}
-                                            type="button"
-                                            onClick={() => handleTemplateCardSelect(template)}
-                                            className="group w-[220px] shrink-0 rounded-xl border border-primary/20 bg-primary/5 p-3 text-left transition-all hover:-translate-y-1 hover:border-primary hover:bg-white dark:bg-primary/10 dark:hover:bg-zinc-900/80"
-                                          >
-                                            <div className="flex h-full flex-col text-zinc-900 dark:text-zinc-100">
-                                              <div className="flex items-start justify-between gap-2">
-                                                <p className="line-clamp-1 text-sm font-bold leading-tight text-primary dark:text-primary-foreground">{template.name}</p>
-                                                <span className="shrink-0 rounded-full border border-primary/30 bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary dark:bg-primary/20 dark:text-white">
-                                                  {template.badge || 'Template'}
-                                                </span>
-                                              </div>
-                                              <p className="mt-1 line-clamp-2 min-h-[32px] text-xs text-zinc-600 dark:text-zinc-300">
-                                                {template.description || 'Click to use this template in document generation.'}
-                                              </p>
-                                              <div className="mt-2 flex items-center gap-1.5">
-                                                <span className="rounded-full border border-primary/20 bg-white/50 px-2 py-0.5 text-[10px] font-semibold text-primary dark:bg-white/10 dark:text-primary-foreground">
-                                                  {template.field_count || 0} fields
-                                                </span>
-                                              </div>
-                                              <div className="mt-3 flex flex-wrap gap-1.5">
-                                                {(template.sample_field_labels || []).slice(0, 2).map((label) => (
-                                                  <span
-                                                    key={`${template.template_id}-${label}`}
-                                                    className="inline-flex max-w-[100%] items-center rounded-full border border-primary/10 bg-white/30 px-2 py-0.5 text-[9px] font-medium text-zinc-700 dark:text-zinc-300"
-                                                  >
-                                                    <span className="truncate">{label}</span>
-                                                  </span>
-                                                ))}
-                                              </div>
-                                              <div className="mt-4 flex items-center gap-1.5 text-[11px] font-bold text-primary group-hover:translate-x-1 transition-transform">
-                                                Use template <ChevronRight className="h-3 w-3" />
-                                              </div>
-                                            </div>
-                                          </button>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  </div>
+                                  <TemplateTray
+                                    templates={templates}
+                                    onSelect={handleTemplateCardSelect}
+                                    onPreview={handleTemplatePreview}
+                                  />
                                 );
                               })()}
 
@@ -3026,26 +3674,17 @@ export default function TestAgentEnhancedPage() {
                                 const capturedFields = workflow?.captured_fields || {};
                                 const hasCapturedValues = Object.values(capturedFields).some((value) => String(value || '').trim().length > 0);
                                 return (
-                                  <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 dark:bg-primary/10">
-                                    <div className="flex items-center justify-between gap-3">
-                                      <div className="min-w-0">
-                                        <p className="truncate text-sm font-bold text-primary">
-                                          {selectedTemplateCard?.name}
-                                        </p>
-                                        <p className="truncate text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                                          {selectedTemplateCard?.badge || 'Template'}
-                                        </p>
-                                      </div>
-                                      <span className="shrink-0 rounded-full border border-primary bg-primary px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white shadow-sm shadow-primary/20">
-                                        Selected
-                                      </span>
-                                    </div>
-                                    {!hasCapturedValues ? (
-                                      <p className="mt-2 text-xs text-zinc-700 dark:text-zinc-300">
-                                        Add your details in one message, or type <span className="font-bold text-primary">autofill</span> to complete it instantly.
-                                      </p>
-                                    ) : null}
-                                  </div>
+                                  <SelectedTemplateIsland
+                                    templateName={selectedTemplateCard?.name || 'Template'}
+                                    templateId={selectedTemplateCard?.template_id || ''}
+                                    badge={selectedTemplateCard?.badge}
+                                    hasCapturedValues={hasCapturedValues}
+                                    onAutofill={() => {
+                                      const orgContext: ChatContext = { type: 'org' };
+                                      setChatContext(orgContext);
+                                      handleSubmit('autofill', orgContext, { deepResearchEnabled: false });
+                                    }}
+                                  />
                                 );
                               })()}
 
@@ -3055,55 +3694,149 @@ export default function TestAgentEnhancedPage() {
                                 const previewUrl = getGeneratedDocumentPreviewUrl(generatedDoc);
                                 const downloadUrl = getGeneratedDocumentDownloadUrl(generatedDoc);
                                 if (!previewUrl && !downloadUrl) return null;
+                                const displayTitle = (generatedDoc.title || 'Generated PDF Draft').replace(/\s*-\s*Draft$/i, '');
+                                const fileName = generatedDoc.file_name || 'document.pdf';
                                 return (
-                                  <div className="rounded-xl border border-zinc-300 bg-white p-3 sm:p-4">
-                                    <div className="flex items-start gap-3">
-                                      <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-100 text-zinc-700">
-                                        <FileText className="h-4 w-4" />
-                                      </div>
-                                      <div className="min-w-0 flex-1">
-                                        <p className="text-sm font-semibold text-zinc-900">
-                                          {generatedDoc.title || 'Generated PDF draft'}
-                                        </p>
-                                        <p className="text-xs text-zinc-500">
-                                          {generatedDoc.file_name || 'sales-deed.pdf'}
-                                        </p>
-                                        <div className="mt-3 flex flex-wrap gap-2">
-                                          {previewUrl ? (
-                                            <a
-                                              href={previewUrl}
-                                              className={cn(
-                                                "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors",
-                                                "border-border bg-background",
-                                                themeColors.primary,
-                                                themeColors.iconBg,
-                                                themeColors.buttonHover
-                                              )}
-                                              onClick={(event) => {
-                                                event.preventDefault();
-                                                handlePreviewGeneratedPdf(generatedDoc);
-                                              }}
-                                            >
-                                              <Eye className="h-3.5 w-3.5" />
-                                              Preview In Sidebar
-                                            </a>
-                                          ) : null}
-                                          {downloadUrl ? (
-                                            <a
-                                              href={downloadUrl}
-                                              className={cn(
-                                                "inline-flex h-8 items-center gap-1.5 rounded-full border border-transparent px-3 text-xs font-medium text-white transition-colors",
-                                                themeColors.buttonBg
-                                              )}
-                                            >
-                                              <Download className="h-3.5 w-3.5" />
-                                              Download
-                                            </a>
-                                          ) : null}
-                                        </div>
+                                  <motion.div
+                                    initial={{ opacity: 0, y: 10 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1], delay: 0.2 }}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      background: '#FFFFFF',
+                                      border: '1px solid #E2E8F0',
+                                      borderRadius: '16px',
+                                      padding: '10px 14px',
+                                      width: '100%',
+                                      maxWidth: '720px',
+                                      height: '56px',
+                                      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.03)',
+                                      transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+                                    }}
+                                    className="hover:border-[#FFDCC9] hover:shadow-[0_12px_24px_rgba(255,122,48,0.08)] hover:-translate-y-[1px]"
+                                  >
+                                    {/* File Branding */}
+                                    <div style={{ marginRight: '16px' }}>
+                                      <div style={{
+                                        position: 'relative',
+                                        width: '36px',
+                                        height: '36px',
+                                        background: '#FFF5F0',
+                                        color: '#FF7A30',
+                                        borderRadius: '10px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                      }}>
+                                        <FileText style={{ width: '18px', height: '18px' }} />
+                                        <span style={{
+                                          position: 'absolute',
+                                          bottom: '-2px',
+                                          right: '-4px',
+                                          background: '#FF7A30',
+                                          color: 'white',
+                                          fontSize: '8px',
+                                          fontWeight: 900,
+                                          padding: '2px 4px',
+                                          borderRadius: '4px',
+                                          border: '2px solid white',
+                                        }}>PDF</span>
                                       </div>
                                     </div>
-                                  </div>
+
+                                    {/* File Details */}
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '1px' }}>
+                                        <h3 style={{
+                                          fontSize: '14px',
+                                          fontWeight: 700,
+                                          color: '#0F172A',
+                                          margin: 0,
+                                          whiteSpace: 'nowrap',
+                                        }}>{displayTitle}</h3>
+                                        <span style={{
+                                          fontSize: '10px',
+                                          fontWeight: 800,
+                                          textTransform: 'uppercase' as const,
+                                          background: '#F1F5F9',
+                                          color: '#64748B',
+                                          padding: '2px 8px',
+                                          borderRadius: '6px',
+                                          flexShrink: 0,
+                                        }}>Draft</span>
+                                      </div>
+                                      <p
+                                        title={fileName}
+                                        style={{
+                                          fontSize: '12px',
+                                          color: '#64748B',
+                                          margin: 0,
+                                          overflow: 'hidden',
+                                          textOverflow: 'ellipsis',
+                                          whiteSpace: 'nowrap',
+                                          maxWidth: '300px',
+                                        }}
+                                      >{fileName}</p>
+                                    </div>
+
+                                    {/* Action Group */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '20px' }}>
+                                      {previewUrl && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            handlePreviewGeneratedPdf(generatedDoc);
+                                          }}
+                                          style={{
+                                            background: 'transparent',
+                                            border: '1px solid #E2E8F0',
+                                            color: '#0F172A',
+                                            height: '36px',
+                                            padding: '0 14px',
+                                            borderRadius: '10px',
+                                            fontSize: '13px',
+                                            fontWeight: 600,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '6px',
+                                            cursor: 'pointer',
+                                            transition: '0.2s',
+                                          }}
+                                          className="hover:!bg-[#F8FAFC] hover:!border-[#CBD5E1]"
+                                        >
+                                          <Eye style={{ width: '15px', height: '15px' }} />
+                                          <span>Preview</span>
+                                        </button>
+                                      )}
+                                      {downloadUrl && (
+                                        <a
+                                          href={downloadUrl}
+                                          style={{
+                                            background: '#FF7A30',
+                                            border: 'none',
+                                            color: 'white',
+                                            height: '36px',
+                                            padding: '0 16px',
+                                            borderRadius: '10px',
+                                            fontSize: '13px',
+                                            fontWeight: 700,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '6px',
+                                            cursor: 'pointer',
+                                            boxShadow: '0 4px 10px rgba(255, 122, 48, 0.2)',
+                                            transition: '0.2s',
+                                            textDecoration: 'none',
+                                          }}
+                                          className="hover:-translate-y-[1px] hover:shadow-[0_6px_14px_rgba(255,122,48,0.3)] hover:brightness-105"
+                                        >
+                                          <Download style={{ width: '15px', height: '15px' }} />
+                                          <span>Download</span>
+                                        </a>
+                                      )}
+                                    </div>
+                                  </motion.div>
                                 );
                               })()}
 
@@ -3124,6 +3857,20 @@ export default function TestAgentEnhancedPage() {
                                   className="mt-2 sm:mt-3"
                                 />
                               )}
+
+                              {(() => {
+                                const chartSpec = normalizeChartSpec(message.metadata);
+                                if (chartSpec) {
+                                  return <InlineResponseChart spec={chartSpec} />;
+                                }
+                                const chartNotice = getChartNotice(message.metadata);
+                                if (!chartNotice) return null;
+                                return (
+                                  <div className="mt-2 sm:mt-3 rounded-xl border border-border/50 bg-muted/10 px-3 py-2.5 text-[11px] sm:text-xs text-muted-foreground">
+                                    {chartNotice}
+                                  </div>
+                                );
+                              })()}
 
                               {showTokenUsage && message.usage && (
                                 <div className="text-[10px] sm:text-xs text-muted-foreground">
