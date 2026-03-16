@@ -2399,16 +2399,12 @@ function processContentWithCitations(
     typeof window !== 'undefined' && window.location?.origin
       ? window.location.origin
       : 'http://localhost:9002';
-  const markdownAllowedLinkPrefixes = useMemo(
-    () =>
-      buildChatMarkdownAllowedLinkPrefixes({
-        citationLinkPrefix,
-        defaultOrigin: markdownDefaultOrigin,
-        pyserverUrl: process.env.NEXT_PUBLIC_PYSERVER_URL,
-        chatEndpoint: process.env.NEXT_PUBLIC_CHATNEW_ENDPOINT,
-      }),
-    [citationLinkPrefix, markdownDefaultOrigin]
-  );
+  const markdownAllowedLinkPrefixes = buildChatMarkdownAllowedLinkPrefixes({
+    citationLinkPrefix,
+    defaultOrigin: markdownDefaultOrigin,
+    pyserverUrl: process.env.NEXT_PUBLIC_PYSERVER_URL,
+    chatEndpoint: process.env.NEXT_PUBLIC_CHATNEW_ENDPOINT,
+  });
 
   // Helper to render text while restoring protected placeholders.
   const renderTextWithPlaceholders = (text: string, keyPrefix: string) => {
