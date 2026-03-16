@@ -387,6 +387,40 @@ function getGeneratedDocumentFormat(doc?: GeneratedDocumentMetadata | null): str
   return 'file';
 }
 
+function resolveAllowedLinkOrigin(rawUrl: string | undefined, defaultOrigin: string): string | null {
+  const trimmed = String(rawUrl || '').trim();
+  if (!trimmed) return null;
+  try {
+    return new URL(trimmed, defaultOrigin).origin;
+  } catch {
+    return null;
+  }
+}
+
+function buildChatMarkdownAllowedLinkPrefixes(params: {
+  citationLinkPrefix: string;
+  defaultOrigin: string;
+  pyserverUrl?: string;
+  chatEndpoint?: string;
+}): string[] {
+  const prefixes = new Set<string>([
+    params.citationLinkPrefix,
+    '/generated-file/',
+    '/generated-pdf/',
+    '/api/generated-file/',
+    '/api/generated-pdf/',
+  ]);
+
+  for (const candidate of [params.pyserverUrl, params.chatEndpoint]) {
+    const origin = resolveAllowedLinkOrigin(candidate, params.defaultOrigin);
+    if (!origin) continue;
+    prefixes.add(`${origin}/generated-file/`);
+    prefixes.add(`${origin}/generated-pdf/`);
+  }
+
+  return Array.from(prefixes);
+}
+
 type ChatWorkflowInvocationPayload = {
   templateId: string;
   templateVersion?: number;
@@ -2365,7 +2399,16 @@ function processContentWithCitations(
     typeof window !== 'undefined' && window.location?.origin
       ? window.location.origin
       : 'http://localhost:9002';
-  const markdownAllowedLinkPrefixes = [citationLinkPrefix];
+  const markdownAllowedLinkPrefixes = useMemo(
+    () =>
+      buildChatMarkdownAllowedLinkPrefixes({
+        citationLinkPrefix,
+        defaultOrigin: markdownDefaultOrigin,
+        pyserverUrl: process.env.NEXT_PUBLIC_PYSERVER_URL,
+        chatEndpoint: process.env.NEXT_PUBLIC_CHATNEW_ENDPOINT,
+      }),
+    [citationLinkPrefix, markdownDefaultOrigin]
+  );
 
   // Helper to render text while restoring protected placeholders.
   const renderTextWithPlaceholders = (text: string, keyPrefix: string) => {
