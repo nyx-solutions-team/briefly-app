@@ -1,0 +1,139 @@
+.pageTheme {
+  --background: 210 20% 98%;
+  --foreground: 215 28% 17%;
+  --card: 0 0% 100%;
+  --card-foreground: 215 28% 17%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 215 28% 17%;
+  --primary: 215 16% 47%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 210 16% 93%;
+  --secondary-foreground: 215 28% 17%;
+  --muted: 210 16% 92%;
+  --muted-foreground: 215 16% 46%;
+  --accent: 210 16% 92%;
+  --accent-foreground: 215 28% 17%;
+  --destructive: 0 72% 50%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 215 16% 90%;
+  --input: 215 16% 90%;
+  --ring: 215 16% 47%;
+  --sidebar-background: 0 0% 100%;
+  --sidebar-foreground: 215 28% 17%;
+  --sidebar-primary: 215 16% 47%;
+  --sidebar-primary-foreground: 0 0% 98%;
+  --sidebar-accent: 210 16% 93%;
+  --sidebar-accent-foreground: 215 28% 17%;
+  --sidebar-border: 215 16% 90%;
+  --sidebar-ring: 215 16% 47%;
+  position: relative;
+  color: hsl(var(--foreground));
+  background:
+    radial-gradient(circle at top left, hsl(var(--primary) / 0.08), transparent 26%),
+    linear-gradient(180deg, hsl(var(--background)) 0%, hsl(210 20% 97%) 100%);
+}
+
+:global(.dark) .pageTheme {
+  --background: 215 25% 4.5%;
+  --foreground: 210 40% 98%;
+  --card: 215 20% 7.5%;
+  --card-foreground: 210 40% 98%;
+  --popover: 215 20% 6.5%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 215 35% 60%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 215 18% 9.5%;
+  --secondary-foreground: 210 40% 95%;
+  --muted: 215 15% 11%;
+  --muted-foreground: 215 15% 65%;
+  --accent: 215 15% 13%;
+  --accent-foreground: 210 40% 95%;
+  --destructive: 0 75% 55%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 215 15% 16%;
+  --input: 215 18% 9.5%;
+  --ring: 215 35% 60%;
+  --sidebar-background: 215 25% 5.5%;
+  --sidebar-foreground: 210 40% 98%;
+  --sidebar-primary: 215 35% 60%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 215 18% 10.5%;
+  --sidebar-accent-foreground: 210 40% 95%;
+  --sidebar-border: 215 15% 13%;
+  --sidebar-ring: 215 35% 60%;
+  background:
+    radial-gradient(circle at top left, hsl(var(--primary) / 0.18), transparent 24%),
+    linear-gradient(180deg, hsl(var(--background)) 0%, hsl(215 24% 5.2%) 100%);
+}
+
+.pageHeader {
+  background: linear-gradient(
+    to bottom,
+    hsl(var(--background) / 0.92),
+    hsl(var(--background) / 0.8)
+  );
+  border-bottom-color: hsl(var(--border) / 0.6);
+  backdrop-filter: blur(16px);
+}
+
+.pagePanel {
+  border-color: hsl(var(--border) / 0.45);
+  background: linear-gradient(
+    to bottom right,
+    hsl(var(--card) / 0.96),
+    hsl(var(--card) / 0.88)
+  );
+  box-shadow:
+    0 1px 2px rgb(15 23 42 / 0.04),
+    0 12px 32px rgb(15 23 42 / 0.06);
+}
+
+:global(.dark) .pagePanel {
+  box-shadow:
+    0 1px 3px rgb(0 0 0 / 0.22),
+    0 14px 36px rgb(0 0 0 / 0.28);
+}
+
+.builderCanvas {
+  background-color: hsl(var(--background) / 0.68);
+  background-image: radial-gradient(circle, hsl(var(--border) / 0.9) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+:global(.dark) .builderCanvas {
+  background-color: hsl(var(--background) / 0.72);
+  background-image: radial-gradient(circle, hsl(var(--border) / 0.9) 1px, transparent 1px);
+}
+
+.settingsTabs {
+  background: hsl(var(--muted) / 0.45);
+  padding: 0.25rem;
+  border-radius: 0.9rem;
+  border: 1px solid hsl(var(--border) / 0.55);
+}
+
+.stickyPanel {
+  top: 84px;
+}
+
+:global(.dark) .pageTheme ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+:global(.dark) .pageTheme ::-webkit-scrollbar-track {
+  background: hsl(var(--muted) / 0.25);
+}
+
+:global(.dark) .pageTheme ::-webkit-scrollbar-thumb {
+  background: hsl(var(--border) / 0.75);
+  border-radius: 9999px;
+}
+ 
+.inspectorContent{display:flex;flex-direction:column;gap:1rem;} 
+.inspectorStack{display:flex;flex-direction:column;gap:.9rem;} 
+.inspectorSection{border:1px solid hsl(var(--border)/.45);background:linear-gradient(to bottom right,hsl(var(--background)/.72),hsl(var(--background)/.44));border-radius:1rem;padding:1rem;} 
+.inspectorSectionHeader{display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem;margin-bottom:.85rem;} 
+.inspectorEyebrow{font-size:.68rem;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:hsl(var(--muted-foreground));} 
+.inspectorHint{max-width:16rem;font-size:.74rem;line-height:1.45;color:hsl(var(--muted-foreground));text-align:right;} 
+@media (max-width:1279px){.inspectorHint{max-width:none;text-align:left;}} 
