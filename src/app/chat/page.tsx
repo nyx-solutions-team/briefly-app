@@ -63,6 +63,7 @@ import {
   upsertChatHistorySession,
 } from '@/lib/chat-history';
 import { useDocuments } from '@/hooks/use-documents';
+import type { StoredDocument } from '@/lib/types';
 import type { ActionCenterCanvas, ActionCenterJsonArtifact, CitationMeta, ActionCenterTab, GeneratedPdfPreview } from '@/components/action-center';
 import {
   Dialog,
@@ -451,10 +452,7 @@ function parseWorkflowRunCommand(input: string): ChatWorkflowInvocationPayload |
     }
   }
 
-  const invocationId =
-    typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function'
-      ? (crypto as any).randomUUID()
-      : `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const invocationId = createClientRuntimeId();
 
   return {
     templateId,
@@ -462,6 +460,12 @@ function parseWorkflowRunCommand(input: string): ChatWorkflowInvocationPayload |
     mode: 'run',
     invocationId,
   };
+}
+
+function createClientRuntimeId(): string {
+  return typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function'
+    ? (crypto as any).randomUUID()
+    : `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
 type WorkflowInputFieldKind =
@@ -1351,6 +1355,34 @@ function getDocFolderPath(doc?: DocLike | null): string[] {
   return Array.isArray(raw) ? raw.filter(Boolean) : [];
 }
 
+const SPREADSHEET_FILE_PICKER_DOC_TYPES = ['csv', 'excel', 'spreadsheetml'] as const;
+
+function isSpreadsheetDocument(doc?: DocLike | null): boolean {
+  const primaryName = getDocPrimaryName(doc).toLowerCase();
+  const ext = primaryName.includes('.') ? primaryName.split('.').pop() || '' : '';
+  if (ext === 'csv' || ext === 'xls' || ext === 'xlsx') return true;
+
+  const mime = String(doc?.mime_type || doc?.mimeType || '').trim().toLowerCase();
+  return mime.includes('csv') || mime.includes('spreadsheetml') || mime.includes('excel');
+}
+
+function buildSpreadsheetAnalystKickoffPrompt(attachedDocs: AttachedDocMeta[]): string {
+  const names = attachedDocs
+    .map((doc) => String(doc.filename || '').trim())
+    .filter(Boolean)
+    .slice(0, 2);
+
+  const subject = names.length <= 1
+    ? 'the attached spreadsheet'
+    : `the attached spreadsheets (${names.join(', ')})`;
+
+  return [
+    `Analyze ${subject}.`,
+    'Start by identifying the sheets or tables, the key columns and metrics, and any obvious data-quality issues.',
+    'Then suggest and perform the most useful spreadsheet-specific analysis such as pivots, comparisons, trends, joins, or reconciliations grounded in the attached file(s).',
+  ].join(' ');
+}
+
 function formatDocPathLabel(path?: string[] | null): string {
   const cleaned = Array.isArray(path) ? path.filter(Boolean) : [];
   return cleaned.length > 0 ? `/${cleaned.join('/')}` : '/Root';
@@ -2217,6 +2249,19 @@ function sanitizeAssistantContentForDisplay(message: Message): string {
   return raw.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+function containsMarkdownTable(text: string): boolean {
+  if (!text) return false;
+  const lines = text.split('\n');
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    const header = lines[index].trim();
+    const divider = lines[index + 1].trim();
+    const hasCells = header.startsWith('|') && (header.match(/\|/g) || []).length >= 2;
+    const hasDivider = /^(\|?\s*:?-+:?\s*)+\|?$/.test(divider);
+    if (hasCells && hasDivider) return true;
+  }
+  return false;
+}
+
 function deriveCanvasTitleFromMessage(message: Message, content: string): string {
   const generatedDocTitle = String(message.metadata?.generated_document?.title || '').trim();
   if (generatedDocTitle) return generatedDocTitle;
@@ -2916,6 +2961,9 @@ type ChatResultsMetadata = {
   total_count?: number;
   has_more?: boolean;
   query_type?: string | null;
+  query_yql?: string | null;
+  fetch_all?: boolean;
+  total_chunks?: number | null;
   chart_spec?: ChatChartSpec | null;
   chart_notice?: string | null;
   chartSpec?: ChatChartSpec | null;
@@ -2965,12 +3013,16 @@ type AttachedDocMeta = {
   folderPath?: string[];
 };
 
+type FileNavigatorMode = 'general' | 'spreadsheet';
+type SpecializedChatMode = 'spreadsheet_analyst';
+
 type ChatHistoryFrontendContextSnapshot = {
   version?: number;
   surface?: 'chatnew' | 'chat_workbench';
   chatContext?: ChatContext;
   pinnedDocIds?: string[];
   pinnedDocMetaById?: Record<string, AttachedDocMeta>;
+  specializedMode?: SpecializedChatMode | null;
   webSearchEnabled?: boolean;
   deepResearchEnabled?: boolean;
 };
@@ -2981,6 +3033,8 @@ type DocLike = {
   title?: string | null;
   folderPath?: string[] | null;
   folder_path?: string[] | null;
+  mime_type?: string | null;
+  mimeType?: string | null;
 };
 
 interface Message {
@@ -3005,6 +3059,112 @@ interface Message {
   streamLastEventTs?: number;
   attachedDocIds?: string[];
   attachedDocs?: AttachedDocMeta[];
+}
+
+const LIST_MODE_INTENT_PATTERNS = [
+  /\bshow me all\b/,
+  /\bshow all\b/,
+  /\blist all\b/,
+  /\bfind all\b/,
+  /\bgive me all\b/,
+  /\bget all\b/,
+  /\bretrieve all\b/,
+  /\bfetch all\b/,
+  /\b(?:what|which)\s+(?:documents?|files?|records?|leases?|agreements?|contracts?|invoices?|receipts?|deeds?|amendments?|drafts?|reports?)\b.*\bdo we have\b/,
+  /\bshow me\b.*\b(?:documents?|files?|records?|leases?|agreements?|contracts?|invoices?|receipts?|deeds?|amendments?|drafts?|reports?)\b/,
+  /\bshow\b.*\b(?:documents?|files?|records?|leases?|agreements?|contracts?|invoices?|receipts?|deeds?|amendments?|drafts?|reports?)\b/,
+  /\blist\b.*\b(?:documents?|files?|records?|leases?|agreements?|contracts?|invoices?|receipts?|deeds?|amendments?|drafts?|reports?)\b/,
+  /\bfind\b.*\b(?:documents?|files?|records?|leases?|agreements?|contracts?|invoices?|receipts?|deeds?|amendments?|drafts?|reports?)\b/,
+];
+
+const NON_LIST_MODE_PATTERNS = [
+  /\bcompare\b/,
+  /\bcomparison\b/,
+  /\bversus\b/,
+  /\bvs\.?\b/,
+  /\bdifference(?:s)?\b/,
+  /\bside[- ]by[- ]side\b/,
+  /\bwhat changed\b/,
+  /\bchanges? between\b/,
+  /\bchanged between\b/,
+  /\bdraft\b.*\bfinal\b/,
+  /\bfinal\b.*\bdraft\b/,
+];
+
+function normalizeQuestionIntent(text: string | null | undefined): string {
+  return String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function hasExplicitListModeIntent(question: string | null | undefined): boolean {
+  const normalized = normalizeQuestionIntent(question);
+  if (!normalized) return false;
+  return LIST_MODE_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function prefersNarrativeTable(question: string | null | undefined): boolean {
+  const normalized = normalizeQuestionIntent(question);
+  if (!normalized) return false;
+  return NON_LIST_MODE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function shouldUseStructuredListMode(options: {
+  question?: string | null;
+  metadata?: ChatResultsMetadata | null;
+  finalContent?: string | null;
+  streamedContent?: string | null;
+}): boolean {
+  const metadata = options.metadata;
+  if (!metadata?.list_mode || !Array.isArray(metadata.results_data) || metadata.results_data.length === 0) {
+    return false;
+  }
+
+  if (prefersNarrativeTable(options.question)) {
+    return false;
+  }
+
+  if (hasExplicitListModeIntent(options.question)) {
+    return true;
+  }
+
+  const hasMarkdownTableOutput =
+    containsMarkdownTable(String(options.finalContent || '')) ||
+    containsMarkdownTable(String(options.streamedContent || ''));
+  if (hasMarkdownTableOutput) {
+    return false;
+  }
+
+  return false;
+}
+
+function sanitizeListModeMetadata(
+  metadata: ChatResultsMetadata | null | undefined,
+  keepListMode: boolean
+): ChatResultsMetadata | null {
+  if (!metadata || typeof metadata !== 'object') return metadata ?? null;
+  if (keepListMode) return metadata;
+
+  const next = { ...(metadata as Record<string, any>) };
+  next.list_mode = false;
+  delete next.results_data;
+  delete next.columns;
+  delete next.total_count;
+  delete next.has_more;
+  delete next.query_type;
+  delete next.query_yql;
+  delete next.fetch_all;
+  delete next.doc_type;
+  delete next.total_chunks;
+  return next as ChatResultsMetadata;
+}
+
+function getLinkedUserQuestionForAssistantMessage(messages: Message[], assistantIndex: number): string {
+  for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+    const candidate = messages[index];
+    if (candidate?.role !== 'user') continue;
+    const content = String(candidate.content || '').trim();
+    if (content) return content;
+  }
+  return '';
 }
 
 const buildInitialMessages = (): Message[] => [];
@@ -3050,7 +3210,8 @@ export default function TestAgentEnhancedPage() {
   const [chatContext, setChatContext] = useState<ChatContext>({ type: 'org' });
   const [pinnedDocIds, setPinnedDocIds] = useState<string[]>([]);
   const [pinnedDocMetaById, setPinnedDocMetaById] = useState<Record<string, AttachedDocMeta>>({});
-  const [fileNavigatorOpen, setFileNavigatorOpen] = useState(false);
+  const [activeSpecializedMode, setActiveSpecializedMode] = useState<SpecializedChatMode | null>(null);
+  const [fileNavigatorMode, setFileNavigatorMode] = useState<FileNavigatorMode | null>(null);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [deepResearchEnabled, setDeepResearchEnabled] = useState(false);
   const [isWebSearchDialogOpen, setIsWebSearchDialogOpen] = useState(false);
@@ -3101,9 +3262,19 @@ export default function TestAgentEnhancedPage() {
   const [isLoadingOlderChatHistory, setIsLoadingOlderChatHistory] = useState(false);
   const messagesRef = useRef<Message[]>([]);
   const activeStreamAbortControllerRef = useRef<AbortController | null>(null);
+  const agentSessionIdRef = useRef<string | null>(null);
   const chatHistoryHydratedKeyRef = useRef<string | null>(null);
   const [isHydratingChatHistory, setIsHydratingChatHistory] = useState(false);
   const [hydratedChatSessionTitle, setHydratedChatSessionTitle] = useState<string | null>(null);
+  const resetAgentSessionId = useCallback(() => {
+    const nextAgentSessionId = createClientRuntimeId();
+    agentSessionIdRef.current = nextAgentSessionId;
+    return nextAgentSessionId;
+  }, []);
+  const ensureAgentSessionId = useCallback(() => {
+    if (agentSessionIdRef.current) return agentSessionIdRef.current;
+    return resetAgentSessionId();
+  }, [resetAgentSessionId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -3125,12 +3296,28 @@ export default function TestAgentEnhancedPage() {
   }, []);
 
   useEffect(() => {
+    ensureAgentSessionId();
+  }, [ensureAgentSessionId]);
+
+  useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
 
   const lastListMessageId = useMemo(() => {
-    const listMessages = messages.filter(m => m.metadata?.list_mode && Array.isArray(m.metadata?.results_data));
-    return listMessages.length ? listMessages[listMessages.length - 1].id : null;
+    let lastId: string | null = null;
+    messages.forEach((message, index) => {
+      if (message.role !== 'assistant') return;
+      const linkedUserQuestion = getLinkedUserQuestionForAssistantMessage(messages, index);
+      const shouldRenderListMode = shouldUseStructuredListMode({
+        question: linkedUserQuestion,
+        metadata: message.metadata,
+        finalContent: message.content,
+      });
+      if (shouldRenderListMode) {
+        lastId = message.id;
+      }
+    });
+    return lastId;
   }, [messages]);
 
   const selectedWorkflowTemplate = useMemo(() => {
@@ -3171,6 +3358,7 @@ export default function TestAgentEnhancedPage() {
   const fetchAllResultsForMessage = useCallback(async (messageId: string) => {
     const { orgId } = getApiContext();
     if (!sessionId) return;
+    const runtimeSessionId = agentSessionIdRef.current || sessionId;
 
     setLoadingMoreByMessageId(prev => ({ ...prev, [messageId]: true }));
     try {
@@ -3182,6 +3370,7 @@ export default function TestAgentEnhancedPage() {
             method: 'POST',
             body: {
               session_id: sessionId,
+              agent_session_id: runtimeSessionId,
               fetch_all: true
             }
           });
@@ -3614,6 +3803,7 @@ export default function TestAgentEnhancedPage() {
       setInputValue('');
       setPinnedDocIds([]);
       setPinnedDocMetaById({});
+      setActiveSpecializedMode(null);
       setPreviewDocId(null);
       setGeneratedPdfPreview(null);
       setIsActionCenterOpen(false);
@@ -3655,6 +3845,7 @@ export default function TestAgentEnhancedPage() {
         if (snapshot?.pinnedDocMetaById && typeof snapshot.pinnedDocMetaById === 'object') {
           setPinnedDocMetaById(snapshot.pinnedDocMetaById);
         }
+        setActiveSpecializedMode(snapshot?.specializedMode === 'spreadsheet_analyst' ? 'spreadsheet_analyst' : null);
         if (typeof snapshot?.webSearchEnabled === 'boolean') {
           setWebSearchEnabled(snapshot.webSearchEnabled);
         }
@@ -4196,6 +4387,7 @@ export default function TestAgentEnhancedPage() {
       openSidebar(currentColumns, currentRows, metadata.total_count ?? null, metadata.doc_type ?? null);
       return;
     }
+    const runtimeSessionId = agentSessionIdRef.current || sessionId;
 
     setLoadingMoreByMessageId(prev => ({ ...prev, [messageId]: true }));
     try {
@@ -4206,6 +4398,7 @@ export default function TestAgentEnhancedPage() {
             method: 'POST',
             body: {
               session_id: sessionId,
+              agent_session_id: runtimeSessionId,
               fetch_all: true
             }
           });
@@ -4287,7 +4480,8 @@ export default function TestAgentEnhancedPage() {
     setInputValue('');
     setPinnedDocIds([]);
     setPinnedDocMetaById({});
-    setFileNavigatorOpen(false);
+    setActiveSpecializedMode(null);
+    setFileNavigatorMode(null);
     setPreviewDocId(null);
     setPreviewDocPage(null);
     setPreviewCitation(null);
@@ -4312,12 +4506,10 @@ export default function TestAgentEnhancedPage() {
     setIsWorkflowDialogOpen(false);
     setWorkflowFormError(null);
     setWorkflowFieldPickerState({ open: false, key: null, kind: 'doc' });
-    const nextSessionId =
-      typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function'
-        ? (crypto as any).randomUUID()
-        : Math.random().toString(36).slice(2);
+    const nextSessionId = createClientRuntimeId();
     setSessionId(nextSessionId);
-  }, []);
+    resetAgentSessionId();
+  }, [resetAgentSessionId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -4344,9 +4536,10 @@ export default function TestAgentEnhancedPage() {
     }
     if (previousRequested !== requestedChatSessionId) {
       workflowDraftHydratedKeyRef.current = null;
+      resetAgentSessionId();
     }
     previousRequestedChatSessionIdRef.current = requestedChatSessionId;
-  }, [isChatNewRoute, requestedChatSessionId, resetChatSession]);
+  }, [isChatNewRoute, requestedChatSessionId, resetAgentSessionId, resetChatSession]);
 
   const handleSourcesModeChange = useCallback(
     (mode: 'global' | 'message') => {
@@ -4470,7 +4663,17 @@ export default function TestAgentEnhancedPage() {
       }
       return next;
     });
+    if (normalized.length === 0) {
+      setActiveSpecializedMode(null);
+    }
   }, []);
+
+  const buildAttachedDocMeta = useCallback((doc: StoredDocument): AttachedDocMeta => ({
+    id: String(doc.id),
+    filename: getDocPrimaryName(doc),
+    title: getDocSecondaryTitle(doc) || undefined,
+    folderPath: getDocFolderPath(doc),
+  }), []);
 
   const selectedFolderId =
     chatContext.type === 'folder'
@@ -4518,8 +4721,9 @@ export default function TestAgentEnhancedPage() {
   // Ensure a fresh sessionId per page load
   useEffect(() => {
     if (isChatNewRoute) return;
-    setSessionId(crypto.randomUUID());
-  }, [isChatNewRoute]);
+    setSessionId(createClientRuntimeId());
+    resetAgentSessionId();
+  }, [isChatNewRoute, resetAgentSessionId]);
 
   const handleSubmit = async (
     input: string,
@@ -4528,6 +4732,8 @@ export default function TestAgentEnhancedPage() {
       deepResearchEnabled?: boolean;
       skipUserMessage?: boolean;
       workflowInvocation?: ChatWorkflowInvocationPayload | null;
+      attachedDocsOverride?: AttachedDocMeta[] | null;
+      specializedMode?: SpecializedChatMode | null;
     }
   ) => {
     if (!input.trim() || isLoading) return;
@@ -4559,7 +4765,23 @@ export default function TestAgentEnhancedPage() {
       typeof overrideOptions?.deepResearchEnabled === 'boolean'
         ? overrideOptions.deepResearchEnabled
         : deepResearchEnabled;
-    const normalizedPinnedDocIds = (pinnedDocIds || []).filter(Boolean).slice(0, 2);
+    const specializedMode = typeof overrideOptions?.specializedMode === 'string'
+      ? overrideOptions.specializedMode
+      : activeSpecializedMode;
+    const attachedDocsOverride = Array.isArray(overrideOptions?.attachedDocsOverride)
+      ? overrideOptions.attachedDocsOverride
+          .filter((doc): doc is AttachedDocMeta => Boolean(doc?.id))
+          .slice(0, 2)
+          .map((doc) => ({
+            id: String(doc.id),
+            filename: String(doc.filename || `Document ${String(doc.id).slice(0, 8)}`),
+            title: doc.title,
+            folderPath: Array.isArray(doc.folderPath) ? doc.folderPath.filter(Boolean) : [],
+          }))
+      : [];
+    const normalizedPinnedDocIds = attachedDocsOverride.length > 0
+      ? attachedDocsOverride.map((doc) => doc.id).filter(Boolean).slice(0, 2)
+      : (pinnedDocIds || []).filter(Boolean).slice(0, 2);
     const scopeType =
       normalizedPinnedDocIds.length > 0
         ? 'org'
@@ -4637,17 +4859,19 @@ export default function TestAgentEnhancedPage() {
       if (parsedWorkflowInvocationCommand && !useChatGatewayForTurn) {
         throw new Error('Workflow runs from chat require chat gateway mode. Enable NEXT_PUBLIC_CHATNEW_USE_GATEWAY=true and try again.');
       }
-      const attachedDocsSnapshot: AttachedDocMeta[] = normalizedPinnedDocIds
-        .map((docId) => {
-          const meta = resolveAttachedDocMeta(docId);
-          return {
-            id: docId,
-            filename: meta?.filename || `Document ${docId.slice(0, 8)}`,
-            title: meta?.title,
-            folderPath: meta?.folderPath || [],
-          };
-        })
-        .filter((item) => Boolean(item.id));
+      const attachedDocsSnapshot: AttachedDocMeta[] = attachedDocsOverride.length > 0
+        ? attachedDocsOverride
+        : normalizedPinnedDocIds
+            .map((docId) => {
+              const meta = resolveAttachedDocMeta(docId);
+              return {
+                id: docId,
+                filename: meta?.filename || `Document ${docId.slice(0, 8)}`,
+                title: meta?.title,
+                folderPath: meta?.folderPath || [],
+              };
+            })
+            .filter((item) => Boolean(item.id));
       let userMessageForPersistence: Message | null = null;
 
       if (!overrideOptions?.skipUserMessage) {
@@ -4662,7 +4886,10 @@ export default function TestAgentEnhancedPage() {
         userMessageForPersistence = userMessage;
         setMessages(prev => [...prev, userMessage]);
       }
-      handlePinnedDocIdsChange([]); // Clear from input box — docs now live in the sent message
+      const shouldRetainPinnedDocsAfterSend = specializedMode === 'spreadsheet_analyst';
+      if (!shouldRetainPinnedDocsAfterSend) {
+        handlePinnedDocIdsChange([]); // Clear from input box — docs now live in the sent message
+      }
       setIsLoading(true);
 
       // Add assistant message placeholder
@@ -4739,7 +4966,8 @@ export default function TestAgentEnhancedPage() {
         };
 
         // Ensure a stable session id for this page session
-        const ensuredSessionId = sessionId || (typeof crypto !== 'undefined' && (crypto as any).randomUUID ? (crypto as any).randomUUID() : Math.random().toString(36).slice(2));
+        const ensuredSessionId = sessionId || createClientRuntimeId();
+        const ensuredAgentSessionId = ensureAgentSessionId();
         chatHistorySessionIdForTurn = ensuredSessionId;
         if (!sessionId) setSessionId(ensuredSessionId);
 
@@ -4748,11 +4976,11 @@ export default function TestAgentEnhancedPage() {
           surface: 'chatnew',
           chatContext: effectiveContext,
           pinnedDocIds: normalizedPinnedDocIds,
-          pinnedDocMetaById: normalizedPinnedDocIds.reduce<Record<string, AttachedDocMeta>>((acc, docId) => {
-            const meta = resolveAttachedDocMeta(docId);
-            if (meta) acc[docId] = meta;
+          pinnedDocMetaById: attachedDocsSnapshot.reduce<Record<string, AttachedDocMeta>>((acc, docMeta) => {
+            if (docMeta?.id) acc[docMeta.id] = docMeta;
             return acc;
           }, {}),
+          specializedMode,
           webSearchEnabled,
           deepResearchEnabled: effectiveDeepResearchEnabled,
         } : null;
@@ -4818,6 +5046,7 @@ export default function TestAgentEnhancedPage() {
 
         await ssePost(endpoint, {
           session_id: ensuredSessionId,
+          agent_session_id: ensuredAgentSessionId,
           question: input,
           conversation: messages.map(m => {
             const rawCitations = Array.isArray((m as any).citations) ? (m as any).citations : [];
@@ -4832,7 +5061,8 @@ export default function TestAgentEnhancedPage() {
             lastListDocIds: lastListDocIds,
             focusDocIds: [],
             lastCitedDocIds: [],
-            sessionId: ensuredSessionId
+            sessionId: ensuredSessionId,
+            agentSessionId: ensuredAgentSessionId,
           },
           context: contextPayload,
           filters: {},
@@ -4844,6 +5074,7 @@ export default function TestAgentEnhancedPage() {
             strictCitations: true,
             maxMinutes: 4,
           },
+          ...(specializedMode ? { specializedMode } : {}),
           ...(workflowInvocationForTurn ? { workflowInvocation: workflowInvocationForTurn } : {}),
           ...(chatGatewayManagedPersistenceForTurn ? {
             history_persistence: {
@@ -5245,24 +5476,31 @@ export default function TestAgentEnhancedPage() {
               } else if (data.type === 'complete') {
                 if (hasCompleted) return;
                 hasCompleted = true;
-                const meta = data.metadata && typeof data.metadata === 'object' ? data.metadata as ChatResultsMetadata : null;
+                const rawMeta = data.metadata && typeof data.metadata === 'object' ? data.metadata as ChatResultsMetadata : null;
                 // Safety: template listing responses must never carry a stale generated_document
                 if (
-                  meta?.document_workflow &&
-                  (meta.document_workflow as any)?.status === 'ok' &&
-                  Array.isArray((meta.document_workflow as any)?.templates)
+                  rawMeta?.document_workflow &&
+                  (rawMeta.document_workflow as any)?.status === 'ok' &&
+                  Array.isArray((rawMeta.document_workflow as any)?.templates)
                 ) {
-                  (meta as any).generated_document = null;
+                  (rawMeta as any).generated_document = null;
                 }
-                const listMode = Boolean(meta?.list_mode);
                 // Prefer server-provided final content because it may include post-processing
                 // such as citation marker repair/injection that is not present in streamed chunks.
-                let finalContent = (
+                const rawFinalContent = (
                   typeof data.full_content === 'string' && data.full_content.trim().length > 0
                     ? data.full_content
                     : streamingContent
                 );
-                if (listMode) {
+                const shouldKeepListMode = shouldUseStructuredListMode({
+                  question: input,
+                  metadata: rawMeta,
+                  finalContent: rawFinalContent,
+                  streamedContent: streamingContent,
+                });
+                const meta = sanitizeListModeMetadata(rawMeta, shouldKeepListMode);
+                let finalContent = rawFinalContent;
+                if (shouldKeepListMode) {
                   finalContent = stripMarkdownTables(finalContent);
                 }
                 const citations = dedupeCitations(
@@ -5543,6 +5781,37 @@ export default function TestAgentEnhancedPage() {
       setInputValue('');
     }
   };
+
+  const startSpreadsheetAnalystFlow = useCallback((docs: StoredDocument[]) => {
+    const attachedDocs = (docs || [])
+      .filter((doc) => Boolean(doc?.id) && isSpreadsheetDocument(doc))
+      .slice(0, 2)
+      .map((doc) => buildAttachedDocMeta(doc));
+
+    if (attachedDocs.length === 0) return;
+
+    const orgContext: ChatContext = { type: 'org' };
+    setChatContext(orgContext);
+    setDeepResearchEnabled(false);
+    setPinnedDocMetaById((prev) => {
+      const next = { ...prev };
+      for (const doc of attachedDocs) {
+        next[doc.id] = doc;
+      }
+      return next;
+    });
+    handlePinnedDocIdsChange(attachedDocs.map((doc) => doc.id));
+    setActiveSpecializedMode('spreadsheet_analyst');
+    void handleSubmit(
+      buildSpreadsheetAnalystKickoffPrompt(attachedDocs),
+      orgContext,
+      {
+        deepResearchEnabled: false,
+        attachedDocsOverride: attachedDocs,
+        specializedMode: 'spreadsheet_analyst',
+      }
+    );
+  }, [buildAttachedDocMeta, handlePinnedDocIdsChange, handleSubmit]);
 
   const submitWorkflowInvocationFromDialog = useCallback(() => {
     if (!chatWorkflowInputCardEnabled) return;
@@ -6523,23 +6792,34 @@ export default function TestAgentEnhancedPage() {
                                 );
                               })()}
 
-                              {message.metadata?.list_mode && Array.isArray(message.metadata?.results_data) && message.metadata.results_data.length > 0 && (
-                                <DocumentResultsTable
-                                  columns={message.metadata?.columns || []}
-                                  rows={message.metadata?.results_data || []}
-                                  totalCount={message.metadata?.total_count ?? null}
-                                  hasMore={Boolean(message.metadata?.has_more) && message.id === lastListMessageId}
-                                  isLoadingMore={Boolean(loadingMoreByMessageId[message.id])}
-                                  previewLimit={10}
-                                  onViewAllInSidebar={() => handleViewAllInSidebar(message.id)}
-                                  onViewMore={
-                                    message.id === lastListMessageId
-                                      ? () => fetchAllResultsForMessage(message.id)
-                                      : undefined
-                                  }
-                                  className="mt-2 sm:mt-3"
-                                />
-                              )}
+                              {(() => {
+                                const linkedUserQuestion = getLinkedUserQuestionForAssistantMessage(messages, idx);
+                                const shouldRenderListMode = shouldUseStructuredListMode({
+                                  question: linkedUserQuestion,
+                                  metadata: message.metadata,
+                                  finalContent: message.content,
+                                });
+                                if (!shouldRenderListMode || !Array.isArray(message.metadata?.results_data) || message.metadata.results_data.length === 0) {
+                                  return null;
+                                }
+                                return (
+                                  <DocumentResultsTable
+                                    columns={message.metadata?.columns || []}
+                                    rows={message.metadata?.results_data || []}
+                                    totalCount={message.metadata?.total_count ?? null}
+                                    hasMore={Boolean(message.metadata?.has_more) && message.id === lastListMessageId}
+                                    isLoadingMore={Boolean(loadingMoreByMessageId[message.id])}
+                                    previewLimit={10}
+                                    onViewAllInSidebar={() => handleViewAllInSidebar(message.id)}
+                                    onViewMore={
+                                      message.id === lastListMessageId
+                                        ? () => fetchAllResultsForMessage(message.id)
+                                        : undefined
+                                    }
+                                    className="mt-2 sm:mt-3"
+                                  />
+                                );
+                              })()}
 
                               {(() => {
                                 const chartSpec = normalizeChartSpec(message.metadata);
@@ -6645,7 +6925,8 @@ export default function TestAgentEnhancedPage() {
                       defaultDocumentName={chatContext.type === 'document' ? chatContext.name || null : null}
                       pinnedDocIds={pinnedDocIds}
                       onPinnedDocIdsChange={handlePinnedDocIdsChange}
-                      onRequestFilePicker={() => setFileNavigatorOpen(true)}
+                      onRequestFilePicker={() => setFileNavigatorMode('general')}
+                      onRequestAnalyzeSpreadsheet={() => setFileNavigatorMode('spreadsheet')}
                       onRequestCreateDraftDocument={startCreateDocumentFlow}
                       runWorkflowEnabled={chatWorkflowInputCardEnabled && isChatNewRoute}
                       onRequestRunWorkflow={openWorkflowDialog}
@@ -6754,7 +7035,8 @@ export default function TestAgentEnhancedPage() {
                       defaultDocumentName={chatContext.type === 'document' ? chatContext.name || null : null}
                       pinnedDocIds={pinnedDocIds}
                       onPinnedDocIdsChange={handlePinnedDocIdsChange}
-                      onRequestFilePicker={() => setFileNavigatorOpen(true)}
+                      onRequestFilePicker={() => setFileNavigatorMode('general')}
+                      onRequestAnalyzeSpreadsheet={() => setFileNavigatorMode('spreadsheet')}
                       onRequestCreateDraftDocument={startCreateDocumentFlow}
                       runWorkflowEnabled={chatWorkflowInputCardEnabled && isChatNewRoute}
                       onRequestRunWorkflow={openWorkflowDialog}
@@ -7071,26 +7353,31 @@ export default function TestAgentEnhancedPage() {
           </DialogContent>
         </Dialog>
 
-        {fileNavigatorOpen ? (
+        {fileNavigatorMode ? (
           <FinderPicker
             open
-            onOpenChange={setFileNavigatorOpen}
+            onOpenChange={(open) => {
+              if (!open) setFileNavigatorMode(null);
+            }}
             mode="doc"
             maxDocs={2}
-            initialSelectedDocIds={pinnedDocIds}
+            docTypeFilter={fileNavigatorMode === 'spreadsheet' ? [...SPREADSHEET_FILE_PICKER_DOC_TYPES] : undefined}
+            initialSelectedDocIds={fileNavigatorMode === 'spreadsheet' ? [] : pinnedDocIds}
             onConfirm={({ docs }) => {
+              const activeFileNavigatorMode = fileNavigatorMode;
+              setFileNavigatorMode(null);
               const selectedDocs = (docs || []).filter((d) => Boolean(d?.id)).slice(0, 2);
+              if (activeFileNavigatorMode === 'spreadsheet') {
+                startSpreadsheetAnalystFlow(selectedDocs);
+                return;
+              }
               const ids = selectedDocs.map((d) => String(d.id));
+              setActiveSpecializedMode(null);
               setPinnedDocMetaById((prev) => {
                 const next = { ...prev };
                 for (const doc of selectedDocs) {
-                  const docId = String(doc.id);
-                  next[docId] = {
-                    id: docId,
-                    filename: getDocPrimaryName(doc),
-                    title: getDocSecondaryTitle(doc) || undefined,
-                    folderPath: getDocFolderPath(doc),
-                  };
+                  const attachedMeta = buildAttachedDocMeta(doc);
+                  next[attachedMeta.id] = attachedMeta;
                 }
                 return next;
               });

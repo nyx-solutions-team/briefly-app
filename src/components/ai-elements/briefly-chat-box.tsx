@@ -3,6 +3,7 @@ import {
   Check,
   ChevronDown,
   FileText,
+  FileSpreadsheet,
   FilePlus2,
   Workflow,
   Folder,
@@ -62,6 +63,7 @@ export type BrieflyChatBoxProps = {
   pinnedDocIds?: string[];
   onPinnedDocIdsChange?: (ids: string[]) => void;
   onRequestFilePicker?: () => void;
+  onRequestAnalyzeSpreadsheet?: () => void;
   onRequestCreateDraftDocument?: () => void;
   onRequestRunWorkflow?: () => void;
   runWorkflowEnabled?: boolean;
@@ -81,6 +83,9 @@ export type BrieflyChatBoxProps = {
   sending?: boolean; // external loading control
   className?: string;
 };
+
+const SHOW_ANALYZE_SPREADSHEET_ACTION =
+  String(process.env.NEXT_PUBLIC_CHAT_ANALYZE_SPREADSHEET_ACTION_VISIBLE || 'false').toLowerCase() === 'true';
 
 // -------------------- Combobox --------------------
 function Combobox<T extends { id: string; name: string; path?: string[] }>({
@@ -306,6 +311,7 @@ export function BrieflyChatBox({
   pinnedDocIds = [],
   onPinnedDocIdsChange,
   onRequestFilePicker,
+  onRequestAnalyzeSpreadsheet,
   onRequestCreateDraftDocument,
   onRequestRunWorkflow,
   runWorkflowEnabled = false,
@@ -399,6 +405,11 @@ export function BrieflyChatBox({
   const triggerFilePicker = () => {
     onRequestFilePicker?.();
     // Keep focus for continued typing
+    setTimeout(() => areaRef.current?.focus(), 0);
+  };
+
+  const triggerAnalyzeSpreadsheet = () => {
+    onRequestAnalyzeSpreadsheet?.();
     setTimeout(() => areaRef.current?.focus(), 0);
   };
 
@@ -644,6 +655,18 @@ export function BrieflyChatBox({
                 <FileText className="h-4 w-4" />
                 <span>Ask About Files</span>
               </DropdownMenuItem>
+              {SHOW_ANALYZE_SPREADSHEET_ACTION ? (
+                <DropdownMenuItem
+                  disabled={!onRequestAnalyzeSpreadsheet}
+                  onSelect={() => {
+                    setActionsMenuOpen(false);
+                    window.setTimeout(() => triggerAnalyzeSpreadsheet(), 0);
+                  }}
+                >
+                  <FileSpreadsheet className="h-4 w-4" />
+                  <span>Analyze Spreadsheet</span>
+                </DropdownMenuItem>
+              ) : null}
               <DropdownMenuItem
                 disabled={!onRequestCreateDraftDocument}
                 onSelect={() => {
