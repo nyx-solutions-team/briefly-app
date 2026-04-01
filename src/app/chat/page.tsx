@@ -2249,19 +2249,6 @@ function sanitizeAssistantContentForDisplay(message: Message): string {
   return raw.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function containsMarkdownTable(text: string): boolean {
-  if (!text) return false;
-  const lines = text.split('\n');
-  for (let index = 0; index < lines.length - 1; index += 1) {
-    const header = lines[index].trim();
-    const divider = lines[index + 1].trim();
-    const hasCells = header.startsWith('|') && (header.match(/\|/g) || []).length >= 2;
-    const hasDivider = /^(\|?\s*:?-+:?\s*)+\|?$/.test(divider);
-    if (hasCells && hasDivider) return true;
-  }
-  return false;
-}
-
 function deriveCanvasTitleFromMessage(message: Message, content: string): string {
   const generatedDocTitle = String(message.metadata?.generated_document?.title || '').trim();
   if (generatedDocTitle) return generatedDocTitle;
@@ -2961,9 +2948,6 @@ type ChatResultsMetadata = {
   total_count?: number;
   has_more?: boolean;
   query_type?: string | null;
-  query_yql?: string | null;
-  fetch_all?: boolean;
-  total_chunks?: number | null;
   chart_spec?: ChatChartSpec | null;
   chart_notice?: string | null;
   chartSpec?: ChatChartSpec | null;
@@ -3059,112 +3043,6 @@ interface Message {
   streamLastEventTs?: number;
   attachedDocIds?: string[];
   attachedDocs?: AttachedDocMeta[];
-}
-
-const LIST_MODE_INTENT_PATTERNS = [
-  /\bshow me all\b/,
-  /\bshow all\b/,
-  /\blist all\b/,
-  /\bfind all\b/,
-  /\bgive me all\b/,
-  /\bget all\b/,
-  /\bretrieve all\b/,
-  /\bfetch all\b/,
-  /\b(?:what|which)\s+(?:documents?|files?|records?|leases?|agreements?|contracts?|invoices?|receipts?|deeds?|amendments?|drafts?|reports?)\b.*\bdo we have\b/,
-  /\bshow me\b.*\b(?:documents?|files?|records?|leases?|agreements?|contracts?|invoices?|receipts?|deeds?|amendments?|drafts?|reports?)\b/,
-  /\bshow\b.*\b(?:documents?|files?|records?|leases?|agreements?|contracts?|invoices?|receipts?|deeds?|amendments?|drafts?|reports?)\b/,
-  /\blist\b.*\b(?:documents?|files?|records?|leases?|agreements?|contracts?|invoices?|receipts?|deeds?|amendments?|drafts?|reports?)\b/,
-  /\bfind\b.*\b(?:documents?|files?|records?|leases?|agreements?|contracts?|invoices?|receipts?|deeds?|amendments?|drafts?|reports?)\b/,
-];
-
-const NON_LIST_MODE_PATTERNS = [
-  /\bcompare\b/,
-  /\bcomparison\b/,
-  /\bversus\b/,
-  /\bvs\.?\b/,
-  /\bdifference(?:s)?\b/,
-  /\bside[- ]by[- ]side\b/,
-  /\bwhat changed\b/,
-  /\bchanges? between\b/,
-  /\bchanged between\b/,
-  /\bdraft\b.*\bfinal\b/,
-  /\bfinal\b.*\bdraft\b/,
-];
-
-function normalizeQuestionIntent(text: string | null | undefined): string {
-  return String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
-function hasExplicitListModeIntent(question: string | null | undefined): boolean {
-  const normalized = normalizeQuestionIntent(question);
-  if (!normalized) return false;
-  return LIST_MODE_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
-}
-
-function prefersNarrativeTable(question: string | null | undefined): boolean {
-  const normalized = normalizeQuestionIntent(question);
-  if (!normalized) return false;
-  return NON_LIST_MODE_PATTERNS.some((pattern) => pattern.test(normalized));
-}
-
-function shouldUseStructuredListMode(options: {
-  question?: string | null;
-  metadata?: ChatResultsMetadata | null;
-  finalContent?: string | null;
-  streamedContent?: string | null;
-}): boolean {
-  const metadata = options.metadata;
-  if (!metadata?.list_mode || !Array.isArray(metadata.results_data) || metadata.results_data.length === 0) {
-    return false;
-  }
-
-  if (prefersNarrativeTable(options.question)) {
-    return false;
-  }
-
-  if (hasExplicitListModeIntent(options.question)) {
-    return true;
-  }
-
-  const hasMarkdownTableOutput =
-    containsMarkdownTable(String(options.finalContent || '')) ||
-    containsMarkdownTable(String(options.streamedContent || ''));
-  if (hasMarkdownTableOutput) {
-    return false;
-  }
-
-  return false;
-}
-
-function sanitizeListModeMetadata(
-  metadata: ChatResultsMetadata | null | undefined,
-  keepListMode: boolean
-): ChatResultsMetadata | null {
-  if (!metadata || typeof metadata !== 'object') return metadata ?? null;
-  if (keepListMode) return metadata;
-
-  const next = { ...(metadata as Record<string, any>) };
-  next.list_mode = false;
-  delete next.results_data;
-  delete next.columns;
-  delete next.total_count;
-  delete next.has_more;
-  delete next.query_type;
-  delete next.query_yql;
-  delete next.fetch_all;
-  delete next.doc_type;
-  delete next.total_chunks;
-  return next as ChatResultsMetadata;
-}
-
-function getLinkedUserQuestionForAssistantMessage(messages: Message[], assistantIndex: number): string {
-  for (let index = assistantIndex - 1; index >= 0; index -= 1) {
-    const candidate = messages[index];
-    if (candidate?.role !== 'user') continue;
-    const content = String(candidate.content || '').trim();
-    if (content) return content;
-  }
-  return '';
 }
 
 const buildInitialMessages = (): Message[] => [];
@@ -3304,20 +3182,8 @@ export default function TestAgentEnhancedPage() {
   }, [messages]);
 
   const lastListMessageId = useMemo(() => {
-    let lastId: string | null = null;
-    messages.forEach((message, index) => {
-      if (message.role !== 'assistant') return;
-      const linkedUserQuestion = getLinkedUserQuestionForAssistantMessage(messages, index);
-      const shouldRenderListMode = shouldUseStructuredListMode({
-        question: linkedUserQuestion,
-        metadata: message.metadata,
-        finalContent: message.content,
-      });
-      if (shouldRenderListMode) {
-        lastId = message.id;
-      }
-    });
-    return lastId;
+    const listMessages = messages.filter(m => m.metadata?.list_mode && Array.isArray(m.metadata?.results_data));
+    return listMessages.length ? listMessages[listMessages.length - 1].id : null;
   }, [messages]);
 
   const selectedWorkflowTemplate = useMemo(() => {
@@ -5476,31 +5342,24 @@ export default function TestAgentEnhancedPage() {
               } else if (data.type === 'complete') {
                 if (hasCompleted) return;
                 hasCompleted = true;
-                const rawMeta = data.metadata && typeof data.metadata === 'object' ? data.metadata as ChatResultsMetadata : null;
+                const meta = data.metadata && typeof data.metadata === 'object' ? data.metadata as ChatResultsMetadata : null;
                 // Safety: template listing responses must never carry a stale generated_document
                 if (
-                  rawMeta?.document_workflow &&
-                  (rawMeta.document_workflow as any)?.status === 'ok' &&
-                  Array.isArray((rawMeta.document_workflow as any)?.templates)
+                  meta?.document_workflow &&
+                  (meta.document_workflow as any)?.status === 'ok' &&
+                  Array.isArray((meta.document_workflow as any)?.templates)
                 ) {
-                  (rawMeta as any).generated_document = null;
+                  (meta as any).generated_document = null;
                 }
+                const listMode = Boolean(meta?.list_mode);
                 // Prefer server-provided final content because it may include post-processing
                 // such as citation marker repair/injection that is not present in streamed chunks.
-                const rawFinalContent = (
+                let finalContent = (
                   typeof data.full_content === 'string' && data.full_content.trim().length > 0
                     ? data.full_content
                     : streamingContent
                 );
-                const shouldKeepListMode = shouldUseStructuredListMode({
-                  question: input,
-                  metadata: rawMeta,
-                  finalContent: rawFinalContent,
-                  streamedContent: streamingContent,
-                });
-                const meta = sanitizeListModeMetadata(rawMeta, shouldKeepListMode);
-                let finalContent = rawFinalContent;
-                if (shouldKeepListMode) {
+                if (listMode) {
                   finalContent = stripMarkdownTables(finalContent);
                 }
                 const citations = dedupeCitations(
@@ -6792,34 +6651,23 @@ export default function TestAgentEnhancedPage() {
                                 );
                               })()}
 
-                              {(() => {
-                                const linkedUserQuestion = getLinkedUserQuestionForAssistantMessage(messages, idx);
-                                const shouldRenderListMode = shouldUseStructuredListMode({
-                                  question: linkedUserQuestion,
-                                  metadata: message.metadata,
-                                  finalContent: message.content,
-                                });
-                                if (!shouldRenderListMode || !Array.isArray(message.metadata?.results_data) || message.metadata.results_data.length === 0) {
-                                  return null;
-                                }
-                                return (
-                                  <DocumentResultsTable
-                                    columns={message.metadata?.columns || []}
-                                    rows={message.metadata?.results_data || []}
-                                    totalCount={message.metadata?.total_count ?? null}
-                                    hasMore={Boolean(message.metadata?.has_more) && message.id === lastListMessageId}
-                                    isLoadingMore={Boolean(loadingMoreByMessageId[message.id])}
-                                    previewLimit={10}
-                                    onViewAllInSidebar={() => handleViewAllInSidebar(message.id)}
-                                    onViewMore={
-                                      message.id === lastListMessageId
-                                        ? () => fetchAllResultsForMessage(message.id)
-                                        : undefined
-                                    }
-                                    className="mt-2 sm:mt-3"
-                                  />
-                                );
-                              })()}
+                              {message.metadata?.list_mode && Array.isArray(message.metadata?.results_data) && message.metadata.results_data.length > 0 && (
+                                <DocumentResultsTable
+                                  columns={message.metadata?.columns || []}
+                                  rows={message.metadata?.results_data || []}
+                                  totalCount={message.metadata?.total_count ?? null}
+                                  hasMore={Boolean(message.metadata?.has_more) && message.id === lastListMessageId}
+                                  isLoadingMore={Boolean(loadingMoreByMessageId[message.id])}
+                                  previewLimit={10}
+                                  onViewAllInSidebar={() => handleViewAllInSidebar(message.id)}
+                                  onViewMore={
+                                    message.id === lastListMessageId
+                                      ? () => fetchAllResultsForMessage(message.id)
+                                      : undefined
+                                  }
+                                  className="mt-2 sm:mt-3"
+                                />
+                              )}
 
                               {(() => {
                                 const chartSpec = normalizeChartSpec(message.metadata);

@@ -157,6 +157,40 @@ type UploadQueueItem = {
   tabularPreview?: TabularPreviewState;
 };
 
+type BulkUploadResponse = {
+  limit: number;
+  uploaded: Array<{
+    documentId: string;
+    filename: string;
+    folderPath: string[];
+  }>;
+  skipped: Array<{
+    path: string;
+    reason: string;
+  }>;
+};
+
+function getCommonImportedFolderPath(
+  uploaded: BulkUploadResponse['uploaded'] | undefined,
+  fallbackPath: string[],
+): string[] {
+  const normalized = (uploaded || [])
+    .map((item) => (Array.isArray(item?.folderPath) ? item.folderPath.map((seg) => String(seg).trim()).filter(Boolean) : []));
+  if (normalized.length === 0) return fallbackPath.slice();
+
+  let prefix = normalized[0].slice();
+  for (const path of normalized.slice(1)) {
+    let nextLength = 0;
+    while (nextLength < prefix.length && nextLength < path.length && prefix[nextLength] === path[nextLength]) {
+      nextLength += 1;
+    }
+    prefix = prefix.slice(0, nextLength);
+    if (prefix.length === 0) break;
+  }
+
+  return prefix.length > 0 ? prefix : fallbackPath.slice();
+}
+
 const BULK_UPLOAD_LIMIT = Number(process.env.NEXT_PUBLIC_BULK_UPLOAD_MAX_FILES || 200);
 const BULK_UPLOAD_MAX_FILE_MB = Number(process.env.NEXT_PUBLIC_BULK_UPLOAD_MAX_FILE_MB || 50);
 
@@ -1111,66 +1145,60 @@ function UploadContent() {
     }
     try {
       const basePath = folderPath.slice();
-      const skipList: { path: string; reason: string }[] = [];
-      const filesToQueue: { file: File; folderPathOverride?: string[] }[] = [];
-      const folderMap = new Map<string, string[]>();
-      const recordFolder = (segments: string[]) => {
-        const clean = segments.filter(Boolean);
-        if (!clean.length) return;
-        folderMap.set(clean.join('\u0000'), clean);
-      };
-      if (basePath.length) recordFolder(basePath);
-      const zip = await JSZip.loadAsync(zipFile);
-      const entries = Object.values(zip.files || {});
-      for (const entry of entries) {
-        if (entry.dir) {
-          const dirSegments = extractDirectorySegments(entry.name || '');
-          recordFolder([...basePath, ...dirSegments]);
-          continue;
-        }
-        const relativePath = entry.name || '';
-        if (shouldSkipPath(relativePath)) {
-          skipList.push({ path: relativePath, reason: 'System file skipped' });
-          continue;
-        }
-        const { folderSegments, fileName } = splitRelativePath(relativePath);
-        recordFolder([...basePath, ...folderSegments]);
-        if (!fileName) continue;
-        if (!isSupportedFile(fileName)) {
-          skipList.push({ path: relativePath, reason: 'Unsupported file type' });
-          continue;
-        }
-        const blob = await entry.async('blob');
-        const inferredType = blob.type && blob.type !== 'application/octet-stream'
-          ? blob.type
-          : guessMimeFromName(fileName);
-        const newFile = new File([blob], fileName, { type: inferredType, lastModified: zipFile.lastModified || Date.now() });
-        filesToQueue.push({ file: newFile, folderPathOverride: [...basePath, ...folderSegments] });
-      }
-      await ensureFolderStructure(Array.from(folderMap.values()));
-      const result = await enqueueFiles(filesToQueue);
-      const combinedSkips = [...skipList, ...((result && result.skipped) || [])];
+      const orgId = getApiContext().orgId || '';
+      if (!orgId) throw new Error('No organization selected');
+
+      const payload = new FormData();
+      payload.append('file', zipFile);
+      payload.append('metadata', JSON.stringify({
+        folderPath: basePath,
+        departmentId: selectedDepartmentId || null,
+        additionalDepartmentIds: effectiveAdditionalDepartmentIds,
+      }));
+
+      const result = await apiFetch<BulkUploadResponse>(`/orgs/${orgId}/uploads/bulk`, {
+        method: 'POST',
+        body: payload,
+      });
+
+      const combinedSkips = Array.isArray(result?.skipped) ? result.skipped : [];
       setSkipDetails(combinedSkips.length ? combinedSkips : null);
       if (combinedSkips.length) setShowAllSkipped(false);
-      if (result?.added) {
-        setLastBulkSummary({ count: result.added, path: basePath.slice() });
-        toast({ title: 'Files queued', description: `Added ${result.added} file(s) from archive.` });
+
+      const uploadedCount = Array.isArray(result?.uploaded) ? result.uploaded.length : 0;
+      if (uploadedCount > 0) {
+        const importedPath = getCommonImportedFolderPath(result.uploaded, basePath);
+        setLastBulkSummary({ count: uploadedCount, path: importedPath });
+        setRecentSavePath(importedPath);
+        try {
+          await loadAllDocuments();
+        } catch (error) {
+          console.warn('Failed to refresh documents after ZIP import:', error);
+        }
+        toast({
+          title: 'ZIP queued',
+          description: `Queued ${uploadedCount} file(s) from the archive for ingestion review. They will appear in folders after acceptance.`,
+        });
       } else {
         setLastBulkSummary(null);
         if (!combinedSkips.length) {
-          toast({ title: 'No files added', description: 'Archive did not contain supported files.', variant: 'destructive' });
+          toast({
+            title: 'No files imported',
+            description: 'Archive did not contain supported files.',
+            variant: 'destructive',
+          });
         }
       }
     } catch (error) {
       toast({
-        title: 'ZIP processing failed',
-        description: error instanceof Error ? error.message : 'Unable to read archive.',
+        title: 'ZIP import failed',
+        description: error instanceof Error ? error.message : 'Unable to import archive.',
         variant: 'destructive',
       });
     } finally {
       if (zipInputRef.current) zipInputRef.current.value = '';
     }
-  }, [enqueueFiles, ensureBulkPrereqs, folderPath, toast]);
+  }, [effectiveAdditionalDepartmentIds, ensureBulkPrereqs, folderPath, loadAllDocuments, selectedDepartmentId, toast]);
 
   const processFolderSelection = useCallback(async (files: FileList) => {
     if (!ensureBulkPrereqs()) {
@@ -2827,7 +2855,7 @@ function UploadContent() {
                     AI-powered metadata extraction & summary generation
                   </p>
                   <p className="text-xs text-muted-foreground/70 hidden sm:block">
-                    Supports ZIP archives and folder uploads for batch processing
+                    Supports ZIP archives and folder uploads for batch processing. ZIP imports extract supported files; the archive itself is not stored as a document.
                   </p>
                 </div>
                 <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
@@ -2888,7 +2916,7 @@ function UploadContent() {
                   </Button>
                 </div>
                 <p className="mt-6 text-xs text-muted-foreground">
-                  Supports up to {BULK_UPLOAD_LIMIT} files per bulk upload (PDF, TXT/MD, CSV/XLS/XLSX, JPG, PNG, DOCX, DWG). Individual files must be under {BULK_UPLOAD_MAX_FILE_MB}MB.
+                  Supports up to {BULK_UPLOAD_LIMIT} files per bulk upload (PDF, TXT/MD, CSV/XLS/XLSX, JPG, PNG, DOCX, DWG). Individual files must be under {BULK_UPLOAD_MAX_FILE_MB}MB. ZIP uploads import the supported files inside the archive.
                 </p>
                 {/* Upload Status Summary */}
                 {queue.length > 0 && (

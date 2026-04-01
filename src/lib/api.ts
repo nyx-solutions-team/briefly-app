@@ -430,12 +430,15 @@ async function performFetch<T = any>(
 
 export async function apiFetch<T = any>(path: string, opts: ApiOptions = {}): Promise<T> {
   const { skipCache = false, ...restOpts } = opts;
+  const isFormDataBody =
+    typeof FormData !== 'undefined' &&
+    restOpts.body instanceof FormData;
   const headers: Record<string, string> = {
     ...(restOpts.headers || {}),
   };
   // Only set JSON content type when a body is provided (avoids Fastify empty JSON body error)
   // Also remove Content-Type if no body is provided to prevent Fastify errors
-  if (restOpts.body !== undefined && !headers['Content-Type']) {
+  if (restOpts.body !== undefined && !headers['Content-Type'] && !isFormDataBody) {
     headers['Content-Type'] = 'application/json';
   } else if (restOpts.body === undefined && headers['Content-Type'] === 'application/json') {
     // Remove Content-Type header if no body is provided to avoid Fastify empty JSON body error
