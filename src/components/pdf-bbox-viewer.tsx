@@ -75,6 +75,7 @@ export function PdfBboxViewer({
     doclingPages = [],
 }: PdfBboxViewerProps) {
     const containerRef = useRef<HTMLDivElement>(null);
+    const pageDimensionsRef = useRef<{ width: number; height: number } | null>(null);
     const [numPages, setNumPages] = useState<number | null>(null);
     const [currentPage, setCurrentPage] = useState(initialPage);
     const [scale, setScale] = useState(1);
@@ -124,7 +125,7 @@ export function PdfBboxViewer({
         if (initialPage && initialPage !== currentPage) {
             setCurrentPage(initialPage);
         }
-    }, [initialPage]);
+    }, [initialPage, currentPage]);
 
     const onDocumentLoadSuccess = useCallback(({ numPages }: { numPages: number }) => {
         setNumPages(numPages);
@@ -138,8 +139,28 @@ export function PdfBboxViewer({
         setLoading(false);
     }, []);
 
-    const onPageLoadSuccess = useCallback((page: { width: number; height: number }) => {
-        setPageSize({ width: page.width, height: page.height });
+    const onPageLoadSuccess = useCallback((page: {
+        width: number;
+        height: number;
+        originalWidth?: number;
+        originalHeight?: number;
+    }) => {
+        const nextDimensions = {
+            width: page.originalWidth ?? page.width,
+            height: page.originalHeight ?? page.height,
+        };
+        const prevDimensions = pageDimensionsRef.current;
+
+        if (
+            prevDimensions &&
+            prevDimensions.width === nextDimensions.width &&
+            prevDimensions.height === nextDimensions.height
+        ) {
+            return;
+        }
+
+        pageDimensionsRef.current = nextDimensions;
+        setPageSize(nextDimensions);
     }, []);
 
     // Calculate the actual rendered size to fit within container
