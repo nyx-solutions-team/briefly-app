@@ -11,8 +11,6 @@ import {
   ArrowLeftRight,
   Send,
   Search,
-  Sparkles,
-  Settings2,
   X,
   Plus,
   Loader2,
@@ -401,6 +399,8 @@ export function BrieflyChatBox({
     for (const d of documents) m.set(d.id, d);
     return m;
   }, [documents]);
+  const visiblePinnedDocIds = useMemo(() => pinnedDocIds.slice(0, 3), [pinnedDocIds]);
+  const hiddenPinnedDocCount = Math.max(0, pinnedDocIds.length - visiblePinnedDocIds.length);
 
   const triggerFilePicker = () => {
     onRequestFilePicker?.();
@@ -512,7 +512,7 @@ export function BrieflyChatBox({
           <ModePopover mode={mode} setMode={setMode} />
           {pinnedDocIds.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
-              {pinnedDocIds.slice(0, 2).map((id) => {
+              {visiblePinnedDocIds.map((id) => {
                 const docMeta = docMetaById.get(id);
                 const name = docMeta?.name || "Untitled";
                 const subtitle = docMeta?.subtitle?.trim() || "";
@@ -552,6 +552,16 @@ export function BrieflyChatBox({
                   </div>
                 );
               })}
+              {hiddenPinnedDocCount > 0 ? (
+                <div
+                  className={cn(
+                    "flex items-center rounded-xl border border-border bg-muted/50 px-2.5 py-1.5",
+                    "text-[11px] font-medium text-muted-foreground"
+                  )}
+                >
+                  +{hiddenPinnedDocCount} more file{hiddenPinnedDocCount > 1 ? "s" : ""}
+                </div>
+              ) : null}
             </div>
           )}
 
@@ -622,17 +632,6 @@ export function BrieflyChatBox({
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant={effectiveDeepResearch ? "default" : "outline"}
-            size="sm"
-            className="h-9 rounded-xl px-3"
-            onClick={() => handleDeepResearchToggle(!effectiveDeepResearch)}
-            title="Toggle deep research mode"
-          >
-            <Sparkles className="h-3.5 w-3.5" />
-            <span className="ml-1.5 text-xs font-medium">Deep</span>
-          </Button>
           <DropdownMenu open={actionsMenuOpen} onOpenChange={setActionsMenuOpen}>
             <DropdownMenuTrigger asChild>
               <Button

@@ -2999,6 +2999,8 @@ type AttachedDocMeta = {
 
 type FileNavigatorMode = 'general' | 'spreadsheet';
 type SpecializedChatMode = 'spreadsheet_analyst';
+const MAX_PINNED_DOCS = 100;
+const MAX_SPREADSHEET_PINNED_DOCS = 2;
 
 type ChatHistoryFrontendContextSnapshot = {
   version?: number;
@@ -3705,7 +3707,7 @@ export default function TestAgentEnhancedPage() {
           setChatContext(snapshot.chatContext as ChatContext);
         }
         if (Array.isArray(snapshot?.pinnedDocIds)) {
-          const safePinned = snapshot!.pinnedDocIds!.filter((id) => typeof id === 'string' && id).slice(0, 2);
+          const safePinned = snapshot!.pinnedDocIds!.filter((id) => typeof id === 'string' && id).slice(0, MAX_PINNED_DOCS);
           setPinnedDocIds(safePinned);
         }
         if (snapshot?.pinnedDocMetaById && typeof snapshot.pinnedDocMetaById === 'object') {
@@ -4520,7 +4522,7 @@ export default function TestAgentEnhancedPage() {
   }, [allDocMetaById, pinnedDocMetaById]);
 
   const handlePinnedDocIdsChange = useCallback((ids: string[]) => {
-    const normalized = (ids || []).filter(Boolean).slice(0, 2);
+    const normalized = (ids || []).filter(Boolean).slice(0, MAX_PINNED_DOCS);
     setPinnedDocIds(normalized);
     setPinnedDocMetaById((prev) => {
       const next: Record<string, AttachedDocMeta> = {};
@@ -4637,7 +4639,7 @@ export default function TestAgentEnhancedPage() {
     const attachedDocsOverride = Array.isArray(overrideOptions?.attachedDocsOverride)
       ? overrideOptions.attachedDocsOverride
           .filter((doc): doc is AttachedDocMeta => Boolean(doc?.id))
-          .slice(0, 2)
+          .slice(0, MAX_PINNED_DOCS)
           .map((doc) => ({
             id: String(doc.id),
             filename: String(doc.filename || `Document ${String(doc.id).slice(0, 8)}`),
@@ -4646,8 +4648,8 @@ export default function TestAgentEnhancedPage() {
           }))
       : [];
     const normalizedPinnedDocIds = attachedDocsOverride.length > 0
-      ? attachedDocsOverride.map((doc) => doc.id).filter(Boolean).slice(0, 2)
-      : (pinnedDocIds || []).filter(Boolean).slice(0, 2);
+      ? attachedDocsOverride.map((doc) => doc.id).filter(Boolean).slice(0, MAX_PINNED_DOCS)
+      : (pinnedDocIds || []).filter(Boolean).slice(0, MAX_PINNED_DOCS);
     const scopeType =
       normalizedPinnedDocIds.length > 0
         ? 'org'
@@ -5644,7 +5646,7 @@ export default function TestAgentEnhancedPage() {
   const startSpreadsheetAnalystFlow = useCallback((docs: StoredDocument[]) => {
     const attachedDocs = (docs || [])
       .filter((doc) => Boolean(doc?.id) && isSpreadsheetDocument(doc))
-      .slice(0, 2)
+      .slice(0, MAX_SPREADSHEET_PINNED_DOCS)
       .map((doc) => buildAttachedDocMeta(doc));
 
     if (attachedDocs.length === 0) return;
@@ -7208,13 +7210,15 @@ export default function TestAgentEnhancedPage() {
               if (!open) setFileNavigatorMode(null);
             }}
             mode="doc"
-            maxDocs={2}
+            maxDocs={fileNavigatorMode === 'spreadsheet' ? MAX_SPREADSHEET_PINNED_DOCS : MAX_PINNED_DOCS}
             docTypeFilter={fileNavigatorMode === 'spreadsheet' ? [...SPREADSHEET_FILE_PICKER_DOC_TYPES] : undefined}
             initialSelectedDocIds={fileNavigatorMode === 'spreadsheet' ? [] : pinnedDocIds}
             onConfirm={({ docs }) => {
               const activeFileNavigatorMode = fileNavigatorMode;
               setFileNavigatorMode(null);
-              const selectedDocs = (docs || []).filter((d) => Boolean(d?.id)).slice(0, 2);
+              const selectedDocs = (docs || [])
+                .filter((d) => Boolean(d?.id))
+                .slice(0, activeFileNavigatorMode === 'spreadsheet' ? MAX_SPREADSHEET_PINNED_DOCS : MAX_PINNED_DOCS);
               if (activeFileNavigatorMode === 'spreadsheet') {
                 startSpreadsheetAnalystFlow(selectedDocs);
                 return;

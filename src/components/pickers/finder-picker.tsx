@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Check, ChevronRight, FileText, Folder, Search } from 'lucide-react';
+import { Check, ChevronRight, FileText, Folder, Loader2, Search } from 'lucide-react';
 import { useFolders, type FolderNode } from '@/hooks/use-folders';
 import type { StoredDocument } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -18,6 +18,10 @@ type DocListFilter = 'all' | 'folders' | 'files';
 type PickerItem =
   | { kind: 'folder'; id: string; name: string; path: string[] }
   | { kind: 'doc'; id: string; filename: string; title: string; folderPath: string[]; doc: StoredDocument };
+type FolderContentsResponse = {
+  folders?: Array<{ fullPath?: string[]; path?: string[] }>;
+  documents?: any[];
+};
 
 const EMPTY_PATH: string[] = [];
 const EMPTY_DOC_IDS: string[] = [];
@@ -212,9 +216,11 @@ export function FinderPicker({
   const [editorDocsLoading, setEditorDocsLoading] = useState(false);
   const [allEditorDocs, setAllEditorDocs] = useState<StoredDocument[] | null>(null);
   const [selectedDocsById, setSelectedDocsById] = useState<Map<string, StoredDocument>>(new Map());
+  const [folderSelectionLoadingKey, setFolderSelectionLoadingKey] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const loadFoldersRef = useRef(folderExplorer.load);
   const docsCacheRef = useRef<Map<string, StoredDocument[]>>(new Map());
+  const folderContentsCacheRef = useRef<Map<string, { folders: string[][]; docs: StoredDocument[] }>>(new Map());
   const normalizedDocTypeFilter = useMemo(
     () =>
       Array.isArray(docTypeFilter)
@@ -621,6 +627,131 @@ export function FinderPicker({
     () => selectedDocIds.map((id) => selectedDocsById.get(id) || visibleDocsById.get(id)).filter(Boolean) as StoredDocument[],
     [selectedDocIds, selectedDocsById, visibleDocsById]
   );
+  const maxSelectable = Math.max(1, maxDocs);
+
+  const loadFolderContents = React.useCallback(
+    async (targetPath: string[]) => {
+      if (mode !== 'doc' || docSource !== 'documents' || !orgId) {
+        return { folders: [] as string[][], docs: [] as StoredDocument[] };
+      }
+
+      const key = pathKey(targetPath);
+      const cached = folderContentsCacheRef.current.get(key);
+      if (cached) return cached;
+
+      const params = new URLSearchParams();
+      params.set('limit', String(PATH_DOCS_LIMIT));
+      if (targetPath.length > 0) params.set('path', targetPath.join('/'));
+
+      const data = await apiFetch<FolderContentsResponse>(
+        `/orgs/${orgId}/folder-contents?${params.toString()}`,
+        { skipCache: true }
+      );
+
+      const docs = Array.isArray(data?.documents) ? data.documents.map(normalizeDocument) : [];
+      const folders = Array.isArray(data?.folders)
+        ? data.folders
+            .map((folder) => normalizePath(folder?.fullPath || folder?.path || []))
+            .filter((path) => path.length > 0)
+        : [];
+
+      const normalized = { folders, docs };
+      folderContentsCacheRef.current.set(key, normalized);
+      setSelectedDocsById((prev) => {
+        const next = new Map(prev);
+        for (const doc of docs) next.set(doc.id, doc);
+        return next;
+      });
+      return normalized;
+    },
+    [docSource, mode, orgId]
+  );
+
+  const collectFolderDocuments = React.useCallback(
+    async (targetPath: string[]) => {
+      const normalizedTarget = normalizePath(targetPath);
+      if (mode !== 'doc') return [] as StoredDocument[];
+
+      if (docSource === 'editor') {
+        const docs = Array.isArray(allEditorDocs) ? allEditorDocs : [];
+        const seen = new Set<string>();
+        return docs.filter((doc) => {
+          if (!matchesDocTypeFilter(doc)) return false;
+          const folderPath = docFolderPath(doc);
+          if (!(normalizedTarget.length === 0 || pathStartsWith(folderPath, normalizedTarget))) return false;
+          if (!doc.id || seen.has(doc.id)) return false;
+          seen.add(doc.id);
+          return true;
+        });
+      }
+
+      if (!orgId) return [] as StoredDocument[];
+
+      const queue: string[][] = [normalizedTarget];
+      const visited = new Set<string>();
+      const seenDocIds = new Set<string>();
+      const docs: StoredDocument[] = [];
+
+      while (queue.length > 0 && docs.length < maxSelectable) {
+        const currentPath = queue.shift() || [];
+        const currentKey = pathKey(currentPath);
+        if (visited.has(currentKey)) continue;
+        visited.add(currentKey);
+
+        const contents = await loadFolderContents(currentPath);
+        for (const doc of contents.docs) {
+          if (!matchesDocTypeFilter(doc)) continue;
+          if (!doc?.id || seenDocIds.has(doc.id)) continue;
+          seenDocIds.add(doc.id);
+          docs.push(doc);
+          if (docs.length >= maxSelectable) break;
+        }
+
+        if (docs.length >= maxSelectable) break;
+        for (const childPath of contents.folders) {
+          const childKey = pathKey(childPath);
+          if (!visited.has(childKey)) queue.push(childPath);
+        }
+      }
+
+      return docs;
+    },
+    [allEditorDocs, docSource, loadFolderContents, matchesDocTypeFilter, maxSelectable, mode, orgId]
+  );
+
+  const handleSelectFolderContents = React.useCallback(
+    async (targetPath: string[]) => {
+      const normalizedTarget = normalizePath(targetPath);
+      const loadingKey = pathKey(normalizedTarget);
+      setFolderSelectionLoadingKey(loadingKey);
+      try {
+        const docs = await collectFolderDocuments(normalizedTarget);
+        if (docs.length === 0) return;
+        setSelectedDocsById((prev) => {
+          const next = new Map(prev);
+          for (const doc of docs) next.set(doc.id, doc);
+          return next;
+        });
+        setSelectedDocIds((prev) => {
+          const next = [...prev];
+          const seen = new Set(next);
+          for (const doc of docs) {
+            const id = String(doc.id || '').trim();
+            if (!id || seen.has(id)) continue;
+            if (next.length >= maxSelectable) break;
+            next.push(id);
+            seen.add(id);
+          }
+          return next;
+        });
+        onConfirm({ docs });
+        onOpenChange(false);
+      } finally {
+        setFolderSelectionLoadingKey((current) => (current === loadingKey ? null : current));
+      }
+    },
+    [collectFolderDocuments, maxSelectable, onConfirm, onOpenChange]
+  );
 
   const toggleDoc = React.useCallback(
     (docId: string, doc?: StoredDocument) => {
@@ -705,7 +836,6 @@ export function FinderPicker({
           .slice(0, 1)
           .join(', ');
 
-  const maxSelectable = Math.max(1, maxDocs);
   const folderLoadingForCurrentPath =
     mode === 'doc' && docSource === 'editor'
       ? false
@@ -837,7 +967,29 @@ export function FinderPicker({
                         <div className="text-[11px] text-muted-foreground truncate">Folder</div>
                       </div>
                     </div>
-                    <ChevronRight className="h-4 w-4 text-muted-foreground/50 shrink-0" />
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {mode === 'doc' && maxSelectable > 1 ? (
+                        <button
+                          type="button"
+                          className="rounded-md border border-border/60 bg-background/80 px-2 py-1 text-[11px] font-medium text-foreground/80 transition hover:bg-muted"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleSelectFolderContents(item.path);
+                          }}
+                          disabled={folderSelectionLoadingKey === pathKey(item.path)}
+                        >
+                          {folderSelectionLoadingKey === pathKey(item.path) ? (
+                            <span className="inline-flex items-center gap-1">
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              Selecting
+                            </span>
+                          ) : (
+                            'Select files'
+                          )}
+                        </button>
+                      ) : null}
+                      <ChevronRight className="h-4 w-4 text-muted-foreground/50 shrink-0" />
+                    </div>
                   </li>
                 );
               })}
@@ -908,6 +1060,25 @@ export function FinderPicker({
             <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
+            {mode === 'doc' && maxSelectable > 1 ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={() => void handleSelectFolderContents(viewingPath)}
+                disabled={folderSelectionLoadingKey === pathKey(viewingPath)}
+              >
+                {folderSelectionLoadingKey === pathKey(viewingPath) ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    Selecting folder
+                  </>
+                ) : (
+                  'Select folder files'
+                )}
+              </Button>
+            ) : null}
             <Button
               type="button"
               size="sm"
