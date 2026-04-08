@@ -270,6 +270,34 @@ const splitRelativePath = (relativePath: string) => {
   return { folderSegments, fileName };
 };
 
+const getOverlappingPathLength = (basePath: string[], relativePath: string[]) => {
+  const base = basePath.filter(Boolean);
+  const relative = relativePath.filter(Boolean);
+  const maxOverlap = Math.min(base.length, relative.length);
+
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    let matches = true;
+    for (let i = 0; i < overlap; i += 1) {
+      if (base[base.length - overlap + i].toLowerCase() !== relative[i].toLowerCase()) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return overlap;
+  }
+
+  return 0;
+};
+
+const mergeFolderPathSegments = (basePath: string[], relativePath: string[]) => {
+  const base = basePath.filter(Boolean);
+  const relative = relativePath.filter(Boolean);
+  if (base.length === 0 || relative.length === 0) return [...base, ...relative];
+
+  const overlap = getOverlappingPathLength(base, relative);
+  return [...base, ...relative.slice(overlap)];
+};
+
 const extractDirectorySegments = (relativePath: string) => {
   const sanitized = relativePath.replace(/\\/g, '/');
   return sanitized.split('/').filter(Boolean).map(normalizeSegment);
@@ -836,6 +864,8 @@ function UploadContent() {
   const [isProcessingAll, setIsProcessingAll] = useState(false);
   const [isSavingAll, setIsSavingAll] = useState(false);
   const [isClearingAll, setIsClearingAll] = useState(false);
+  const [isZipImporting, setIsZipImporting] = useState(false);
+  const [zipImportName, setZipImportName] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
@@ -1143,6 +1173,9 @@ function UploadContent() {
       if (zipInputRef.current) zipInputRef.current.value = '';
       return;
     }
+    setDragOver(false);
+    setIsZipImporting(true);
+    setZipImportName(zipFile.name);
     try {
       const basePath = folderPath.slice();
       const orgId = getApiContext().orgId || '';
@@ -1196,6 +1229,8 @@ function UploadContent() {
         variant: 'destructive',
       });
     } finally {
+      setIsZipImporting(false);
+      setZipImportName(null);
       if (zipInputRef.current) zipInputRef.current.value = '';
     }
   }, [effectiveAdditionalDepartmentIds, ensureBulkPrereqs, folderPath, loadAllDocuments, selectedDepartmentId, toast]);
@@ -1228,7 +1263,8 @@ function UploadContent() {
       const relative = entry.webkitRelativePath || entry.name;
       if (!relative) continue;
       const { folderSegments, fileName } = splitRelativePath(relative);
-      recordFolder([...basePath, ...folderSegments]);
+      const mergedFolderPath = mergeFolderPathSegments(basePath, folderSegments);
+      recordFolder(mergedFolderPath);
       if (shouldSkipPath(relative)) {
         skipList.push({ path: relative, reason: 'System file skipped' });
         continue;
@@ -1242,7 +1278,7 @@ function UploadContent() {
       const typedFile = needsRetype
         ? new File([entry], entry.name, { type: guessMimeFromName(entry.name), lastModified: entry.lastModified })
         : entry;
-      prepared.push({ file: typedFile, folderPathOverride: [...basePath, ...folderSegments] });
+      prepared.push({ file: typedFile, folderPathOverride: mergedFolderPath });
     }
     await ensureFolderStructure(Array.from(folderMap.values()));
     if (prepared.length === 0) {
@@ -1688,16 +1724,18 @@ function UploadContent() {
     }
   };
 
-  const onBrowse = () => {
+  const onBrowse = useCallback(() => {
+    if (isZipImporting) return;
     // Clear the input value to allow selecting the same file again
     if (inputRef.current) {
       inputRef.current.value = '';
       inputRef.current.click();
     }
-  };
+  }, [isZipImporting]);
 
-  const onDrop: React.DragEventHandler<HTMLDivElement> = async (e) => {
+  const onDrop = useCallback<React.DragEventHandler<HTMLDivElement>>(async (e) => {
     e.preventDefault();
+    if (isZipImporting) return;
     const { items, files } = e.dataTransfer;
     const extended = Array.from(files || []) as ExtendedFile[];
 
@@ -1730,7 +1768,7 @@ function UploadContent() {
     }
 
     await onSelect(files);
-  };
+  }, [isZipImporting, onSelect, processFolderSelection, processZipFile]);
 
   type AnalyzeSuccessResponse = {
     ocrText: string;
@@ -2715,7 +2753,12 @@ function UploadContent() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={() => router.push(cameFromQueue ? '/queue' : '/documents')}
+                    onClick={() => {
+                      if (cameFromQueue && typeof window !== 'undefined') {
+                        window.sessionStorage?.setItem('queueForceRefresh', '1');
+                      }
+                      router.push(cameFromQueue ? '/queue' : '/documents');
+                    }}
                     className="h-8 w-8 text-muted-foreground hover:text-foreground flex-shrink-0"
                   >
                     <ArrowLeft className="h-4 w-4" />
@@ -2788,19 +2831,30 @@ function UploadContent() {
                 role="button"
                 tabIndex={0}
                 aria-describedby="upload-help"
+                aria-busy={isZipImporting}
                 className={cn(
                   "relative rounded-2xl border-2 border-dashed text-center p-8 sm:p-12 md:p-16",
-                  "transition-all duration-300 cursor-pointer",
-                  "bg-gradient-to-br from-muted/5 via-background to-muted/10",
-                  dragOver
-                    ? "border-primary bg-primary/5 scale-[1.02] shadow-lg shadow-primary/5"
-                    : "border-border/40 hover:border-primary/50 hover:shadow-md hover:shadow-primary/5"
+                  "transition-all duration-300 bg-gradient-to-br from-muted/5 via-background to-muted/10",
+                  isZipImporting
+                    ? "cursor-progress border-primary/40 bg-primary/5 shadow-lg shadow-primary/5"
+                    : "cursor-pointer",
+                  !isZipImporting && (
+                    dragOver
+                      ? "border-primary bg-primary/5 scale-[1.02] shadow-lg shadow-primary/5"
+                      : "border-border/40 hover:border-primary/50 hover:shadow-md hover:shadow-primary/5"
+                  )
                 )}
-                onClick={onBrowse}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onBrowse(); }}
-                onDragEnter={() => setDragOver(true)}
+                onClick={() => { if (!isZipImporting) onBrowse(); }}
+                onKeyDown={(e) => {
+                  if (isZipImporting) return;
+                  if (e.key === 'Enter' || e.key === ' ') onBrowse();
+                }}
+                onDragEnter={() => { if (!isZipImporting) setDragOver(true); }}
                 onDragLeave={() => setDragOver(false)}
-                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (!isZipImporting) setDragOver(true);
+                }}
                 onDrop={(e) => { setDragOver(false); onDrop(e); }}
               >
                 {/* Animated upload icon */}
@@ -2809,22 +2863,40 @@ function UploadContent() {
                     "flex h-20 w-20 sm:h-24 sm:w-24 items-center justify-center rounded-2xl mx-auto",
                     "bg-gradient-to-br from-primary/20 to-primary/10 border border-primary/20",
                     "transition-transform duration-300",
-                    dragOver && "scale-110"
+                    isZipImporting
+                      ? "scale-105"
+                      : dragOver && "scale-110"
                   )}>
-                    <UploadCloud className={cn(
-                      "h-10 w-10 sm:h-12 sm:w-12 text-primary transition-transform duration-300",
-                      dragOver && "animate-bounce"
-                    )} />
+                    {isZipImporting ? (
+                      <Loader2 className="h-10 w-10 sm:h-12 sm:w-12 text-primary animate-spin" />
+                    ) : (
+                      <UploadCloud className={cn(
+                        "h-10 w-10 sm:h-12 sm:w-12 text-primary transition-transform duration-300",
+                        dragOver && "animate-bounce"
+                      )} />
+                    )}
                   </div>
                 </div>
 
                 {/* Main messaging */}
-                <div className="space-y-3 mb-8">
+                <div className="space-y-3 mb-8" aria-live="polite">
                   <h2 className="text-2xl sm:text-3xl font-bold text-foreground">
-                    {dragOver ? 'Drop to upload' : 'Drag & drop files here'}
+                    {isZipImporting
+                      ? 'Importing ZIP archive...'
+                      : dragOver
+                        ? 'Drop to upload'
+                        : 'Drag & drop files here'}
                   </h2>
                   <p className="text-sm sm:text-base text-muted-foreground">
-                    or <span className="text-primary font-medium">click to browse</span> your computer
+                    {isZipImporting ? (
+                      <>
+                        Uploading and extracting <span className="text-primary font-medium">{zipImportName || 'your archive'}</span>. Please wait before starting another upload.
+                      </>
+                    ) : (
+                      <>
+                        or <span className="text-primary font-medium">click to browse</span> your computer
+                      </>
+                    )}
                   </p>
                 </div>
 
@@ -2851,11 +2923,22 @@ function UploadContent() {
                 {/* Helper text */}
                 <div id="upload-help" className="space-y-2">
                   <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5">
-                    <Database className="h-3 w-3" />
-                    AI-powered metadata extraction & summary generation
+                    {isZipImporting ? (
+                      <>
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        ZIP files are being uploaded, extracted, and queued for ingestion review
+                      </>
+                    ) : (
+                      <>
+                        <Database className="h-3 w-3" />
+                        AI-powered metadata extraction & summary generation
+                      </>
+                    )}
                   </p>
                   <p className="text-xs text-muted-foreground/70 hidden sm:block">
-                    Supports ZIP archives and folder uploads for batch processing. ZIP imports extract supported files; the archive itself is not stored as a document.
+                    {isZipImporting
+                      ? 'Large archives can take a little longer because supported files are extracted and queued individually before they appear in the review flow.'
+                      : 'Supports ZIP archives and folder uploads for batch processing. ZIP imports extract supported files; the archive itself is not stored as a document.'}
                   </p>
                 </div>
                 <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
@@ -2865,10 +2948,12 @@ function UploadContent() {
                     multiple
                     accept=".pdf,.txt,.md,.markdown,.jpg,.jpeg,.png,.csv,.xls,.xlsx,.docx,.doc,.dwg,.dxf"
                     className="hidden"
+                    disabled={isZipImporting}
                     onChange={(e) => e.target.files && onSelect(e.target.files)}
                     onClick={(e) => e.stopPropagation()}
                   />
                   <Button
+                    disabled={isZipImporting}
                     onClick={(e) => { e.stopPropagation(); onBrowse(); }}
                     className="gap-2"
                   >
@@ -2880,16 +2965,18 @@ function UploadContent() {
                     type="file"
                     accept=".zip,application/zip"
                     className="hidden"
+                    disabled={isZipImporting}
                     onChange={handleZipInputChange}
                     onClick={(e) => e.stopPropagation()}
                   />
                   <Button
                     variant="outline"
                     className="gap-2"
+                    disabled={isZipImporting}
                     onClick={(e) => { e.stopPropagation(); zipInputRef.current?.click(); }}
                   >
-                    <UploadCloud className="h-4 w-4" />
-                    Upload ZIP
+                    {isZipImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+                    {isZipImporting ? 'Uploading ZIP...' : 'Upload ZIP'}
                   </Button>
                   <input
                     ref={(el) => {
@@ -2903,12 +2990,14 @@ function UploadContent() {
                     type="file"
                     multiple
                     className="hidden"
+                    disabled={isZipImporting}
                     onChange={handleFolderInputChange}
                     onClick={(e) => e.stopPropagation()}
                   />
                   <Button
                     variant="outline"
                     className="gap-2"
+                    disabled={isZipImporting}
                     onClick={(e) => { e.stopPropagation(); folderInputRef.current?.click(); }}
                   >
                     <FolderOpen className="h-4 w-4" />

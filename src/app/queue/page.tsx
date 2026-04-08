@@ -271,6 +271,7 @@ type QueueSnapshot = {
 
 const queueSnapshotCache = new Map<string, QueueSnapshot>();
 const queueRequestCache = new Map<string, Promise<PaginatedResponse>>();
+const QUEUE_RETURN_REFRESH_KEY = "queueForceRefresh";
 
 function buildQueueCacheKey(orgId: string, page: number, search: string, filter: string) {
   return `${orgId}|${page}|${filter}|${search.trim().toLowerCase()}`;
@@ -481,6 +482,7 @@ export default function QueuePage() {
   const fetchInFlightRef = useRef(false);
   const fetchSeqRef = useRef(0);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastVisibilityRefreshRef = useRef(0);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -559,7 +561,8 @@ export default function QueuePage() {
       showLoading = true,
       page = 1,
       search = "",
-      filter: StatusFilter = "all"
+      filter: StatusFilter = "all",
+      forceRefresh = false
     ) => {
       const seq = ++fetchSeqRef.current;
       fetchInFlightRef.current = true;
@@ -582,7 +585,11 @@ export default function QueuePage() {
         }
 
         const cacheKey = buildQueueCacheKey(orgId, page, search, filter);
-        const cachedSnapshot = readQueueSnapshot(cacheKey);
+        if (forceRefresh) {
+          invalidateQueueSnapshots(orgId);
+          queueRequestCache.delete(cacheKey);
+        }
+        const cachedSnapshot = forceRefresh ? null : readQueueSnapshot(cacheKey);
         if (cachedSnapshot) {
           applyQueueSnapshot(cachedSnapshot);
         }
@@ -684,11 +691,18 @@ export default function QueuePage() {
 
     const doFetch = async () => {
       if (!mounted) return;
+      const shouldForceRefresh =
+        typeof window !== "undefined" &&
+        window.sessionStorage?.getItem(QUEUE_RETURN_REFRESH_KEY) === "1";
+      if (shouldForceRefresh) {
+        window.sessionStorage.removeItem(QUEUE_RETURN_REFRESH_KEY);
+      }
       await fetchQueue(
         !fetchedRef.current,
         currentPage,
         debouncedSearch,
-        statusFilter
+        statusFilter,
+        shouldForceRefresh
       );
       fetchedRef.current = true;
     };
@@ -716,44 +730,163 @@ export default function QueuePage() {
     };
   }, []);
 
-  const openInUploader = (doc: QueueDoc) => {
+  useEffect(() => {
+    const refreshOnReturn = (forceRefresh = false) => {
+      const now = Date.now();
+      if (now - lastVisibilityRefreshRef.current < 750) return;
+      lastVisibilityRefreshRef.current = now;
+      void fetchQueue(items.length === 0, currentPage, debouncedSearch, statusFilter, forceRefresh);
+    };
+
+    const handlePageShow = (event: PageTransitionEvent) => {
+      const shouldForceRefresh =
+        event.persisted ||
+        (typeof window !== "undefined" &&
+          window.sessionStorage?.getItem(QUEUE_RETURN_REFRESH_KEY) === "1");
+
+      if (shouldForceRefresh && typeof window !== "undefined") {
+        window.sessionStorage.removeItem(QUEUE_RETURN_REFRESH_KEY);
+      }
+
+      refreshOnReturn(Boolean(shouldForceRefresh));
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      const shouldForceRefresh =
+        typeof window !== "undefined" &&
+        window.sessionStorage?.getItem(QUEUE_RETURN_REFRESH_KEY) === "1";
+
+      if (shouldForceRefresh && typeof window !== "undefined") {
+        window.sessionStorage.removeItem(QUEUE_RETURN_REFRESH_KEY);
+      }
+
+      refreshOnReturn(Boolean(shouldForceRefresh));
+    };
+
+    window.addEventListener("pageshow", handlePageShow);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("pageshow", handlePageShow);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [currentPage, debouncedSearch, fetchQueue, items.length, statusFilter]);
+
+  const hasInFlightItems = items.some(
+    (item) => item.status === "pending" || item.status === "processing"
+  );
+
+  useEffect(() => {
+    if (!hasInFlightItems) return;
+
+    const timer = window.setTimeout(() => {
+      if (document.visibilityState !== "visible") return;
+      void fetchQueue(false, currentPage, debouncedSearch, statusFilter, true);
+    }, 4000);
+
+    return () => window.clearTimeout(timer);
+  }, [currentPage, debouncedSearch, fetchQueue, hasInFlightItems, statusFilter]);
+
+  const openInUploader = async (doc: QueueDoc) => {
+    let sourceDoc = doc;
+
+    try {
+      const orgId = getApiContext().orgId;
+      if (orgId && doc.docId) {
+        const detail = await apiFetch<IngestionJobResponse>(
+          `/orgs/${orgId}/ingestion-jobs/${doc.docId}`,
+          { skipCache: true }
+        );
+
+        const mergedDetail: IngestionJobResponse = {
+          ...detail,
+          doc_id: detail.doc_id || doc.docId,
+          id: detail.id || detail.doc_id || doc.docId,
+          title: detail.title || doc.title,
+          filename: detail.filename || doc.filename,
+          description: detail.description || doc.description,
+          folder_path:
+            Array.isArray(detail.folder_path) && detail.folder_path.length > 0
+              ? detail.folder_path
+              : doc.folderPath,
+          sender: detail.sender || doc.sender,
+          receiver: detail.receiver || doc.receiver,
+          document_date: detail.document_date || doc.documentDate,
+          category: detail.category || doc.category,
+          keywords:
+            Array.isArray(detail.keywords) && detail.keywords.length > 0
+              ? detail.keywords
+              : doc.keywords,
+          tags:
+            Array.isArray(detail.tags) && detail.tags.length > 0
+              ? detail.tags
+              : doc.tags,
+          subject: detail.subject || doc.extractedMetadata?.subject,
+          storage_key: detail.storage_key || doc.storageKey,
+          mime_type: detail.mime_type || doc.mimeType,
+          extracted_metadata: detail.extracted_metadata || doc.extractedMetadata,
+          failure_reason: detail.failure_reason ?? doc.failureReason ?? null,
+          document:
+            detail.document || {
+              id: doc.docId,
+              title: doc.title,
+              filename: doc.filename,
+              description: doc.description,
+              uploaded_at: doc.submittedAt || "",
+              folder_path: doc.folderPath,
+            },
+        };
+
+        const hydratedDoc = mapIngestionJobToQueueDoc(mergedDetail);
+        if (
+          hydratedDoc.extractedMetadata &&
+          Object.keys(hydratedDoc.extractedMetadata).length > 0
+        ) {
+          sourceDoc = hydratedDoc;
+        }
+      }
+    } catch (error) {
+      console.warn("Failed to hydrate queue item before opening review", error);
+    }
+
     const documentState = {
-      docId: doc.docId,
-      title: doc.title,
-      filename: doc.filename,
-      sender: doc.sender || "",
-      receiver: doc.receiver || "",
-      documentDate: doc.documentDate || "",
-      subject: doc.extractedMetadata?.subject || "",
+      docId: sourceDoc.docId,
+      title: sourceDoc.title,
+      filename: sourceDoc.filename,
+      sender: sourceDoc.sender || "",
+      receiver: sourceDoc.receiver || "",
+      documentDate: sourceDoc.documentDate || "",
+      subject: sourceDoc.extractedMetadata?.subject || "",
       description:
-        doc.extractedMetadata?.description ||
-        doc.extractedMetadata?.summary ||
-        doc.description ||
+        sourceDoc.extractedMetadata?.description ||
+        sourceDoc.extractedMetadata?.summary ||
+        sourceDoc.description ||
         "",
-      category: doc.category || "General",
-      keywords: doc.keywords || [],
-      tags: doc.tags || [],
-      folderPath: doc.folderPath || [],
-      storageKey: doc.storageKey,
-      mimeType: doc.mimeType,
-      extractedMetadata: doc.extractedMetadata,
-      queueStatus: doc.status,
-      queueNote: doc.note,
+      category: sourceDoc.category || "General",
+      keywords: sourceDoc.keywords || [],
+      tags: sourceDoc.tags || [],
+      folderPath: sourceDoc.folderPath || [],
+      storageKey: sourceDoc.storageKey,
+      mimeType: sourceDoc.mimeType,
+      extractedMetadata: sourceDoc.extractedMetadata,
+      queueStatus: sourceDoc.status,
+      queueNote: sourceDoc.note,
       failureReason:
-        doc.status === "error"
-          ? doc.note || "Background processing failed. Please review and resubmit."
-          : doc.status === "processing"
-            ? doc.note || "Analyzing document…"
-            : doc.status === "pending"
-              ? doc.note || "Queued and waiting for worker."
+        sourceDoc.status === "error"
+          ? sourceDoc.note || "Background processing failed. Please review and resubmit."
+          : sourceDoc.status === "processing"
+            ? sourceDoc.note || "Analyzing document…"
+            : sourceDoc.status === "pending"
+              ? sourceDoc.note || "Queued and waiting for worker."
               : undefined,
     };
 
     sessionStorage.setItem("queueDocumentState", JSON.stringify(documentState));
 
     const pathParam =
-      doc.folderPath && doc.folderPath.length > 0
-        ? `?path=${encodeURIComponent(doc.folderPath.join("/"))}&fromQueue=true`
+      sourceDoc.folderPath && sourceDoc.folderPath.length > 0
+        ? `?path=${encodeURIComponent(sourceDoc.folderPath.join("/"))}&fromQueue=true`
         : "?fromQueue=true";
 
     router.push(`/documents/upload${pathParam}`);
