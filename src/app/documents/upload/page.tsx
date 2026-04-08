@@ -170,6 +170,18 @@ type BulkUploadResponse = {
   }>;
 };
 
+type QueueSearchResponse = {
+  items?: Array<{
+    filename?: string;
+    submitted_at?: string;
+  }>;
+};
+
+type ZipRecoveryManifest = {
+  expectedCount: number;
+  filenames: string[];
+};
+
 function getCommonImportedFolderPath(
   uploaded: BulkUploadResponse['uploaded'] | undefined,
   fallbackPath: string[],
@@ -189,6 +201,30 @@ function getCommonImportedFolderPath(
   }
 
   return prefix.length > 0 ? prefix : fallbackPath.slice();
+}
+
+function normalizeFilenameForMatch(filename: string) {
+  return String(filename || '').trim().toLowerCase();
+}
+
+async function buildZipRecoveryManifest(zipFile: File): Promise<ZipRecoveryManifest> {
+  const zip = await JSZip.loadAsync(zipFile);
+  const entries = Object.values(zip.files || {}).filter((entry) => !entry.dir);
+  const filenames: string[] = [];
+
+  for (const entry of entries) {
+    if (filenames.length >= BULK_UPLOAD_LIMIT) break;
+    if (shouldSkipPath(entry.name)) continue;
+
+    const { fileName } = splitRelativePath(entry.name);
+    if (!fileName || !isSupportedFile(fileName)) continue;
+    filenames.push(fileName);
+  }
+
+  return {
+    expectedCount: filenames.length,
+    filenames: Array.from(new Set(filenames.map(normalizeFilenameForMatch))).filter(Boolean),
+  };
 }
 
 const BULK_UPLOAD_LIMIT = Number(process.env.NEXT_PUBLIC_BULK_UPLOAD_MAX_FILES || 200);
@@ -1176,9 +1212,10 @@ function UploadContent() {
     setDragOver(false);
     setIsZipImporting(true);
     setZipImportName(zipFile.name);
+    const basePath = folderPath.slice();
+    const orgId = getApiContext().orgId || '';
+    const importStartedAt = Date.now();
     try {
-      const basePath = folderPath.slice();
-      const orgId = getApiContext().orgId || '';
       if (!orgId) throw new Error('No organization selected');
 
       const payload = new FormData();
@@ -1223,6 +1260,56 @@ function UploadContent() {
         }
       }
     } catch (error) {
+      const isNetworkError = Boolean((error as any)?.isNetworkError);
+      if (isNetworkError && orgId) {
+        try {
+          const manifest = await buildZipRecoveryManifest(zipFile);
+          if (manifest.expectedCount > 0) {
+            const pendingNames = new Set(manifest.filenames);
+            const recoveryDeadline = Date.now() + 20_000;
+            const minSubmittedAt = importStartedAt - (2 * 60 * 1000);
+
+            while (pendingNames.size > 0 && Date.now() < recoveryDeadline) {
+              const currentNames = Array.from(pendingNames);
+
+              await Promise.all(currentNames.map(async (filename) => {
+                const result = await apiFetch<QueueSearchResponse>(
+                  `/orgs/${orgId}/ingestion-jobs?status=pending,processing,needs_review,failed&limit=10&page=1&q=${encodeURIComponent(filename)}`,
+                  { skipCache: true },
+                );
+                const matched = (result?.items || []).some((item) => {
+                  const submittedAtMs = item?.submitted_at ? new Date(item.submitted_at).getTime() : 0;
+                  return normalizeFilenameForMatch(item?.filename || '') === filename && submittedAtMs >= minSubmittedAt;
+                });
+                if (matched) {
+                  pendingNames.delete(filename);
+                }
+              }));
+
+              if (pendingNames.size === 0) {
+                const recoveredCount = manifest.expectedCount;
+                setLastBulkSummary({ count: recoveredCount, path: basePath });
+                setRecentSavePath(basePath);
+                try {
+                  await loadAllDocuments();
+                } catch (refreshError) {
+                  console.warn('Failed to refresh documents after ZIP timeout recovery:', refreshError);
+                }
+                toast({
+                  title: 'ZIP queued',
+                  description: `Queued ${recoveredCount} file(s) from the archive for ingestion review. The upload request timed out, but the files reached the queue successfully.`,
+                });
+                return;
+              }
+
+              await new Promise((resolve) => setTimeout(resolve, 2000));
+            }
+          }
+        } catch (recoveryError) {
+          console.warn('Failed to verify ZIP import after network timeout:', recoveryError);
+        }
+      }
+
       toast({
         title: 'ZIP import failed',
         description: error instanceof Error ? error.message : 'Unable to import archive.',
