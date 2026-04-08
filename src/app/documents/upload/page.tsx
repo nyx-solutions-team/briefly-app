@@ -182,6 +182,20 @@ type ZipRecoveryManifest = {
   filenames: string[];
 };
 
+function isRecoverableZipImportError(error: unknown) {
+  const status = Number((error as any)?.status || 0);
+  const message = String((error as any)?.message || '').toLowerCase();
+  return (
+    Boolean((error as any)?.isNetworkError) ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    message.includes('service unavailable') ||
+    message.includes('gateway timeout') ||
+    message.includes('could not reach server')
+  );
+}
+
 function getCommonImportedFolderPath(
   uploaded: BulkUploadResponse['uploaded'] | undefined,
   fallbackPath: string[],
@@ -1260,31 +1274,37 @@ function UploadContent() {
         }
       }
     } catch (error) {
-      const isNetworkError = Boolean((error as any)?.isNetworkError);
-      if (isNetworkError && orgId) {
+      const shouldAttemptRecovery = isRecoverableZipImportError(error);
+      if (shouldAttemptRecovery && orgId) {
         try {
           const manifest = await buildZipRecoveryManifest(zipFile);
           if (manifest.expectedCount > 0) {
             const pendingNames = new Set(manifest.filenames);
-            const recoveryDeadline = Date.now() + 20_000;
+            const recoveryDeadline = Date.now() + 45_000;
             const minSubmittedAt = importStartedAt - (2 * 60 * 1000);
+            const pagesToScan = Math.min(3, Math.max(1, Math.ceil(manifest.expectedCount / 100)));
 
             while (pendingNames.size > 0 && Date.now() < recoveryDeadline) {
-              const currentNames = Array.from(pendingNames);
+              const recentQueueNames = new Set<string>();
 
-              await Promise.all(currentNames.map(async (filename) => {
+              for (let page = 1; page <= pagesToScan; page += 1) {
                 const result = await apiFetch<QueueSearchResponse>(
-                  `/orgs/${orgId}/ingestion-jobs?status=pending,processing,needs_review,failed&limit=10&page=1&q=${encodeURIComponent(filename)}`,
+                  `/orgs/${orgId}/ingestion-jobs?status=pending,processing,needs_review,failed&limit=100&page=${page}`,
                   { skipCache: true },
                 );
-                const matched = (result?.items || []).some((item) => {
+                for (const item of result?.items || []) {
                   const submittedAtMs = item?.submitted_at ? new Date(item.submitted_at).getTime() : 0;
-                  return normalizeFilenameForMatch(item?.filename || '') === filename && submittedAtMs >= minSubmittedAt;
-                });
-                if (matched) {
+                  if (submittedAtMs >= minSubmittedAt) {
+                    recentQueueNames.add(normalizeFilenameForMatch(item?.filename || ''));
+                  }
+                }
+              }
+
+              for (const filename of Array.from(pendingNames)) {
+                if (recentQueueNames.has(filename)) {
                   pendingNames.delete(filename);
                 }
-              }));
+              }
 
               if (pendingNames.size === 0) {
                 const recoveredCount = manifest.expectedCount;
