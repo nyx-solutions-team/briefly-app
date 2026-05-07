@@ -17,7 +17,7 @@ type DocumentsContextValue = {
   isLoading: boolean;
   hasLoadedAll: boolean;
   refresh: () => Promise<void>;
-  loadAllDocuments: () => Promise<void>;
+  loadAllDocuments: (options?: { force?: boolean }) => Promise<void>;
   addDocument: (doc: Partial<StoredDocument>) => Promise<StoredDocument>;
   removeDocument: (id: string) => Promise<void>;
   removeDocuments: (ids: string[]) => Promise<{ deleted: number; storage_cleaned: number }>;
@@ -28,7 +28,7 @@ type DocumentsContextValue = {
   getDocumentById: (id: string) => StoredDocument | undefined;
   clearAll: () => void;
   // folders
-  createFolder: (parentPath: string[], name: string, additionalDepartmentIds?: string[]) => Promise<any>;
+  createFolder: (parentPath: string[], name: string, additionalDepartmentIds?: string[], departmentIdOverride?: string | null) => Promise<any>;
   deleteFolder: (path: string[], mode?: 'move_to_root' | 'move_to_recycle_bin') => Promise<any>;
   listFolders: (path: string[]) => string[][];
   getFolderMetadata: (path: string[]) => { departmentId?: string; departmentName?: string; id?: string; title?: string } | undefined;
@@ -38,7 +38,7 @@ type DocumentsContextValue = {
   linkAsNewVersion: (baseId: string, draft: Partial<StoredDocument>) => Promise<StoredDocument>;
   unlinkFromVersionGroup: (id: string) => Promise<void>;
   setCurrentVersion: (id: string) => Promise<void>;
-  ensureFolderMetadata: (path: string[]) => Promise<void>;
+  ensureFolderMetadata: (path: string[], options?: { force?: boolean }) => Promise<void>;
 };
 
 const DocumentsContext = createContext<DocumentsContextValue | undefined>(undefined);
@@ -55,9 +55,10 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
   const [documents, setDocuments] = useState<StoredDocument[]>([]);
   const [folders, setFolders] = useState<string[][]>([]);
   const [folderMetadata, setFolderMetadata] = useState<Map<string, { departmentId?: string; departmentName?: string; id?: string; title?: string }>>(new Map());
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, hasPermission } = useAuth();
   const { log } = useAudit();
   const { selectedDepartmentId } = useDepartments();
+  const activeDepartmentId = hasPermission('org.manage_members') ? selectedDepartmentId : null;
   const shouldAutoLoad =
     pathname !== '/editor/home' &&
     !(pathname?.startsWith('/editor/')) &&
@@ -100,7 +101,7 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
   const pendingFolderFetchesRef = useRef<Set<string>>(new Set());
   const fetchedFolderPathsRef = useRef<Set<string>>(new Set());
   const lastBootstrapRefreshKeyRef = useRef<string | null>(null);
-  const previousSelectedDepartmentIdRef = useRef<string | undefined>(selectedDepartmentId);
+  const previousSelectedDepartmentIdRef = useRef<string | undefined>(activeDepartmentId ?? undefined);
 
   const refresh = useCallback(async () => {
     const orgId = getOrgId();
@@ -130,9 +131,10 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
 
     try {
       // Include department filter if user has selected a specific department
-      const deptParam = selectedDepartmentId ? `?departmentId=${selectedDepartmentId}` : '';
+      const deptParam = activeDepartmentId ? `?departmentId=${activeDepartmentId}` : '';
       const response = await apiFetch<any>(`/orgs/${orgId}/documents${deptParam}`, {
-        signal: abortControllerRef.current.signal
+        signal: abortControllerRef.current.signal,
+        skipCache: true,
       });
 
       // Handle error responses
@@ -162,7 +164,9 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
       // Merge derived folders from docs with persisted folder placeholders from server (root path)
       let nextFolders = deriveFolders(revived, []);
       try {
-        const root = await apiFetch<{ name: string; fullPath: string[]; departmentId?: string; departmentName?: string; id?: string; title?: string }[]>(`/orgs/${orgId}/folders?path=`);
+        const root = await apiFetch<{ name: string; fullPath: string[]; departmentId?: string; departmentName?: string; id?: string; title?: string }[]>(`/orgs/${orgId}/folders?path=&force=1`, {
+          skipCache: true,
+        });
 
         // Store folder metadata
         setFolderMetadata(prev => {
@@ -205,7 +209,7 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
       loadingRef.current = false;
       abortControllerRef.current = null;
     }
-  }, [selectedDepartmentId]); // Remove deriveFolders dependency to prevent infinite loops
+  }, [activeDepartmentId]); // Remove deriveFolders dependency to prevent infinite loops
 
   // Cleanup effect to abort pending requests on unmount
   useEffect(() => {
@@ -223,9 +227,9 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
     }
   }, [shouldAutoLoad]);
 
-  const loadAllDocuments = useCallback(async () => {
+  const loadAllDocuments = useCallback(async (options: { force?: boolean } = {}) => {
     const orgId = getOrgId();
-    if (!orgId || hasLoadedAll) return;
+    if (!orgId || (hasLoadedAll && !options.force)) return;
 
     // Abort any previous pending request
     if (abortControllerRef.current) {
@@ -241,9 +245,10 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
 
     try {
       // Include department filter when loading all documents
-      const deptParam = selectedDepartmentId ? `?departmentId=${selectedDepartmentId}` : '';
+      const deptParam = activeDepartmentId ? `?departmentId=${activeDepartmentId}` : '';
       const response = await apiFetch<any>(`/orgs/${orgId}/documents${deptParam}`, {
-        signal: abortControllerRef.current.signal
+        signal: abortControllerRef.current.signal,
+        skipCache: options.force,
       });
       const list = Array.isArray(response) ? response : (response && typeof response === 'object' && Array.isArray((response as any).items) ? (response as any).items : []);
       const revived = list.map((d: any) => ({
@@ -257,7 +262,9 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
       // Merge derived folders with persisted root placeholders
       let nextFolders = deriveFolders(revived, []);
       try {
-        const root = await apiFetch<{ name: string; fullPath: string[]; departmentId?: string; departmentName?: string; id?: string; title?: string }[]>(`/orgs/${orgId}/folders?path=`);
+        const root = await apiFetch<{ name: string; fullPath: string[]; departmentId?: string; departmentName?: string; id?: string; title?: string }[]>(`/orgs/${orgId}/folders?path=&force=1`, {
+          skipCache: true,
+        });
 
         // Store folder metadata
         setFolderMetadata(prev => {
@@ -297,7 +304,7 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
       loadingRef.current = false;
       abortControllerRef.current = null;
     }
-  }, [hasLoadedAll, selectedDepartmentId]); // Remove deriveFolders dependency
+  }, [hasLoadedAll, activeDepartmentId]); // Remove deriveFolders dependency
 
   // Load documents on mount - but only once
   useEffect(() => {
@@ -314,7 +321,7 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
     if (!isAuthenticated) return;
     const orgId = getOrgId();
     if (!orgId) return;
-    const refreshKey = `${orgId}|${selectedDepartmentId ?? '__all__'}`;
+    const refreshKey = `${orgId}|${activeDepartmentId ?? '__all__'}`;
     if (
       documents.length === 0 &&
       folders.length === 0 &&
@@ -324,7 +331,7 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
       lastBootstrapRefreshKeyRef.current = refreshKey;
       void refresh();
     }
-  }, [isAuthenticated, documents.length, folders.length, refresh, selectedDepartmentId, shouldAutoLoad]);
+  }, [isAuthenticated, documents.length, folders.length, refresh, activeDepartmentId, shouldAutoLoad]);
 
   // Load documents when org context changes
   useEffect(() => {
@@ -353,9 +360,9 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!shouldAutoLoad) return;
     const previousDepartmentId = previousSelectedDepartmentIdRef.current;
-    if (previousDepartmentId === selectedDepartmentId) return;
+    if (previousDepartmentId === activeDepartmentId) return;
 
-    previousSelectedDepartmentIdRef.current = selectedDepartmentId;
+    previousSelectedDepartmentIdRef.current = activeDepartmentId ?? undefined;
     lastBootstrapRefreshKeyRef.current = null;
     setHasLoadedAll(false);
     setDocuments([]);
@@ -367,7 +374,7 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
     if (!loadingRef.current) {
       void refresh();
     }
-  }, [selectedDepartmentId, refresh, shouldAutoLoad]);
+  }, [activeDepartmentId, refresh, shouldAutoLoad]);
 
   const addDocument = useCallback(async (doc: Partial<StoredDocument>) => {
     const orgId = getOrgId();
@@ -475,19 +482,23 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
     return folderMetadata.get(pathKey);
   }, [folderMetadata]);
 
-  const ensureFolderMetadata = useCallback(async (path: string[] = []) => {
+  const ensureFolderMetadata = useCallback(async (path: string[] = [], options: { force?: boolean } = {}) => {
     const orgId = getOrgId();
     if (!orgId) return;
 
     const key = path.length > 0 ? path.join('/') : '__root__';
-    if (fetchedFolderPathsRef.current.has(key) || pendingFolderFetchesRef.current.has(key)) {
+    if (!options.force && (fetchedFolderPathsRef.current.has(key) || pendingFolderFetchesRef.current.has(key))) {
       return;
     }
 
     pendingFolderFetchesRef.current.add(key);
     try {
-      const query = path.length > 0 ? `?path=${encodeURIComponent(path.join('/'))}` : '?path=';
-      const rows = await apiFetch<{ name: string; fullPath: string[]; departmentId?: string; departmentName?: string; id?: string; title?: string }[]>(`/orgs/${orgId}/folders${query}`);
+      const params = new URLSearchParams();
+      params.set('path', path.length > 0 ? path.join('/') : '');
+      if (options.force) params.set('force', '1');
+      const rows = await apiFetch<{ name: string; fullPath: string[]; departmentId?: string; departmentName?: string; id?: string; title?: string }[]>(`/orgs/${orgId}/folders?${params.toString()}`, {
+        skipCache: options.force,
+      });
 
       // IMPORTANT: Persisted folders can exist without any documents inside them.
       // Our UI folder listing is driven by `folders` state (not just metadata),
@@ -526,20 +537,21 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
     }
   }, [getOrgId]);
 
-  const createFolder = useCallback(async (parentPath: string[], name: string, additionalDepartmentIds: string[] = []) => {
+  const createFolder = useCallback(async (parentPath: string[], name: string, additionalDepartmentIds: string[] = [], departmentIdOverride?: string | null) => {
     const clean = name.trim();
     if (!clean) throw new Error('Folder name cannot be empty');
     const orgId = getOrgId(); if (!orgId) throw new Error('No organization selected');
 
     try {
       const body: any = { parentPath, name: clean };
-      if (selectedDepartmentId) {
-        body.departmentId = selectedDepartmentId;
-        console.log(`Creating folder with explicit department: ${selectedDepartmentId}`);
+      const folderDepartmentId = departmentIdOverride ?? activeDepartmentId;
+      if (folderDepartmentId) {
+        body.departmentId = folderDepartmentId;
+        console.log(`Creating folder with explicit department: ${folderDepartmentId}`);
       } else {
         console.log('Creating folder without explicit department - backend will determine');
       }
-      const extra = Array.from(new Set((additionalDepartmentIds || []).filter(Boolean))).filter((id) => id !== selectedDepartmentId);
+      const extra = Array.from(new Set((additionalDepartmentIds || []).filter(Boolean))).filter((id) => id !== folderDepartmentId);
       if (extra.length > 0) {
         body.additionalDepartmentIds = extra;
       }
@@ -555,14 +567,14 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
       const parentKey = parentPath.length > 0 ? parentPath.join('/') : '__root__';
       fetchedFolderPathsRef.current.delete(parentKey);
       pendingFolderFetchesRef.current.delete(parentKey);
-      await ensureFolderMetadata(parentPath);
+      await ensureFolderMetadata(parentPath, { force: true });
 
       return result;
     } catch (error) {
       console.error('Failed to create folder:', error);
       throw error;
     }
-  }, [getOrgId, selectedDepartmentId, ensureFolderMetadata]);
+  }, [getOrgId, activeDepartmentId, ensureFolderMetadata]);
 
   const deleteFolder = useCallback(async (path: string[], mode: 'move_to_root' | 'move_to_recycle_bin' = 'move_to_root') => {
     const orgId = getOrgId(); if (!orgId) throw new Error('No organization selected');
@@ -599,7 +611,7 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
         }));
       }
 
-      await ensureFolderMetadata(parentPath);
+      await ensureFolderMetadata(parentPath, { force: true });
 
       return result;
     } catch (error) {

@@ -233,6 +233,17 @@ function clearCacheForOrg(orgId: string): void {
   }
 }
 
+function notifyApiCacheInvalidated(orgId: string): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('briefly:api-cache-invalidated', {
+    detail: { orgId },
+  }));
+}
+
+function mutationAffectsOrgReadCaches(path: string): boolean {
+  return /\/orgs\/[^/]+\/(?:documents|folders|uploads|ingestion-jobs)(?:\/|$)/.test(path.split('?')[0] || path);
+}
+
 export function setApiContext(ctx: { orgId?: string }) {
   let changed = false;
   if (typeof ctx.orgId === 'string') {
@@ -408,6 +419,7 @@ async function performFetch<T = any>(
     const orgId = headers['X-Org-Id'] || currentOrgId;
     if (orgId) {
       // Clear cache for endpoints that might be affected by this change
+      let invalidated = false;
       for (const [key] of cache) {
         const needsBust =
           key.startsWith(`${orgId}:`) && (
@@ -416,12 +428,19 @@ async function performFetch<T = any>(
             key.includes('/overrides') ||
             key.includes('/roles') ||
             key.includes('/recycle-bin') ||
-            key.includes('/documents')
+            key.includes('/documents') ||
+            key.includes('/folders') ||
+            key.includes('/folder-contents') ||
+            key.includes('/nav-summary') ||
+            key.includes('/uploads') ||
+            key.includes('/ingestion-jobs')
           );
         if (needsBust) {
           cache.delete(key);
+          invalidated = true;
         }
       }
+      if (invalidated || mutationAffectsOrgReadCaches(path)) notifyApiCacheInvalidated(orgId);
     }
   }
 

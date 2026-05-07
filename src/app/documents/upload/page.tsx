@@ -927,7 +927,8 @@ function UploadContent() {
   const [additionalDepartmentIds, setAdditionalDepartmentIds] = useState<string[]>([]);
   const [isPageVisible, setIsPageVisible] = useState(true);
   const { toast } = useToast();
-  const { departments, selectedDepartmentId, setSelectedDepartmentId } = useDepartments();
+  const { departments, selectedDepartmentId: libraryDepartmentId } = useDepartments();
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState<string | null>(null);
   const router = useRouter();
   const { categories } = useCategories();
   const { getCategoriesForDepartment } = useUserDepartmentCategories();
@@ -1118,12 +1119,12 @@ function UploadContent() {
       const parent = segs.slice(0, -1);
       const name = segs[segs.length - 1];
       try {
-        await createFolder(parent, name, effectiveAdditionalDepartmentIds);
+        await createFolder(parent, name, effectiveAdditionalDepartmentIds, selectedDepartmentId);
       } catch {
         // Folder likely exists; ignore errors
       }
     }
-  }, [createFolder, effectiveAdditionalDepartmentIds]);
+  }, [createFolder, effectiveAdditionalDepartmentIds, selectedDepartmentId]);
   const enqueueFiles = useCallback(async (items: { file: File; folderPathOverride?: string[] }[]) => {
     if (items.length === 0) return { added: 0, skipped: [] as { path: string; reason: string }[] };
     const MAX_FILES = BULK_UPLOAD_LIMIT;
@@ -1255,7 +1256,7 @@ function UploadContent() {
         setLastBulkSummary({ count: uploadedCount, path: importedPath });
         setRecentSavePath(importedPath);
         try {
-          await loadAllDocuments();
+          await loadAllDocuments({ force: true });
         } catch (error) {
           console.warn('Failed to refresh documents after ZIP import:', error);
         }
@@ -1311,7 +1312,7 @@ function UploadContent() {
                 setLastBulkSummary({ count: recoveredCount, path: basePath });
                 setRecentSavePath(basePath);
                 try {
-                  await loadAllDocuments();
+                  await loadAllDocuments({ force: true });
                 } catch (refreshError) {
                   console.warn('Failed to refresh documents after ZIP timeout recovery:', refreshError);
                 }
@@ -1489,7 +1490,7 @@ function UploadContent() {
 
       // ── Single document list refresh after all saves complete ──
       try {
-        await loadAllDocuments();
+        await loadAllDocuments({ force: true });
       } catch (e) {
         console.warn('Failed to refresh documents after bulk save:', e);
       }
@@ -1522,7 +1523,7 @@ function UploadContent() {
     if (!result) return;
     setRecentSavePath(result.path);
     // Refresh document list once after single save
-    try { await loadAllDocuments(); } catch (e) { console.warn('Failed to refresh after save', e); }
+    try { await loadAllDocuments({ force: true }); } catch (e) { console.warn('Failed to refresh after save', e); }
     toast({
       title: 'Document saved',
       description: result.hasMoreReady
@@ -1643,12 +1644,21 @@ function UploadContent() {
     return <AccessDenied message="You don't have permission to access the upload page." />;
   }
 
-  // Auto-select the first available department when none is selected (legacy behavior).
+  // Auto-select the upload target team without mutating the global library filter.
   useEffect(() => {
-    if (!selectedDepartmentId && departments.length > 0) {
-      setSelectedDepartmentId(departments[0].id);
+    const departmentIds = new Set((departments || []).map((dept) => dept.id));
+    if (selectedDepartmentId && departmentIds.has(selectedDepartmentId)) {
+      return;
     }
-  }, [departments, selectedDepartmentId, setSelectedDepartmentId]);
+    if (departments.length === 0) {
+      if (selectedDepartmentId) setSelectedDepartmentId(null);
+      return;
+    }
+    const nextDepartmentId = libraryDepartmentId && departmentIds.has(libraryDepartmentId)
+      ? libraryDepartmentId
+      : departments[0].id;
+    setSelectedDepartmentId(nextDepartmentId);
+  }, [departments, libraryDepartmentId, selectedDepartmentId]);
 
   useEffect(() => {
     const p = searchParams?.get('path');
@@ -3929,8 +3939,8 @@ function UploadContent() {
           setFolderPath(path);
         }}
         onCreateFolder={async (parentPath, name) => {
-          await createFolder(parentPath, name, effectiveAdditionalDepartmentIds);
-          await loadAllDocuments(); // Use loadAllDocuments to ensure folders are loaded
+          await createFolder(parentPath, name, effectiveAdditionalDepartmentIds, selectedDepartmentId);
+          await loadAllDocuments({ force: true }); // Use loadAllDocuments to ensure folders are loaded
         }}
         onLoadChildren={loadFolderChildren}
         loading={folderPickerLoading}

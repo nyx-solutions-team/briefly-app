@@ -160,6 +160,9 @@ function DocumentsPageContent() {
   const canUpdateDocuments = hasPermission('documents.update');
   const canDeleteDocuments = hasPermission('documents.delete');
   const canMoveDocuments = hasPermission('documents.move') || canUpdateDocuments;
+  const isAdmin = hasPermission('org.manage_members');
+  const canShare = hasPermission('documents.share');
+  const activeDepartmentId = isAdmin ? selectedDepartmentId : null;
 
   // Prevent loading documents if user doesn't have access
   React.useEffect(() => {
@@ -270,7 +273,8 @@ function DocumentsPageContent() {
 
     const params = new URLSearchParams();
     if (targetPathKey) params.set('path', targetPathKey);
-    if (selectedDepartmentId) params.set('departmentId', selectedDepartmentId);
+    if (activeDepartmentId) params.set('departmentId', activeDepartmentId);
+    params.set('force', '1');
     const qs = params.toString();
 
     try {
@@ -312,7 +316,7 @@ function DocumentsPageContent() {
       if (error?.name === 'AbortError') return;
       setFolderContents(null);
     }
-  }, [authLoading, hasAccess, pathKey, query, selectedDepartmentId]);
+  }, [authLoading, hasAccess, pathKey, query, activeDepartmentId]);
 
   useEffect(() => {
     void reloadFolderContents(pathKey);
@@ -343,7 +347,7 @@ function DocumentsPageContent() {
 
     const params = new URLSearchParams();
     params.set('q', q);
-    if (selectedDepartmentId) params.set('departmentId', selectedDepartmentId);
+    if (activeDepartmentId) params.set('departmentId', activeDepartmentId);
     if (field && field !== 'all') params.set('field', field);
 
     (async () => {
@@ -372,7 +376,7 @@ function DocumentsPageContent() {
     return () => {
       controller.abort();
     };
-  }, [query, field, selectedDepartmentId]);
+  }, [query, field, activeDepartmentId]);
 
   const folderMetadataMap = useMemo(() => {
     if (!folderContents || folderContents.pathKey !== pathKey) return null;
@@ -465,7 +469,7 @@ function DocumentsPageContent() {
   const mobileFilterCount =
     (query.trim() ? 1 : 0) +
     (field !== 'all' ? 1 : 0) +
-    (selectedDepartmentId ? 1 : 0);
+    (activeDepartmentId ? 1 : 0);
 
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -493,9 +497,6 @@ function DocumentsPageContent() {
   const [revokingShareId, setRevokingShareId] = useState<string | null>(null);
   const [folderAccess, setFolderAccess] = useState<Record<string, string[]>>({});
   const [externalFolderShares, setExternalFolderShares] = useState<Record<string, { count: number; requiresPassword: boolean }>>({});
-  const isAdmin = hasPermission('org.manage_members');
-  const canShare = hasPermission('documents.share');
-
   // Track which folder paths have been fetched to avoid re-fetching
   const fetchedFolderPathsRef = useRef<Set<string>>(new Set());
   const fetchedExternalFolderPathsRef = useRef<Set<string>>(new Set());

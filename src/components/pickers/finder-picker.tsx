@@ -221,6 +221,22 @@ export function FinderPicker({
   const loadFoldersRef = useRef(folderExplorer.load);
   const docsCacheRef = useRef<Map<string, StoredDocument[]>>(new Map());
   const folderContentsCacheRef = useRef<Map<string, { folders: string[][]; docs: StoredDocument[] }>>(new Map());
+
+  useEffect(() => {
+    docsCacheRef.current.clear();
+    folderContentsCacheRef.current.clear();
+  }, [orgId]);
+
+  useEffect(() => {
+    const handleInvalidated = (event: Event) => {
+      const detailOrgId = (event as CustomEvent<{ orgId?: string }>).detail?.orgId;
+      if (detailOrgId && detailOrgId !== orgId) return;
+      docsCacheRef.current.clear();
+      folderContentsCacheRef.current.clear();
+    };
+    window.addEventListener('briefly:api-cache-invalidated', handleInvalidated);
+    return () => window.removeEventListener('briefly:api-cache-invalidated', handleInvalidated);
+  }, [orgId]);
   const normalizedDocTypeFilter = useMemo(
     () =>
       Array.isArray(docTypeFilter)
@@ -354,6 +370,7 @@ export function FinderPicker({
     try {
       const params = new URLSearchParams();
       params.set('limit', String(PATH_DOCS_LIMIT));
+      params.set('force', '1');
       if (targetPath.length > 0) params.set('path', targetPath.join('/'));
 
       const data = await apiFetch<{ documents?: any[] }>(
@@ -641,6 +658,7 @@ export function FinderPicker({
 
       const params = new URLSearchParams();
       params.set('limit', String(PATH_DOCS_LIMIT));
+      params.set('force', '1');
       if (targetPath.length > 0) params.set('path', targetPath.join('/'));
 
       const data = await apiFetch<FolderContentsResponse>(

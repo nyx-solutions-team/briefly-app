@@ -172,14 +172,24 @@ export default function UploadDialog({ onNewDocument }: { onNewDocument: (doc: S
   const { hasPermission } = useAuth();
   const isAdmin = hasPermission('org.manage_members');
   const { folders, createFolder } = useDocuments();
-  const { departments, selectedDepartmentId, setSelectedDepartmentId } = useDepartments();
+  const { departments, selectedDepartmentId: libraryDepartmentId } = useDepartments();
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState<string | null>(null);
 
-  // Auto-select the first available department when none is selected (legacy behavior).
+  // Auto-select the upload target department without mutating the global library filter.
   useEffect(() => {
-    if (!selectedDepartmentId && departments.length > 0) {
-      setSelectedDepartmentId(departments[0].id);
+    const departmentIds = new Set((departments || []).map((dept) => dept.id));
+    if (selectedDepartmentId && departmentIds.has(selectedDepartmentId)) {
+      return;
     }
-  }, [departments, selectedDepartmentId, setSelectedDepartmentId]);
+    if (departments.length === 0) {
+      if (selectedDepartmentId) setSelectedDepartmentId(null);
+      return;
+    }
+    const nextDepartmentId = libraryDepartmentId && departmentIds.has(libraryDepartmentId)
+      ? libraryDepartmentId
+      : departments[0].id;
+    setSelectedDepartmentId(nextDepartmentId);
+  }, [departments, libraryDepartmentId, selectedDepartmentId]);
 
   const ALLOWED_EXTENSIONS = new Set(['pdf', 'txt', 'md', 'markdown', 'jpg', 'jpeg', 'png', 'csv', 'xls', 'xlsx', 'docx', 'doc', 'dwg', 'dxf']);
 
@@ -296,7 +306,7 @@ export default function UploadDialog({ onNewDocument }: { onNewDocument: (doc: S
           const existing = folders.find(f => JSON.stringify(f) === JSON.stringify(slice));
           if (!existing) {
             console.log(`🔍 Folder "${folderName}" doesn't exist, creating...`);
-            const result = await createFolder(parentPath, folderName);
+            const result = await createFolder(parentPath, folderName, [], selectedDepartmentId);
             console.log(`🔍 Folder creation result:`, result);
           } else {
             console.log(`🔍 Folder "${folderName}" already exists, skipping creation`);
