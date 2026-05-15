@@ -4633,7 +4633,7 @@ export default function TestAgentEnhancedPage() {
       typeof overrideOptions?.deepResearchEnabled === 'boolean'
         ? overrideOptions.deepResearchEnabled
         : deepResearchEnabled;
-    const specializedMode = typeof overrideOptions?.specializedMode === 'string'
+    const requestedSpecializedMode: SpecializedChatMode | null = typeof overrideOptions?.specializedMode === 'string'
       ? overrideOptions.specializedMode
       : activeSpecializedMode;
     const attachedDocsOverride = Array.isArray(overrideOptions?.attachedDocsOverride)
@@ -4650,6 +4650,24 @@ export default function TestAgentEnhancedPage() {
     const normalizedPinnedDocIds = attachedDocsOverride.length > 0
       ? attachedDocsOverride.map((doc) => doc.id).filter(Boolean).slice(0, MAX_PINNED_DOCS)
       : (pinnedDocIds || []).filter(Boolean).slice(0, MAX_PINNED_DOCS);
+    const pinnedDocsAreSpreadsheets =
+      normalizedPinnedDocIds.length > 0 &&
+      normalizedPinnedDocIds.length <= MAX_SPREADSHEET_PINNED_DOCS &&
+      normalizedPinnedDocIds.every((docId) => {
+        const attached = attachedDocsOverride.find((doc) => doc.id === docId);
+        const existingDoc = allDocs.find((doc) => String(doc.id) === docId);
+        return isSpreadsheetDocument(existingDoc || attached || resolveAttachedDocMeta(docId));
+      });
+    const selectedDocumentIsSpreadsheet =
+      effectiveContext.type === 'document' &&
+      Boolean(effectiveContext.id) &&
+      isSpreadsheetDocument(
+        allDocs.find((doc) => String(doc.id) === String(effectiveContext.id)) ||
+        { filename: effectiveContext.name || '' }
+      );
+    const specializedMode: SpecializedChatMode | null =
+      requestedSpecializedMode ||
+      (pinnedDocsAreSpreadsheets || selectedDocumentIsSpreadsheet ? 'spreadsheet_analyst' : null);
     const scopeType =
       normalizedPinnedDocIds.length > 0
         ? 'org'
@@ -4703,7 +4721,10 @@ export default function TestAgentEnhancedPage() {
     try {
       // Determine endpoint based on context using the new folder resolution system.
       // `/chatnew` can optionally override endpoint via NEXT_PUBLIC_CHATNEW_ENDPOINT.
-      const endpointContext: ChatContext = normalizedPinnedDocIds.length > 0 ? { type: 'org' } : effectiveContext;
+      const endpointContext: ChatContext =
+        normalizedPinnedDocIds.length > 0 || specializedMode === 'spreadsheet_analyst'
+          ? { type: 'org' }
+          : effectiveContext;
       const { orgId: apiOrgIdForTurn } = getApiContext();
       const useChatGatewayForTurn =
         isChatNewRoute &&
@@ -7213,6 +7234,7 @@ export default function TestAgentEnhancedPage() {
             maxDocs={fileNavigatorMode === 'spreadsheet' ? MAX_SPREADSHEET_PINNED_DOCS : MAX_PINNED_DOCS}
             docTypeFilter={fileNavigatorMode === 'spreadsheet' ? [...SPREADSHEET_FILE_PICKER_DOC_TYPES] : undefined}
             initialSelectedDocIds={fileNavigatorMode === 'spreadsheet' ? [] : pinnedDocIds}
+            allowSingleFileSelection={fileNavigatorMode === 'general'}
             onConfirm={({ docs }) => {
               const activeFileNavigatorMode = fileNavigatorMode;
               setFileNavigatorMode(null);

@@ -187,6 +187,7 @@ export function FinderPicker({
   initialSelectedDocIds = EMPTY_DOC_IDS,
   docSource = 'documents',
   docTypeFilter,
+  allowSingleFileSelection = false,
   onConfirm,
 }: {
   open: boolean;
@@ -197,16 +198,21 @@ export function FinderPicker({
   initialSelectedDocIds?: string[];
   docSource?: DocSource;
   docTypeFilter?: string[];
+  allowSingleFileSelection?: boolean;
   onConfirm: (payload: { path?: string[]; docs?: StoredDocument[] }) => void;
 }) {
   const { orgId } = getApiContext();
   const folderExplorer = useFolders();
+  const baseMaxSelectable = Math.max(1, maxDocs);
+  const canUseSingleFileSelection = mode === 'doc' && allowSingleFileSelection && baseMaxSelectable > 1;
+  const [singleFileSelection, setSingleFileSelection] = useState(false);
+  const maxSelectable = singleFileSelection && canUseSingleFileSelection ? 1 : baseMaxSelectable;
 
   const [query, setQuery] = useState('');
   const [viewingPath, setViewingPath] = useState<string[]>(normalizePath(initialPath));
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>(
-    (initialSelectedDocIds || []).filter(Boolean).slice(0, Math.max(1, maxDocs))
+    (initialSelectedDocIds || []).filter(Boolean).slice(0, baseMaxSelectable)
   );
   const [listFilter, setListFilter] = useState<DocListFilter>('all');
   const [pathDocuments, setPathDocuments] = useState<StoredDocument[]>([]);
@@ -300,12 +306,13 @@ export function FinderPicker({
     const normalizedPath = normalizePath(initialPath);
     const normalizedSelectedDocIds = (initialSelectedDocIds || [])
       .filter(Boolean)
-      .slice(0, Math.max(1, maxDocs));
+      .slice(0, baseMaxSelectable);
 
     setQuery('');
     setSelectedIndex(0);
     setSearchDocuments([]);
     setListFilter('all');
+    setSingleFileSelection(false);
     setViewingPath((prev) => (sameStringArray(prev, normalizedPath) ? prev : normalizedPath));
     setSelectedDocIds((prev) =>
       sameStringArray(prev, normalizedSelectedDocIds) ? prev : normalizedSelectedDocIds
@@ -315,7 +322,16 @@ export function FinderPicker({
       void loadFoldersRef.current([]);
       void loadFoldersRef.current(normalizedPath);
     }
-  }, [open, initialPath, initialSelectedDocIds, maxDocs, mode, docSource]);
+  }, [open, initialPath, initialSelectedDocIds, baseMaxSelectable, mode, docSource]);
+
+  useEffect(() => {
+    if (!canUseSingleFileSelection) {
+      if (singleFileSelection) setSingleFileSelection(false);
+      return;
+    }
+    if (!singleFileSelection) return;
+    setSelectedDocIds((prev) => (prev.length <= 1 ? prev : prev.slice(0, 1)));
+  }, [canUseSingleFileSelection, singleFileSelection]);
 
   useEffect(() => {
     if (!open || mode !== 'doc' || docSource !== 'editor') return;
@@ -644,7 +660,6 @@ export function FinderPicker({
     () => selectedDocIds.map((id) => selectedDocsById.get(id) || visibleDocsById.get(id)).filter(Boolean) as StoredDocument[],
     [selectedDocIds, selectedDocsById, visibleDocsById]
   );
-  const maxSelectable = Math.max(1, maxDocs);
 
   const loadFolderContents = React.useCallback(
     async (targetPath: string[]) => {
@@ -782,11 +797,12 @@ export function FinderPicker({
       }
       setSelectedDocIds((prev) => {
         if (prev.includes(docId)) return prev.filter((id) => id !== docId);
-        if (prev.length >= Math.max(1, maxDocs)) return prev;
+        if (singleFileSelection && canUseSingleFileSelection) return [docId];
+        if (prev.length >= maxSelectable) return prev;
         return [...prev, docId];
       });
     },
-    [maxDocs]
+    [canUseSingleFileSelection, maxSelectable, singleFileSelection]
   );
 
   useEffect(() => {
@@ -910,7 +926,7 @@ export function FinderPicker({
         </div>
 
         {mode === 'doc' ? (
-          <div className="flex items-center gap-2 px-4 py-2 border-b border-border/30 bg-muted/10">
+          <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-border/30 bg-muted/10">
             <Button
               type="button"
               variant={listFilter === 'all' ? 'secondary' : 'ghost'}
@@ -938,6 +954,28 @@ export function FinderPicker({
             >
               Files ({availableDocItems.length})
             </Button>
+            {canUseSingleFileSelection ? (
+              <div className="ml-auto inline-flex items-center rounded-md border border-border/50 bg-background p-0.5">
+                <Button
+                  type="button"
+                  variant={!singleFileSelection ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="h-6 px-2 text-[11px]"
+                  onClick={() => setSingleFileSelection(false)}
+                >
+                  Multiple
+                </Button>
+                <Button
+                  type="button"
+                  variant={singleFileSelection ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="h-6 px-2 text-[11px]"
+                  onClick={() => setSingleFileSelection(true)}
+                >
+                  One file
+                </Button>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -1069,7 +1107,7 @@ export function FinderPicker({
               <>Selected: {viewingPath.length ? compactText(`/${viewingPath.join('/')}`, 36) : 'Root'}</>
             ) : (
               <>
-                Selected {selectedDocIds.length}/{maxSelectable} files
+                Selected {selectedDocIds.length}/{maxSelectable} file{maxSelectable === 1 ? '' : 's'}
                 {selectedSummary !== 'None' ? ` • ${selectedSummary}${selectedDocIds.length > 1 ? '…' : ''}` : ''}
               </>
             )}

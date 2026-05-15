@@ -502,11 +502,37 @@ const getColumnIndexFromRef = (ref: string) => {
   return Math.max(0, index - 1);
 };
 
-const extractNodeText = (node: Element | null | undefined) => {
+type XmlElement = globalThis.Element;
+type XmlRoot = globalThis.Document | XmlElement;
+
+const extractNodeText = (node: XmlElement | null | undefined) => {
   if (!node) return '';
   return Array.from(node.childNodes)
     .map((child: any) => child?.textContent || '')
     .join('');
+};
+
+const getElementsByLocalName = (root: XmlRoot, localName: string): XmlElement[] =>
+  Array.from(root.getElementsByTagName('*')).filter((element) => element.localName === localName);
+
+const getFirstElementByLocalName = (root: XmlRoot, localName: string): XmlElement | undefined =>
+  getElementsByLocalName(root, localName)[0];
+
+const resolveWorkbookRelationshipTarget = (target: string) => {
+  const cleaned = String(target || '').replace(/^\/+/, '');
+  if (!cleaned) return '';
+  if (cleaned.startsWith('xl/')) return cleaned;
+
+  const parts = ['xl'];
+  for (const part of cleaned.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return parts.join('/');
 };
 
 const parseXlsxPreview = async (file: File): Promise<TabularPreviewPayload> => {
@@ -526,9 +552,9 @@ const parseXlsxPreview = async (file: File): Promise<TabularPreviewPayload> => {
   const sharedStrings: string[] = [];
   if (sharedStringsXml) {
     const sharedDoc = parser.parseFromString(sharedStringsXml, 'application/xml');
-    const siNodes = Array.from(sharedDoc.getElementsByTagName('si'));
+    const siNodes = getElementsByLocalName(sharedDoc, 'si');
     for (const siNode of siNodes) {
-      const richTextNodes = Array.from(siNode.getElementsByTagName('t'));
+      const richTextNodes = getElementsByLocalName(siNode, 't');
       if (richTextNodes.length > 0) {
         sharedStrings.push(richTextNodes.map((entry) => entry.textContent || '').join(''));
       } else {
@@ -538,14 +564,14 @@ const parseXlsxPreview = async (file: File): Promise<TabularPreviewPayload> => {
   }
 
   const relById = new Map<string, string>();
-  const relationNodes = Array.from(workbookRelsDoc.getElementsByTagName('Relationship'));
+  const relationNodes = getElementsByLocalName(workbookRelsDoc, 'Relationship');
   for (const relation of relationNodes) {
     const id = relation.getAttribute('Id') || '';
     const target = relation.getAttribute('Target') || '';
     if (id && target) relById.set(id, target);
   }
 
-  const sheetNodes = Array.from(workbookDoc.getElementsByTagName('sheet'));
+  const sheetNodes = getElementsByLocalName(workbookDoc, 'sheet');
   const sheets: TabularSheetPreview[] = [];
   let totalRows = 0;
 
@@ -555,29 +581,26 @@ const parseXlsxPreview = async (file: File): Promise<TabularPreviewPayload> => {
     const rawTarget = relById.get(relId);
     if (!rawTarget) continue;
 
-    const targetPath = rawTarget.startsWith('/')
-      ? rawTarget.replace(/^\/+/, '')
-      : `xl/${rawTarget.replace(/^\.?\/+/, '')}`;
-
+    const targetPath = resolveWorkbookRelationshipTarget(rawTarget);
     const worksheetXml = await zip.file(targetPath)?.async('string');
     if (!worksheetXml) continue;
 
     const worksheetDoc = parser.parseFromString(worksheetXml, 'application/xml');
-    const rowNodes = Array.from(worksheetDoc.getElementsByTagName('row'));
+    const rowNodes = getElementsByLocalName(worksheetDoc, 'row');
 
     const parsedRows: string[][] = [];
     let maxCols = 0;
 
     for (const rowNode of rowNodes) {
-      const cellNodes = Array.from(rowNode.getElementsByTagName('c'));
+      const cellNodes = getElementsByLocalName(rowNode, 'c');
       if (!cellNodes.length) continue;
 
       const sparseRow: string[] = [];
       for (const cellNode of cellNodes) {
         const ref = cellNode.getAttribute('r') || '';
         const type = (cellNode.getAttribute('t') || '').toLowerCase();
-        const valueNode = cellNode.getElementsByTagName('v')[0];
-        const inlineNode = cellNode.getElementsByTagName('is')[0];
+        const valueNode = getFirstElementByLocalName(cellNode, 'v');
+        const inlineNode = getFirstElementByLocalName(cellNode, 'is');
         const rawValue = valueNode?.textContent || '';
         let value = '';
 
@@ -1891,6 +1914,8 @@ function UploadContent() {
     ocrText: string;
     metadata: any;
     geminiFile?: { fileId: string; fileUri: string; mimeType?: string };
+    tabular?: TabularPreviewPayload | null;
+    fileType?: 'csv' | 'excel' | string | null;
   };
 
   type AnalyzeJobQueuedResponse = {
@@ -1911,17 +1936,39 @@ function UploadContent() {
   };
 
   type IngestionJobRecord = {
+    id?: string;
+    jobId?: string;
     doc_id?: string;
     docId?: string;
     status?: string;
+    last_error?: string;
     failure_reason?: string;
     extraction_key?: string;
     extracted_metadata?: Record<string, any> | null;
+    job?: any;
+    hasJob?: boolean;
+  };
+
+  const normalizeIngestionJobRecord = (payload: any): IngestionJobRecord | null => {
+    if (!payload) return null;
+    if (payload.hasJob === false || payload.job === null) return null;
+    const job = payload.job && typeof payload.job === 'object' ? payload.job : payload;
+    return {
+      ...payload,
+      ...job,
+      id: job.id || payload.id || payload.jobId,
+      jobId: payload.jobId || job.id || payload.id,
+      doc_id: job.doc_id || payload.doc_id || payload.docId,
+      docId: job.doc_id || payload.docId || payload.doc_id,
+      status: job.status || payload.status,
+      failure_reason: job.last_error || payload.failure_reason || payload.last_error,
+    };
   };
 
   const fetchIngestionJobForDoc = async (orgId: string, docId: string): Promise<IngestionJobRecord | null> => {
     try {
-      return await apiFetch<IngestionJobRecord>(`/orgs/${orgId}/ingestion-jobs/${docId}`, { skipCache: true });
+      const payload = await apiFetch<any>(`/orgs/${orgId}/documents/${docId}/ingestion-v2`, { skipCache: true });
+      return normalizeIngestionJobRecord(payload);
     } catch (error: any) {
       if (error?.status !== 404) {
         console.warn('Failed to load ingestion job', error);
@@ -1943,11 +1990,11 @@ function UploadContent() {
       }
 
       const status = String(job.status || '').toLowerCase();
-      if (status === 'needs_review') {
+      if (status === 'needs_review' || status === 'review_ready' || status === 'accepted' || status === 'completed') {
         return job;
       }
       if (status === 'failed') {
-        const err: any = new Error(job.failure_reason || 'Ingestion job failed');
+        const err: any = new Error(job.failure_reason || job.last_error || 'Ingestion job failed');
         err.job = job;
         throw err;
       }
@@ -2111,22 +2158,10 @@ function UploadContent() {
       });
       ingestionJob = finalizeResp?.ingestionJob || ingestionJob;
 
-      // Always start V2 ingestion job so /ingestion-jobs/:docId works correctly
-      apiFetch(`/orgs/${orgId}/ingestion-v2/start`, {
-        method: 'POST',
-        body: {
-          docId,
-          storageKey,
-          mimeType: item.file.type || 'application/octet-stream',
-        },
-      }).catch((error: any) => {
-        console.warn('Failed to start ingestion v2 job', error);
-      });
-
       setQueue(prev => prev.map((q, i) => i === index ? { ...q, docId, ingestionJob, ingestionStatus: ingestionJob?.status || 'pending', storageKey } : q));
       toast({
-        title: 'Processing in background',
-        description: 'Document queued for ingestion. You can leave this page while AI completes.',
+        title: 'Analyzing document',
+        description: 'AI is extracting metadata before indexing starts.',
       });
 
       // 3) Ask backend AI to analyze from signed Storage URL
@@ -2177,8 +2212,18 @@ function UploadContent() {
 
       let ingestionReadyJob = ingestionJob;
       if (docId) {
-        setQueue(prev => prev.map((q, i) => i === index ? { ...q, note: 'Finishing ingestion…', ingestionStatus: ingestionJob?.status || 'processing' } : q));
+        setQueue(prev => prev.map((q, i) => i === index ? { ...q, note: 'Starting ingestion…', ingestionStatus: 'pending' } : q));
         try {
+          const startedJob = await apiFetch<any>(`/orgs/${orgId}/ingestion-v2/start`, {
+            method: 'POST',
+            body: {
+              docId,
+              storageKey,
+              mimeType: item.file.type || 'application/octet-stream',
+            },
+          });
+          ingestionJob = normalizeIngestionJobRecord(startedJob) || ingestionJob;
+          setQueue(prev => prev.map((q, i) => i === index ? { ...q, ingestionJob, note: 'Finishing ingestion…', ingestionStatus: ingestionJob?.status || 'processing' } : q));
           ingestionReadyJob = await waitForIngestionJobReady(orgId, docId, ingestionJob);
         } catch (ingestionError: any) {
           const message = ingestionError?.message || 'Ingestion job failed';
@@ -3440,12 +3485,12 @@ function UploadContent() {
                           const targetFolderPath = item.folderPathOverride && item.folderPathOverride.length > 0
                             ? item.folderPathOverride
                             : folderPath;
+                          const isLocalTabularFile = isCsvFile(item.file) || isXlsxFile(item.file);
+                          const useLocalTabularPreview = isLocalTabularFile && Boolean(item.previewUrl) && !item.prefilledFromQueue;
                           const shouldUseRemotePreview = Boolean(item.docId) && (
                             !item.previewUrl ||
-                            item.prefilledFromQueue ||
-                            isExcelFile(item.file)
-                          );
-                          const useLocalTabularPreview = !shouldUseRemotePreview && (isCsvFile(item.file) || isXlsxFile(item.file));
+                            item.prefilledFromQueue
+                          ) && !useLocalTabularPreview;
 
                           return (
                             <div className="space-y-6">
