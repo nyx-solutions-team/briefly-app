@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useEffect, useState } from 'react';
+import { normalizePreviewLineBreaks } from '@/lib/template-preview';
 
 /**
  * HtmlDocumentPreview — renders a Jinja2/HTML template with document data.
@@ -182,7 +183,7 @@ function sanitizePreviewHtml(html: string): string {
     out = out.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
     // Strip javascript: href/src payloads for defense-in-depth in sandboxed preview.
     out = out.replace(/\s(href|src)\s*=\s*(['"])\s*javascript:[\s\S]*?\2/gi, '');
-    return out;
+    return normalizePreviewLineBreaks(out);
 }
 
 function inferTemplateType(data: Record<string, any>): string {

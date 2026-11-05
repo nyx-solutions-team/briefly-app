@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 
 import { useAuth } from '@/hooks/use-auth';
 import { Button } from '@/components/ui/button';
-import { Loader2, ArrowRight, Lock, Mail } from 'lucide-react';
+import { Loader2, ArrowRight, Lock, Mail, Eye, EyeOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export default function SignInPage() {
@@ -13,6 +13,7 @@ export default function SignInPage() {
     const { signIn } = useAuth();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState('');
     const [isSigningIn, setIsSigningIn] = useState(false);
 
@@ -227,12 +228,14 @@ export default function SignInPage() {
                             {/* Password Input */}
                             <div className="space-y-1.5 group">
                                 <div className="flex justify-between items-center">
-                                    <label className="text-[13px] font-semibold text-gray-700">Password</label>
+                                    <label htmlFor="password" className="text-[13px] font-semibold text-gray-700">Password</label>
                                     <a href="#" className="text-[12px] text-amber-600 hover:text-amber-700 font-medium transition-colors">Forgot password?</a>
                                 </div>
                                 <div className="relative">
                                     <input
-                                        type="password"
+                                        id="password"
+                                        type={showPassword ? "text" : "password"}
+                                        autoComplete="current-password"
                                         value={password}
                                         onChange={(e) => setPassword(e.target.value)}
                                         className="w-full h-11 pl-4 pr-10 bg-gray-50/50 border border-gray-200 rounded-xl text-[14px] text-gray-900 placeholder:text-gray-400 focus:bg-white focus:border-amber-500/50 focus:ring-4 focus:ring-amber-500/10 outline-none transition-all shadow-sm group-hover:border-gray-300"
@@ -240,9 +243,17 @@ export default function SignInPage() {
                                         required
                                         disabled={isSigningIn}
                                     />
-                                    <div className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPassword((visible) => !visible)}
+                                        aria-label={showPassword ? "Hide password" : "Show password"}
+                                        aria-controls="password"
+                                        aria-pressed={showPassword}
+                                        disabled={isSigningIn}
+                                        className="absolute right-1 top-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 disabled:opacity-50"
+                                    >
+                                        {showPassword ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
+                                    </button>
                                 </div>
                             </div>
                         </div>
