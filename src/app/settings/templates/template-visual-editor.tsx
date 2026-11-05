@@ -52,6 +52,7 @@ import {
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { getTableColumnTemplate } from "@/lib/template-table-field";
 
 export type BlockType =
   | "header"
@@ -1395,20 +1396,6 @@ function resolveItems(rawPath: any, data: Record<string, any>) {
   if (Array.isArray(direct)) return direct;
   const resolved = resolveExpression(String(rawPath || "items"), data);
   return Array.isArray(resolved) ? resolved : [];
-}
-
-function getTableColumnTemplate(field: any, itemsPath: any) {
-  const raw = String(field || "").trim();
-  if (!raw) return "";
-  if (raw.includes("{{") || raw.includes("{%")) return raw;
-
-  const collection = normalizeExpressionPath(String(itemsPath || "items")) || "items";
-  if (raw === "item" || raw.startsWith("item.")) return `{{ ${raw} }}`;
-  if (raw.startsWith(`${collection}[].`)) return `{{ item.${raw.slice(collection.length + 3)} }}`;
-  if (raw.startsWith(`${collection}.`)) return `{{ item.${raw.slice(collection.length + 1)} }}`;
-  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw)) return `{{ item.${raw} }}`;
-  if (/^[A-Za-z_][A-Za-z0-9_.[\]]*$/.test(raw)) return `{{ ${raw} }}`;
-  return raw;
 }
 
 function looksLikeDataPath(value: any) {

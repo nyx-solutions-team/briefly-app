@@ -7,7 +7,7 @@ import { useDepartments } from './use-departments';
 import { useAuth } from './use-auth';
 import type { StoredDocument } from '@/lib/types';
 import { apiFetch, getApiContext, onApiContextChange } from '@/lib/api';
-import { parseFlexibleDate } from '@/lib/utils';
+import { normalizeDocumentDate } from '@/lib/document-date';
 
 // Backend-powered documents provider with a backward-compatible API
 
@@ -440,13 +440,7 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
     put('sender', (patch as any).sender);
     put('receiver', (patch as any).receiver);
     if ((patch as any).documentDate !== undefined) {
-      const raw = (patch as any).documentDate as string;
-      const dt = parseFlexibleDate(raw);
-      if (dt) {
-        // yyyy-MM-dd
-        const iso = dt.toISOString().slice(0, 10);
-        body.document_date = iso;
-      }
+      body.document_date = normalizeDocumentDate((patch as any).documentDate);
     }
     if (Array.isArray((patch as any).folderPath)) body.folder_path = (patch as any).folderPath;
     if ((patch as any).isCurrentVersion !== undefined) body.is_current_version = (patch as any).isCurrentVersion;
@@ -459,6 +453,11 @@ export function DocumentsProvider({ children }: { children: React.ReactNode }) {
     const updated: any = await apiFetch(`/orgs/${orgId}/documents/${id}`, { method: 'PATCH', body });
     const mappedUpdated = {
       ...updated,
+      ...(Object.prototype.hasOwnProperty.call(updated, 'documentDate')
+        ? { documentDate: updated.documentDate }
+        : Object.prototype.hasOwnProperty.call(updated, 'document_date')
+          ? { documentDate: updated.document_date }
+          : {}),
       uploadedAt: new Date(updated.uploadedAt || updated.uploaded_at || Date.now()),
     };
     setDocuments(prev => prev.map(d => d.id === id ? ({ ...d, ...mappedUpdated } as any) : d));

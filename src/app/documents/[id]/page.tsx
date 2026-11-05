@@ -1,4 +1,6 @@
 "use client";
+import { PublicShareLinkActions } from '@/components/public-share-link-actions';
+import { getPublicShareOrigin, getPublicShareUrl, rememberPublicShare, forgetPublicShare, type PublicShareReference } from '@/lib/public-share-links';
 
 import type { StoredDocument } from '@/lib/types';
 import AppLayout from '@/components/layout/app-layout';
@@ -214,7 +216,7 @@ type DocumentActor = {
   role?: string | null;
 };
 
-type DocumentShareRow = {
+type DocumentShareRow = PublicShareReference & {
   id: string;
   expires_at: string | null;
   revoked_at: string | null;
@@ -356,6 +358,39 @@ function ShareContent({
 }) {
   return (
     <div className="space-y-6">
+          {shareUrl && (
+            <div className={cn("space-y-4 rounded-2xl border border-border/40 bg-muted/20 p-4", isMobile ? "mt-2" : "")}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Share link</div>
+                  {shareExpiresAt && (
+                    <div className="text-[11px] text-muted-foreground mt-0.5">
+                      Expires {formatAppDateTime(new Date(shareExpiresAt))}
+                    </div>
+                  )}
+                </div>
+                <Button variant="ghost" size="icon" onClick={copyShareLink} aria-label="Copy newly created public link" className="h-8 w-8 rounded-full">
+                  {shareCopied ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+              <Input aria-label="Public share URL" readOnly value={shareUrl} className={cn("h-10 text-xs bg-muted/30", isMobile ? "rounded-xl" : "")} />
+              <div className="flex items-center gap-2">
+                <Button variant="outline" onClick={shareOnWhatsApp} className={cn("flex-1 h-10 gap-2 font-medium text-xs", isMobile ? "rounded-xl" : "")}>
+                  <MessageCircle className="h-3.5 w-3.5 text-emerald-500 fill-emerald-500/20" />
+                  WhatsApp
+                </Button>
+                <Button
+                  variant="outline"
+                  className={cn("flex-1 h-10 gap-2 font-medium text-xs", isMobile ? "rounded-xl" : "")}
+                  onClick={() => {
+                    if (typeof window !== 'undefined') window.open(shareUrl, '_blank', 'noopener');
+                  }}
+                >
+                  Open link
+                </Button>
+              </div>
+            </div>
+          )}
       <Tabs value={shareTab} onValueChange={(value) => setShareTab(value as 'create' | 'active')}>
         <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="create">Create link</TabsTrigger>
@@ -407,39 +442,7 @@ function ShareContent({
             )}
           </div>
 
-          {shareUrl && (
-            <div className={cn("space-y-4 rounded-2xl border border-border/40 bg-muted/20 p-4", isMobile ? "mt-2" : "")}>
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Share link</div>
-                  {shareExpiresAt && (
-                    <div className="text-[11px] text-muted-foreground mt-0.5">
-                      Expires {formatAppDateTime(new Date(shareExpiresAt))}
-                    </div>
-                  )}
-                </div>
-                <Button variant="ghost" size="icon" onClick={copyShareLink} className="h-8 w-8 rounded-full">
-                  {shareCopied ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
-                </Button>
-              </div>
-              <Input readOnly value={shareUrl} className={cn("h-10 text-xs bg-muted/30", isMobile ? "rounded-xl" : "")} />
-              <div className="flex items-center gap-2">
-                <Button variant="outline" onClick={shareOnWhatsApp} className={cn("flex-1 h-10 gap-2 font-medium text-xs", isMobile ? "rounded-xl" : "")}>
-                  <MessageCircle className="h-3.5 w-3.5 text-emerald-500 fill-emerald-500/20" />
-                  WhatsApp
-                </Button>
-                <Button
-                  variant="outline"
-                  className={cn("flex-1 h-10 gap-2 font-medium text-xs", isMobile ? "rounded-xl" : "")}
-                  onClick={() => {
-                    if (typeof window !== 'undefined') window.open(shareUrl, '_blank', 'noopener');
-                  }}
-                >
-                  Open link
-                </Button>
-              </div>
-            </div>
-          )}
+
         </TabsContent>
 
         <TabsContent value="active" className="mt-4 space-y-3">
@@ -483,6 +486,7 @@ function ShareContent({
                         {link.expires_at ? ` • Expires ${formatAppDateTime(link.expires_at)}` : ''}
                         {typeof link.views_count === 'number' ? ` • ${link.views_count} views` : ''}
                       </p>
+                      <PublicShareLinkActions row={link} kind="document" />
                     </div>
                     <Button
                       variant="outline"
@@ -572,7 +576,7 @@ export default function DocumentDetailPage() {
     loadAllDocuments,
     hasLoadedAll,
   } = useDocuments();
-  const { hasPermission, isLoading: authLoading, user } = useAuth();
+  const { hasPermission, isLoading: authLoading, user, bootstrapData } = useAuth();
   const { toast } = useToast();
 
   // Check document permissions
@@ -1261,6 +1265,8 @@ export default function DocumentDetailPage() {
       await apiFetch(`/orgs/${orgId}/documents/${doc.id}/shares/${shareId}`, {
         method: 'DELETE',
       });
+      forgetPublicShare({ userId: bootstrapData?.user?.id || '', orgId, kind: 'document' }, shareId);
+      setShareUrl(null);
       await loadActiveShareLinks();
     } catch (error: any) {
       setActiveShareLinksError(error?.message || 'Failed to revoke link');
@@ -1286,6 +1292,10 @@ export default function DocumentDetailPage() {
         setShareLoading(false);
         return;
       }
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      if (!getPublicShareOrigin(origin)) {
+        throw new Error('A public Briefly address is required to create a shareable link. Ask your administrator to configure it.');
+      }
       const days = Math.max(1, Number(expiresInDays) || 7);
       const payload: any = {
         expiresInDays: days,
@@ -1297,8 +1307,10 @@ export default function DocumentDetailPage() {
         method: 'POST',
         body: payload,
       });
-      const origin = typeof window !== 'undefined' ? window.location.origin : '';
-      const url = origin ? `${origin}/share/${data.token}` : `/share/${data.token}`;
+      const share = { ...data.share, ...data };
+      const url = getPublicShareUrl(share, 'document', origin);
+      if (!url) throw new Error('The server created a share entry without returning a public URL.');
+      rememberPublicShare({ userId: bootstrapData?.user?.id || '', orgId, kind: 'document' }, data.id || data.shareId || data.share_id || data.share?.id, url);
       setShareUrl(url);
       setShareExpiresAt(data.expiresAt || null);
       setSharePassword('');
@@ -1530,6 +1542,7 @@ export default function DocumentDetailPage() {
                             size="icon"
                             className="h-8 w-8 text-muted-foreground hover:text-foreground"
                             onClick={openShareModal}
+                            aria-label="Share document"
                           >
                             <Share2 className="h-4 w-4" />
                           </Button>

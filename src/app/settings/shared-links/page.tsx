@@ -2,6 +2,8 @@
 
 import * as React from 'react';
 import Link from 'next/link';
+import { PublicShareLinkActions } from '@/components/public-share-link-actions';
+import { forgetPublicShare, type PublicShareReference } from '@/lib/public-share-links';
 import { apiFetch, getApiContext, onApiContextChange } from '@/lib/api';
 import { formatAppDateTime, cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/use-auth';
@@ -27,7 +29,7 @@ import { FileText, Folder, Link2, RefreshCw, Trash2 } from 'lucide-react';
 type SharedLinkScope = 'mine' | 'org';
 type SharedLinkKind = 'document' | 'folder';
 
-type SharedLinkRow = {
+type SharedLinkRow = PublicShareReference & {
   id: string;
   kind: SharedLinkKind;
   created_by: string | null;
@@ -128,6 +130,7 @@ export default function SharedLinksSettingsPage() {
     setError('');
     try {
       const result = await apiFetch<{ ok: boolean; action?: 'revoked' | 'deleted' }>(`/orgs/${orgId}/shared-links/${row.kind}/${row.id}`, { method: 'DELETE' });
+      forgetPublicShare({ userId: currentUserId || '', orgId, kind: row.kind }, row.id);
       await loadLinks({ refreshOnly: true });
       return result?.action || (isShareActive(row) ? 'revoked' : 'deleted');
     } catch (err: any) {
@@ -136,7 +139,7 @@ export default function SharedLinksSettingsPage() {
     } finally {
       setRevokingId(null);
     }
-  }, [orgId, loadLinks]);
+  }, [orgId, loadLinks, currentUserId]);
 
   const confirmUpdateLink = React.useCallback(async () => {
     if (!confirmTarget || confirmLoading) return;
@@ -297,7 +300,7 @@ export default function SharedLinksSettingsPage() {
                             className="text-xs text-primary hover:underline inline-flex items-center gap-1"
                           >
                             <Link2 className="h-3 w-3" />
-                            Open folder
+                            Open folder in app
                           </Link>
                         ) : row.doc_id ? (
                           <Link
@@ -305,10 +308,11 @@ export default function SharedLinksSettingsPage() {
                             className="text-xs text-primary hover:underline inline-flex items-center gap-1"
                           >
                             <Link2 className="h-3 w-3" />
-                            Open file
+                            Open file in app
                           </Link>
                         ) : null}
                       </div>
+                      <PublicShareLinkActions row={row} kind={row.kind} active={active} />
                     </div>
 
                     <div className={cn('flex items-center gap-2 md:justify-end', !canRevoke && 'opacity-70')}>

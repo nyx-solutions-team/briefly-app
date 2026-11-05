@@ -71,6 +71,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from '@/lib/utils';
+import { getDocumentDateError, normalizeDocumentDate } from '@/lib/document-date';
 import type { StoredDocument } from '@/lib/types';
 
 // Linear-style section component
@@ -185,6 +186,8 @@ export default function EditDocumentPage() {
   const { toast } = useToast();
   const isMobile = useIsMobile();
   const [saving, setSaving] = React.useState(false);
+  const [documentDateTouched, setDocumentDateTouched] = React.useState(false);
+  const documentDateInputRef = React.useRef<HTMLInputElement>(null);
   const { load: loadFolderChildren } = useFolderExplorer();
   const [folderCommandOpen, setFolderCommandOpen] = React.useState(false);
   const [addToChainOpen, setAddToChainOpen] = React.useState(false);
@@ -285,7 +288,7 @@ export default function EditDocumentPage() {
     subject: doc?.subject || '',
     sender: doc?.sender || '',
     receiver: doc?.receiver || '',
-    documentDate: (doc as any)?.documentDate || '',
+    documentDate: (doc as any)?.documentDate || (doc as any)?.document_date || '',
     documentType: (doc as any)?.documentType || (doc as any)?.type || '',
     category: (doc as any)?.category || '',
     keywords: ((doc as any)?.keywords || []).join(', '),
@@ -293,6 +296,8 @@ export default function EditDocumentPage() {
     description: (doc as any)?.description || '',
     folderPath: ((doc as any)?.folderPath || []).join('/'),
   });
+  const documentDateError = getDocumentDateError(form.documentDate);
+  const showDocumentDateError = documentDateTouched && Boolean(documentDateError);
   const [relationships, setRelationships] = React.useState<{ linked: any[]; incoming: any[]; outgoing: any[]; versions: any[] }>({ linked: [], incoming: [], outgoing: [], versions: [] });
   const [relLoading, setRelLoading] = React.useState(false);
 
@@ -321,7 +326,7 @@ export default function EditDocumentPage() {
       subject: doc?.subject || '',
       sender: doc?.sender || '',
       receiver: doc?.receiver || '',
-      documentDate: (doc as any)?.documentDate || '',
+      documentDate: (doc as any)?.documentDate || (doc as any)?.document_date || '',
       documentType: (doc as any)?.documentType || (doc as any)?.type || '',
       category: (doc as any)?.category || '',
       keywords: ((doc as any)?.keywords || []).join(', '),
@@ -482,34 +487,49 @@ export default function EditDocumentPage() {
   }, [doc?.id, linkType, loadRelationships, toast]);
 
   const onSave = async () => {
-    setSaving(true);
-    // ensure new folders exist
-    const newPathArr = form.folderPath.split('/').filter(Boolean);
-    for (let i = 0; i < newPathArr.length; i++) {
-      const slice = newPathArr.slice(0, i + 1);
-      const parent = slice.slice(0, -1);
-      const name = slice[slice.length - 1];
-      createFolder(parent, name);
+    if (!doc || saving) return;
+    setDocumentDateTouched(true);
+    if (documentDateError) {
+      documentDateInputRef.current?.focus();
+      toast({ title: 'Invalid document date', description: documentDateError, variant: 'destructive' });
+      return;
     }
 
-    if (!doc) { setSaving(false); return; }
-    updateDocument(doc.id, {
-      title: form.title,
-      filename: form.filename,
-      subject: form.subject,
-      sender: form.sender,
-      receiver: form.receiver,
-      documentDate: form.documentDate,
-      documentType: form.documentType || (doc as any).documentType,
-      category: form.category,
-      keywords: form.keywords.split(',').map((s: string) => s.trim()).filter(Boolean),
-      tags: form.tags.split(',').map((s: string) => s.trim()).filter(Boolean),
-      description: form.description,
-      folderPath: newPathArr,
-    });
-    toast({ title: 'Document updated', description: 'Your changes have been saved.' });
-    setSaving(false);
-    router.push(`/documents/${doc.id}`);
+    setSaving(true);
+    try {
+      const newPathArr = form.folderPath.split('/').filter(Boolean);
+      for (let i = 0; i < newPathArr.length; i++) {
+        const slice = newPathArr.slice(0, i + 1);
+        if (folders.some(folder => folder.join('/') === slice.join('/'))) continue;
+        try {
+          await createFolder(slice.slice(0, -1), slice[slice.length - 1], [], doc.departmentId || (doc as any).department_id);
+        } catch (error: any) {
+          if (error?.status !== 409) throw error;
+        }
+      }
+
+      await updateDocument(doc.id, {
+        title: form.title,
+        filename: form.filename,
+        subject: form.subject,
+        sender: form.sender,
+        receiver: form.receiver,
+        documentDate: normalizeDocumentDate(form.documentDate) || '',
+        documentType: form.documentType || (doc as any).documentType,
+        category: form.category,
+        keywords: form.keywords.split(',').map((s: string) => s.trim()).filter(Boolean),
+        tags: form.tags.split(',').map((s: string) => s.trim()).filter(Boolean),
+        description: form.description,
+        folderPath: newPathArr,
+      });
+      setHasChanges(false);
+      toast({ title: 'Document updated', description: 'Your changes have been saved.' });
+      router.push(`/documents/${doc.id}`);
+    } catch (error: any) {
+      toast({ title: 'Failed to save document', description: error?.message || 'Your changes could not be saved. Please try again.', variant: 'destructive' });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const onDelete = async () => {
@@ -783,11 +803,18 @@ export default function EditDocumentPage() {
 
                       <FormField label="Document Date">
                         <Input
+                          ref={documentDateInputRef}
+                          aria-label="Document date"
+                          aria-invalid={showDocumentDateError}
+                          aria-describedby={showDocumentDateError ? 'document-date-error' : undefined}
+                          onBlur={() => setDocumentDateTouched(true)}
+                          disabled={saving}
                           value={form.documentDate}
                           onChange={(e) => updateForm({ documentDate: e.target.value })}
                           placeholder="YYYY-MM-DD"
                           className="h-12 bg-background/80 border-border/60 rounded-xl text-foreground placeholder:text-muted-foreground focus:border-primary/50"
                         />
+                        {showDocumentDateError && <p id="document-date-error" role="alert" className="text-xs text-destructive">{documentDateError}</p>}
                       </FormField>
                     </div>
                   </Section>
@@ -1060,11 +1087,18 @@ export default function EditDocumentPage() {
 
                   <FormField icon={Calendar} label="Document Date">
                     <Input
+                      ref={documentDateInputRef}
+                      aria-label="Document date"
+                      aria-invalid={showDocumentDateError}
+                      aria-describedby={showDocumentDateError ? 'document-date-error' : undefined}
+                      onBlur={() => setDocumentDateTouched(true)}
+                      disabled={saving}
                       value={form.documentDate}
                       onChange={(e) => updateForm({ documentDate: e.target.value })}
                       placeholder="YYYY-MM-DD"
                       className="h-9 bg-background/50 border-border/50 focus:border-primary/50"
                     />
+                    {showDocumentDateError && <p id="document-date-error" role="alert" className="text-xs text-destructive">{documentDateError}</p>}
                   </FormField>
                 </Section>
               </div>

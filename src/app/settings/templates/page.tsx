@@ -15,6 +15,7 @@ import {
   type TemplateValidationError,
 } from "@/lib/template-registry";
 import { HtmlDocumentPreview } from "@/components/html-document-preview";
+import { buildInvoicePreviewData } from "@/lib/invoice-preview-data";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -316,41 +317,7 @@ function buildPreviewData(templateKey: string, definition: JsonObject): JsonObje
 
   const key = String(templateKey || "").trim().toLowerCase();
   if (key === "invoice") {
-    const totals = { subtotal: 4000, tax_rate: 5, tax_amount: 200, discount: 0, total_amount: 4200 };
-    const seller = { name: "Acme Labs", address: "12 Market Street", email: "billing@acme.com", phone: "+1 555 100 2000" };
-    const buyer = { name: "Northwind LLC", address: "44 Pine Avenue", email: "accounts@northwind.com", phone: "+1 555 400 5000" };
-    return {
-      template_type: "invoice",
-      template_id: "invoice",
-      doc_type: "invoice",
-      invoice_number: "INV-2026-001",
-      date: "2026-02-27",
-      due_date: "2026-03-29",
-      payment_terms: "Net 30",
-      currency: "USD",
-      seller,
-      buyer,
-      seller_name: seller.name,
-      seller_address: seller.address,
-      seller_email: seller.email,
-      seller_phone: seller.phone,
-      buyer_name: buyer.name,
-      buyer_address: buyer.address,
-      buyer_email: buyer.email,
-      buyer_phone: buyer.phone,
-      items: [
-        { description: "Implementation Sprint", quantity: 1, unit_price: 3200, line_total: 3200 },
-        { description: "Support Retainer", quantity: 1, unit_price: 800, line_total: 800 },
-      ],
-      totals,
-      subtotal: totals.subtotal,
-      tax_rate: totals.tax_rate,
-      tax_amount: totals.tax_amount,
-      discount: totals.discount,
-      total_amount: totals.total_amount,
-      left_content: "Billing contact details",
-      right_content: "Shipping and delivery notes",
-    };
+    return buildInvoicePreviewData();
   }
 
   if (key === "purchase_order") {

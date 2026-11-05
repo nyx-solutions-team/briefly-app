@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AppLayout from '@/components/layout/app-layout';
 import { useDocuments } from '@/hooks/use-documents';
 import { useAuth } from '@/hooks/use-auth';
+import { getPublicShareOrigin, getPublicShareUrl, rememberPublicShare } from '@/lib/public-share-links';
 import { useSettings } from '@/hooks/use-settings';
 import type { StoredDocument } from '@/lib/types';
 import Link from 'next/link';
@@ -245,6 +246,17 @@ function DocumentsPageContent() {
   }, [isMobile, view]);
 
   const [newFolderName, setNewFolderName] = useState('');
+  const [newFolderDepartmentId, setNewFolderDepartmentId] = useState('');
+  const parentFolderMetadata = path.length > 0 ? getFolderMetadata(path) : undefined;
+  const inheritedFolderDepartmentId = parentFolderMetadata?.departmentId || '';
+  const folderCreationDepartmentId = inheritedFolderDepartmentId
+    || newFolderDepartmentId
+    || activeDepartmentId
+    || (departments.length === 1 ? departments[0].id : '');
+  const handleNewFolderOpenChange = (open: boolean) => {
+    if (open) setNewFolderDepartmentId('');
+    setNewFolderOpen(open);
+  };
   const [creatingFolder, setCreatingFolder] = useState(false);
   const { toast } = useToast();
   const [query, setQuery] = useState('');
@@ -1008,6 +1020,10 @@ function DocumentsPageContent() {
     setFolderLinkLoading(true);
     setFolderLinkError(null);
     try {
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      if (!getPublicShareOrigin(origin)) {
+        throw new Error('A public Briefly address is required to create a shareable link. Ask your administrator to configure it.');
+      }
       const payload: any = {
         folderPath: sharePath,
         expiresInDays: Math.max(1, Number(folderLinkExpiresInDays) || 7),
@@ -1019,8 +1035,9 @@ function DocumentsPageContent() {
         method: 'POST',
         body: payload,
       });
-      const origin = typeof window !== 'undefined' ? window.location.origin : '';
-      const url = origin ? `${origin}/folder-share/${data.token}` : `/folder-share/${data.token}`;
+      const url = getPublicShareUrl({ ...data.share, ...data }, 'folder', origin);
+      if (!url) throw new Error('The server created a share entry without returning a public URL.');
+      rememberPublicShare({ userId: bootstrapData?.user?.id || '', orgId, kind: 'folder' }, data.id || data.shareId || data.share_id || data.share?.id, url);
       setFolderLinkUrl(url);
       const folderKey = sharePath.join('/');
       if (folderKey) {
@@ -1177,7 +1194,7 @@ function DocumentsPageContent() {
                         <span className="hidden lg:inline">Share Folder</span>
                       </Button>
                     )}
-                    <Button size="sm" variant="outline" onClick={() => setNewFolderOpen(true)} className="h-8 gap-1.5">
+                    <Button size="sm" variant="outline" onClick={() => handleNewFolderOpenChange(true)} className="h-8 gap-1.5">
                       <Plus className="h-3.5 w-3.5" />
                       <span className="hidden lg:inline">Folder</span>
                     </Button>
@@ -1376,7 +1393,7 @@ function DocumentsPageContent() {
                     <button
                       onClick={() => {
                         setFabOpen(false);
-                        setNewFolderOpen(true);
+                        handleNewFolderOpenChange(true);
                       }}
                       className="group relative overflow-hidden rounded-[2rem] p-5 text-left transition-all active:scale-95 bg-[#F0E4E4] dark:bg-[#2A2020] border border-border/10 shadow-sm"
                     >
@@ -1944,21 +1961,47 @@ function DocumentsPageContent() {
 
         {
           canCreateDocuments && (
-            <Dialog open={newFolderOpen} onOpenChange={setNewFolderOpen}>
+            <Dialog open={newFolderOpen} onOpenChange={handleNewFolderOpenChange}>
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Create a new folder</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-2">
-                  <label className="text-sm text-muted-foreground">Folder name</label>
-                  <Input value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} placeholder="e.g., Q3 Reports" />
+                  <label htmlFor="new-folder-name" className="text-sm text-muted-foreground">Folder name</label>
+                  <Input id="new-folder-name" disabled={creatingFolder} value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} placeholder="e.g., Q3 Reports" />
                   <p className="text-xs text-muted-foreground">It will be created under: /{path.join('/')}</p>
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="new-folder-department" className="text-sm text-muted-foreground">Department <span aria-hidden="true">*</span></label>
+                  <Select
+                    value={folderCreationDepartmentId}
+                    onValueChange={setNewFolderDepartmentId}
+                    disabled={creatingFolder || departmentsLoading || Boolean(inheritedFolderDepartmentId)}
+                  >
+                    <SelectTrigger id="new-folder-department" aria-required="true" aria-describedby="new-folder-department-help">
+                      <SelectValue placeholder={departmentsLoading ? 'Loading departments...' : 'Select a department'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {inheritedFolderDepartmentId && !departments.some(d => d.id === inheritedFolderDepartmentId) && (
+                        <SelectItem value={inheritedFolderDepartmentId}>{parentFolderMetadata?.departmentName || 'Parent folder department'}</SelectItem>
+                      )}
+                      {departments.map(d => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <p id="new-folder-department-help" className="text-xs text-muted-foreground">
+                    {inheritedFolderDepartmentId
+                      ? 'Subfolders inherit the parent folder’s department.'
+                      : !departmentsLoading && departments.length === 0
+                        ? 'No departments available. Ask your organization administrator for access to a department.'
+                        : 'Choose the department that will own this folder.'}
+                  </p>
                 </div>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setNewFolderOpen(false)} disabled={creatingFolder}>Cancel</Button>
                   <Button
-                    disabled={creatingFolder}
+                    disabled={creatingFolder || departmentsLoading || !folderCreationDepartmentId}
                     onClick={async () => {
+                      if (!folderCreationDepartmentId) { toast({ title: 'Please select a department', variant: 'destructive' }); return; }
                       const name = newFolderName.trim();
                       if (!name) { toast({ title: 'Please enter a folder name', variant: 'destructive' }); return; }
                       if (name.includes('/')) { toast({ title: 'Folder name cannot contain /', variant: 'destructive' }); return; }
@@ -1976,7 +2019,7 @@ function DocumentsPageContent() {
                       }
                       setCreatingFolder(true);
                       try {
-                        await createFolder(path, name);
+                        await createFolder(path, name, [], folderCreationDepartmentId);
                         setPath([...path, name]);
                         setNewFolderName('');
                         setNewFolderOpen(false);

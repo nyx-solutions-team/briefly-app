@@ -2,6 +2,7 @@
 
 import { useRef, useEffect, useState } from 'react';
 import { normalizePreviewLineBreaks } from '@/lib/template-preview';
+import { applyPreviewFilters } from '@/lib/template-preview-filters';
 
 /**
  * HtmlDocumentPreview — renders a Jinja2/HTML template with document data.
@@ -59,24 +60,6 @@ function resolveVar(path: string, ctx: Record<string, any>): any {
     return cur;
 }
 
-function applyFilters(value: any, filters: string[], ctx: Record<string, any>): string {
-    let v = value;
-    for (const filter of filters) {
-        const defaultMatch = filter.match(/^default\(['"]?(.*?)['"]?\)$/);
-        if (defaultMatch) {
-            if (v == null || v === '' || v === undefined) v = defaultMatch[1];
-            continue;
-        }
-        if (filter === 'join("\\n")' || filter === "join('\\n')") {
-            if (Array.isArray(v)) v = v.join('\n');
-            continue;
-        }
-    }
-    if (v == null) return '';
-    if (Array.isArray(v)) return v.join(', ');
-    return String(v);
-}
-
 function renderJinja(template: string, ctx: Record<string, any>): string {
     let result = template;
 
@@ -120,7 +103,7 @@ function renderJinja(template: string, ctx: Record<string, any>): string {
 
         // Concatenation: "prefix" ~ var  or  var ~ "suffix"
         const concatParts = varPath.split(/\s*~\s*/);
-        const resolved = concatParts
+        const values = concatParts
             .map((p: string) => {
                 const stripped = p.replace(/^['"]|['"]$/g, '');
                 if (stripped === p && !p.startsWith('"') && !p.startsWith("'")) {
@@ -129,10 +112,14 @@ function renderJinja(template: string, ctx: Record<string, any>): string {
                     return v ?? '';
                 }
                 return stripped;
-            })
-            .join('');
+            });
+        const resolved = values.length === 1 ? values[0] : values.join('');
 
-        return applyFilters(resolved !== varPath ? resolved : resolveVar(varPath, ctx), filters, ctx);
+        return applyPreviewFilters(
+            resolved,
+            filters,
+            (path) => resolveVar(path, ctx),
+        );
     });
 
     return result;
