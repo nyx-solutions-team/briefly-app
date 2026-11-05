@@ -461,7 +461,7 @@ export default function RecycleBinPage() {
                     ) : totalItems === 0 ? (
                       "No items in trash"
                     ) : (
-                      `${totalItems} item${totalItems !== 1 ? "s" : ""} · Auto-deleted after 30 days${refreshing ? " · Refreshing..." : ""}`
+                      `${totalItems} item${totalItems !== 1 ? "s" : ""} · Auto-deleted at the displayed expiry${refreshing ? " · Refreshing..." : ""}`
                     )}
                   </p>
                 </div>
@@ -601,7 +601,7 @@ export default function RecycleBinPage() {
               <p className="text-sm text-muted-foreground text-center max-w-xs">
                 {debouncedSearch
                   ? "Try adjusting your search terms"
-                  : "Deleted documents will appear here and be automatically removed after 30 days"}
+                  : "Deleted documents appear here and are permanently removed at their scheduled expiry."}
               </p>
             </div>
           ) : (
